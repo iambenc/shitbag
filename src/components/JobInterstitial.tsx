@@ -7,7 +7,7 @@ import { GARDENING_QUOTES } from "@/lib/ai/quotes";
 const QUOTE_INTERVAL_MS = 4000;
 const POLL_INTERVAL_MS = 2500;
 
-export function GrowPlanInterstitial({ growPlanId }: { growPlanId: string }) {
+export function JobInterstitial({ statusUrl, message }: { statusUrl: string; message: string }) {
   const router = useRouter();
   const [quoteIndex, setQuoteIndex] = useState(0);
 
@@ -21,7 +21,7 @@ export function GrowPlanInterstitial({ growPlanId }: { growPlanId: string }) {
   useEffect(() => {
     const pollTimer = setInterval(async () => {
       try {
-        const res = await fetch(`/api/grow-plans/${growPlanId}/status`, { cache: "no-store" });
+        const res = await fetch(statusUrl, { cache: "no-store" });
         if (!res.ok) return;
         const data = (await res.json()) as { status: string };
         if (data.status !== "pending") {
@@ -32,14 +32,14 @@ export function GrowPlanInterstitial({ growPlanId }: { growPlanId: string }) {
       }
     }, POLL_INTERVAL_MS);
     return () => clearInterval(pollTimer);
-  }, [growPlanId, router]);
+  }, [statusUrl, router]);
 
   return (
     <div className="flex flex-col items-center gap-4 rounded-lg border border-black/10 bg-white px-6 py-16 text-center">
       <span className="text-4xl" aria-hidden>
         🌱
       </span>
-      <p className="font-medium">Your grow plan is being put together…</p>
+      <p className="font-medium">{message}</p>
       <p className="max-w-md text-sm italic text-[#1f2a1f]/70">&ldquo;{GARDENING_QUOTES[quoteIndex]}&rdquo;</p>
     </div>
   );

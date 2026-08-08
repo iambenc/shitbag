@@ -10,3 +10,5 @@ export * from "./photo";
 export * from "./subscription";
 export * from "./grow-plan";
 export * from "./task-reschedule-event";
+export * from "./plant-diagnosis";
+export * from "./photo-report";

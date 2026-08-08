@@ -8,7 +8,7 @@ import { growPlans, planRecommendations, crops } from "@/db/schema";
 import { getUserProfile } from "@/lib/onboarding/profile";
 import { getSubscription, isPaidTier } from "@/lib/billing/subscription";
 import { generateGrowPlanAction } from "@/lib/actions/growPlan";
-import { GrowPlanInterstitial } from "@/components/GrowPlanInterstitial";
+import { JobInterstitial } from "@/components/JobInterstitial";
 
 export default async function GrowPlanPage() {
   const session = await auth();
@@ -85,7 +85,10 @@ export default async function GrowPlanPage() {
 
       {latestPlan?.status === "pending" && (
         <div className="mt-8">
-          <GrowPlanInterstitial growPlanId={latestPlan.id} />
+          <JobInterstitial
+            statusUrl={`/api/grow-plans/${latestPlan.id}/status`}
+            message="Your grow plan is being put together…"
+          />
         </div>
       )}
 

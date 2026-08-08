@@ -7,6 +7,7 @@ import {
   deletePhotoAction,
   type UploadPhotoState,
 } from "@/lib/actions/photos";
+import { diagnoseExistingPhotoAction, reportPhotoAction } from "@/lib/actions/plantHealth";
 
 type Photo = {
   id: string;
@@ -68,15 +69,18 @@ export function JournalView({
   sharedPhotos,
   tenantName,
   currentUserEmail,
+  paid,
 }: {
   myPhotos: Photo[];
   sharedPhotos: Photo[];
   tenantName: string;
   currentUserEmail: string;
+  paid: boolean;
 }) {
   const [tab, setTab] = useState<"mine" | "shared">("mine");
   const [mine, setMine] = useState(myPhotos);
   const [shared, setShared] = useState(sharedPhotos);
+  const [reportedIds, setReportedIds] = useState<Set<string>>(new Set());
 
   function handleUploaded(photo: NonNullable<UploadPhotoState["photo"]>) {
     const asPhoto: Photo = { ...photo, ownerEmail: currentUserEmail, isOwn: true };
@@ -101,6 +105,17 @@ export function JournalView({
     setMine((ps) => ps.filter((p) => p.id !== photoId));
     setShared((ps) => ps.filter((p) => p.id !== photoId));
     await deletePhotoAction(photoId);
+  }
+
+  async function handleDiagnose(photoId: string) {
+    await diagnoseExistingPhotoAction(photoId);
+  }
+
+  async function handleReport(photoId: string) {
+    const reason = window.prompt("Why are you reporting this photo?");
+    if (!reason) return;
+    await reportPhotoAction(photoId, reason);
+    setReportedIds((prev) => new Set(prev).add(photoId));
   }
 
   return (
@@ -138,6 +153,11 @@ export function JournalView({
                   <button type="button" onClick={() => handleToggleVisibility(photo)} className="text-left text-(--brand-primary) underline">
                     {photo.visibility === "private" ? "Private — share it" : "Shared — make private"}
                   </button>
+                  {paid && (
+                    <button type="button" onClick={() => handleDiagnose(photo.id)} className="text-left text-(--brand-primary) underline">
+                      Diagnose
+                    </button>
+                  )}
                   <button type="button" onClick={() => handleDelete(photo.id)} className="text-left text-[#1f2a1f]/50 hover:text-red-700">
                     Delete
                   </button>
@@ -157,6 +177,15 @@ export function JournalView({
               <div className="flex flex-col gap-1 p-2 text-xs">
                 {photo.caption && <p>{photo.caption}</p>}
                 <p className="text-[#1f2a1f]/50">{photo.isOwn ? "You" : photo.ownerEmail}</p>
+                {!photo.isOwn && (
+                  reportedIds.has(photo.id) ? (
+                    <p className="text-[#1f2a1f]/50">Reported</p>
+                  ) : (
+                    <button type="button" onClick={() => handleReport(photo.id)} className="text-left text-[#1f2a1f]/50 hover:text-red-700">
+                      Report
+                    </button>
+                  )
+                )}
               </div>
             </div>
           ))}

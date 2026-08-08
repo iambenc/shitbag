@@ -5,15 +5,16 @@ keep a steady harvest from a windowsill to a full allotment. Multi-tenant from d
 product can be white-labelled to garden centres/seed suppliers later.
 
 See [`docs/plan.md`](docs/plan.md) *(or the plan shared with you)* for the full architecture and
-phased build roadmap. This repo is currently at **Phase 6**: auth, multi-tenancy, a branded
+phased build roadmap. This repo is currently at **Phase 7**: auth, multi-tenancy, a branded
 dashboard shell, the full onboarding wizard, a growing-area inventory page (`/garden`), the
 free-tier core loop (calendar, shopping list, harvest log, photo journal), billing (`/upgrade`),
-an AI grow-planner agent (`/grow-plan`), and daily/weekly background automation — weather-driven
-watering tasks, task slippage, and an auto-generated shopping list. Stripe and Gemini are both
-wired up for real but run in dev-mode simulations until real credentials are added
-(`STRIPE_SECRET_KEY`/`STRIPE_WEBHOOK_SECRET`, `GOOGLE_GENERATIVE_AI_API_KEY` in `.env.local`);
-weather (Open-Meteo) needs no credentials and always calls the real API unless a test explicitly
-overrides it.
+an AI grow-planner agent (`/grow-plan`), daily/weekly background automation — weather-driven
+watering tasks, task slippage, and an auto-generated shopping list — and a plant-health photo
+diagnosis agent (`/plant-health`) with a report button on shared journal photos. Stripe and
+Gemini are both wired up for real but run in dev-mode simulations until real credentials are
+added (`STRIPE_SECRET_KEY`/`STRIPE_WEBHOOK_SECRET`, `GOOGLE_GENERATIVE_AI_API_KEY` in
+`.env.local`); weather (Open-Meteo) needs no credentials and always calls the real API unless a
+test explicitly overrides it.
 
 ## Stack
 

@@ -5,6 +5,7 @@ import { getCurrentTenant } from "@/lib/tenant/resolve";
 import { withTenant } from "@/lib/tenant/withTenant";
 import { photoJournalEntries, users } from "@/db/schema";
 import { getUserProfile } from "@/lib/onboarding/profile";
+import { getSubscription, isPaidTier } from "@/lib/billing/subscription";
 import { JournalView } from "./JournalView";
 
 export default async function JournalPage() {
@@ -32,6 +33,8 @@ export default async function JournalPage() {
     return { mine, shared };
   });
 
+  const paid = isPaidTier(await getSubscription(session.user.id, tenant.id));
+
   return (
     <div className="mx-auto max-w-3xl px-6 py-16">
       <h1 className="text-2xl font-semibold text-(--brand-primary)">Photo journal</h1>
@@ -40,6 +43,7 @@ export default async function JournalPage() {
         <JournalView
           tenantName={tenant.displayName}
           currentUserEmail={session.user.email}
+          paid={paid}
           myPhotos={mine.map((p) => ({
             id: p.id,
             url: p.url,

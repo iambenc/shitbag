@@ -470,3 +470,54 @@ with a logged `taskRescheduleEvents` row → backdate it again with a past `hard
 trigger once more → it flips to `missed`. 8/8 checks pass, and a direct Postgres query afterward
 confirms the exact counts (0 lingering weather tasks, 1 missed task, 3 AI shopping-list items, 1
 reschedule event with the correct old/new dates) match what the UI showed.
+
+---
+
+## Phase 7 — Implementation Notes
+
+Second AI agent, reusing every pattern Phase 5 established rather than inventing new ones: same
+`getModelForTenant()` resolution (`"plant_health"` was already a valid `AgentName` since Phase 5's
+provider typing), same mock/real split in the agent module, same Inngest gather-context/call-agent/
+persist-results/mark-failed shape, same paid-gated redirect-based server action shape. No Gemini
+key exists in this environment (same as Phases 4/5), so the real path — a multi-modal
+`generateObject` call with the image as a `FilePart` (`{ type: "file", mediaType, data: Buffer }`;
+the older `ImagePart` shape is deprecated in this AI SDK version) — is written but untested against
+a live key, same caveat as before. The mock path picks deterministically from three canned,
+clearly-labelled diagnoses (keyed off the uploaded image's byte length, not random), one of which
+intentionally has an empty `likelyCauses` array to model a genuine "no issues detected" result —
+the UI only renders that section when non-empty, which is correct behaviour, not a bug (it tripped
+up the first draft of the Playwright check, not the app).
+
+**`PhotoStorage` gained `readBuffer(key)`** — a real `fs.readFile` for local storage — because the
+image has to reach the model as bytes; a `localhost` URL isn't reachable from an external API.
+Swapping to R2 later means implementing `readBuffer` against R2's GET, not an app-code change,
+matching how `upload`/`delete` were already designed.
+
+New tables `plantDiagnoses` and `photoReports` (RLS-verified against Postgres, both directions, for
+both tables — `photoReports` wasn't explicitly called out in the plan's own verification list but
+got the same spot-check as every other new tenant-scoped table on the strength of the standing
+rule, not because anything suggested it needed extra scrutiny). `photoReports` is storage only, no
+UI reads it yet — same shape as `taskRescheduleEvents` from Phase 6, an audit trail waiting on
+Phase 8's tenant-admin review queue.
+
+**Interstitial generalized** from `GrowPlanInterstitial` (hardcoded to the grow-plan status
+endpoint) to `JobInterstitial` (`statusUrl` + `message` props), used by both `/grow-plan` and
+`/plant-health` — the old component was deleted rather than left as unused dead code, since nothing
+still referenced it.
+
+**Explicit scope-out, unchanged from the plan**: no `Planting`/`GrowingArea` linkage for diagnoses
+— a diagnosis links to the photo and the user, not a specific plant instance, same reasoning as
+Phase 5's deferral of that entity. The report button stores a reason and nothing else; there is
+still no admin queue that reads `photoReports` (Phase 8).
+
+Verified end-to-end with Playwright against the real local Inngest dev server (not simulated): free
+user sees the `/plant-health` paywall → subscribes (Phase 4 dev-mode) → uploads a photo → job
+resolves in well under a second (mock path, no network call) → diagnosis card renders with
+issue/severity/care instructions → from `/journal`, clicking "Diagnose" on an existing photo
+produces a second diagnosis, history shows both → sharing a photo and switching to a second signed-
+up user, that user reports the shared photo from the "Shared in {tenant}" tab and sees the
+"Reported" acknowledgement. 14/14 checks pass; a direct Postgres query afterward confirms exactly
+one `photo_reports` row (correct reporter, reason, and tenant) and exactly two `complete`
+`plant_diagnoses` rows for the first user — matching the UI, not just plausible. `tsc --noEmit` and
+`eslint` both clean. Test users, uploaded files, and the ad-hoc `e2e-check.mjs` script were all
+removed after verification.

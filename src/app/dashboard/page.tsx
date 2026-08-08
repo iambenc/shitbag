@@ -49,6 +49,11 @@ const RESOURCE_LINKS = [
     title: "Photo journal",
     description: "Keep a visual record, and share what you like.",
   },
+  {
+    href: "/plant-health",
+    title: "Plant Health",
+    description: "Upload a photo for an AI diagnosis — membership feature.",
+  },
 ];
 
 export default async function DashboardPage() {

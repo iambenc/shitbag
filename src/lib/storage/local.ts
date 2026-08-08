@@ -1,5 +1,5 @@
 import "server-only";
-import { mkdir, writeFile, unlink } from "node:fs/promises";
+import { mkdir, writeFile, unlink, readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
 import type { PhotoStorage } from "./index";
@@ -21,5 +21,8 @@ export const localPhotoStorage: PhotoStorage = {
     } catch (err) {
       if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err;
     }
+  },
+  async readBuffer(key) {
+    return readFile(join(UPLOADS_ROOT, key));
   },
 };

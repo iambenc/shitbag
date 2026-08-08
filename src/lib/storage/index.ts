@@ -9,6 +9,9 @@ export interface PhotoStorage {
     extension: string;
   }): Promise<StoredFile>;
   delete(key: string): Promise<void>;
+  /** Raw bytes for a stored photo — needed to send an image to a multi-modal
+   * AI call (a `localhost` URL isn't reachable by an external model). */
+  readBuffer(key: string): Promise<Buffer>;
 }
 
 /**
