@@ -8,6 +8,9 @@ import { tenantIsolationPolicy } from "./_rls";
 export const shoppingItemStatusEnum = ["pending", "purchased"] as const;
 export type ShoppingItemStatus = (typeof shoppingItemStatusEnum)[number];
 
+export const shoppingItemSourceEnum = ["manual", "ai"] as const;
+export type ShoppingItemSource = (typeof shoppingItemSourceEnum)[number];
+
 export const shoppingListItems = pgTable(
   "shopping_list_items",
   {
@@ -23,6 +26,7 @@ export const shoppingListItems = pgTable(
     freeText: text("free_text"),
     quantityLabel: text("quantity_label").notNull(),
     status: text("status", { enum: shoppingItemStatusEnum }).notNull().default("pending"),
+    source: text("source", { enum: shoppingItemSourceEnum }).notNull().default("manual"),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (table) => [

@@ -7,6 +7,7 @@ import {
   deleteTaskAction,
   type CreateTaskState,
 } from "@/lib/actions/tasks";
+import type { TaskStatus, TaskSource } from "@/db/schema";
 
 type Task = {
   id: string;
@@ -14,8 +15,8 @@ type Task = {
   notes: string | null;
   dueDate: string;
   hardDeadlineDate: string | null;
-  status: "pending" | "completed";
-  source: "manual" | "ai";
+  status: TaskStatus;
+  source: TaskSource;
 };
 
 const WEEKDAY_LABELS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
@@ -174,22 +175,43 @@ export function CalendarView({ initialTasks }: { initialTasks: Task[] }) {
             {selectedTasks.map((task) => (
               <li
                 key={task.id}
-                className="flex items-start justify-between gap-3 rounded-lg border border-black/10 bg-white p-3"
+                className={`flex items-start justify-between gap-3 rounded-lg border p-3 ${
+                  task.status === "missed" ? "border-red-200 bg-red-50" : "border-black/10 bg-white"
+                }`}
               >
                 <label className="flex flex-1 items-start gap-2 text-sm">
-                  <input
-                    type="checkbox"
-                    checked={task.status === "completed"}
-                    onChange={() => handleToggle(task)}
-                    className="mt-1"
-                  />
+                  {task.status === "missed" ? (
+                    <span className="mt-1 text-red-700" aria-hidden>
+                      ⚠
+                    </span>
+                  ) : (
+                    <input
+                      type="checkbox"
+                      checked={task.status === "completed"}
+                      onChange={() => handleToggle(task)}
+                      className="mt-1"
+                    />
+                  )}
                   <span>
-                    <span className={task.status === "completed" ? "line-through text-[#1f2a1f]/50" : ""}>
+                    <span
+                      className={
+                        task.status === "completed"
+                          ? "line-through text-[#1f2a1f]/50"
+                          : task.status === "missed"
+                            ? "text-red-800"
+                            : ""
+                      }
+                    >
                       {task.title}
                     </span>
-                    {task.source === "ai" && (
+                    {task.source !== "manual" && (
                       <span className="ml-2 rounded-full bg-(--brand-secondary)/40 px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide">
-                        AI
+                        {task.source}
+                      </span>
+                    )}
+                    {task.status === "missed" && (
+                      <span className="ml-2 rounded-full bg-red-200 px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide text-red-800">
+                        Missed
                       </span>
                     )}
                     {task.notes && <p className="text-xs text-[#1f2a1f]/60">{task.notes}</p>}

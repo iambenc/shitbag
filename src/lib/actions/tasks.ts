@@ -3,7 +3,7 @@
 import { z } from "zod";
 import { eq, and } from "drizzle-orm";
 import { withTenant } from "@/lib/tenant/withTenant";
-import { tasks } from "@/db/schema";
+import { tasks, type TaskSource } from "@/db/schema";
 import { requireSessionAndTenant } from "@/lib/actions/shared";
 
 const createTaskSchema = z.object({
@@ -19,7 +19,7 @@ export type CreatedTask = {
   dueDate: string;
   hardDeadlineDate: string | null;
   status: "pending";
-  source: "manual" | "ai";
+  source: TaskSource;
 };
 
 export type CreateTaskState = { error?: string; task?: CreatedTask };

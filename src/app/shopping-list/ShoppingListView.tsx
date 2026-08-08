@@ -16,6 +16,7 @@ type Item = {
   freeText: string | null;
   quantityLabel: string;
   status: "pending" | "purchased";
+  source: "manual" | "ai";
 };
 
 type CropOption = { id: string; name: string; emoji: string };
@@ -43,6 +44,7 @@ export function ShoppingListView({ items, crops }: { items: Item[]; crops: CropO
           freeText: result.item!.freeText,
           quantityLabel: result.item!.quantityLabel,
           status: "pending",
+          source: "manual",
         },
       ]);
     }
@@ -83,6 +85,11 @@ export function ShoppingListView({ items, crops }: { items: Item[]; crops: CropO
               <span className={item.status === "purchased" ? "line-through text-[#1f2a1f]/50" : ""}>
                 {itemLabel(item)} · {item.quantityLabel}
               </span>
+              {item.source === "ai" && (
+                <span className="rounded-full bg-(--brand-secondary)/40 px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide">
+                  AI
+                </span>
+              )}
             </label>
             <button
               type="button"

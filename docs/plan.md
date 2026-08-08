@@ -110,7 +110,7 @@ Sequenced so multi-tenancy and the AI async-job pattern (the two hardest things 
 - **Phase 3 — Free-tier core loop.** ✅ Done — see implementation notes below.
 - **Phase 4 — Billing.** ✅ Done — see implementation notes below.
 - **Phase 5 — Grow-planner agent + calendar integration (hardest phase).** ✅ Done — see implementation notes below.
-- **Phase 6 — Weather + shopping-list automation.** Daily/weekly Inngest jobs, Open-Meteo integration, task slippage logic, auto shopping list feeding the Phase 3 UI.
+- **Phase 6 — Weather + shopping-list automation.** ✅ Done — see implementation notes below.
 - **Phase 7 — Plant-health agent + photo sharing.** Reuses the Phase 5 async-job/interstitial/provider pattern; diagnosis history against Planting/GrowingArea; photo-sharing feed within a tenant.
 - **Phase 8 — White-label/tenant admin tooling.** Admin UI for branding, custom domains, tenant `EquipmentType`/`PartnerLink` management, per-tenant AI provider config, per-tenant Stripe price config — all exposing config tables that already exist from Phase 0 onward, not new data-model work.
 
@@ -419,3 +419,54 @@ disliked crop) with reasoning, harvest-date estimates, and a shopping-list badge
 requiring purchase → `/calendar` shows the 7 generated tasks with the AI badge → dashboard
 renders cleanly. 9/9 checks pass, and a direct Postgres query confirms exactly one `complete`
 grow plan with 3 recommendations and 7 AI-sourced tasks — matching the UI, not just plausible.
+
+---
+
+## Phase 6 — Implementation Notes
+
+**Gating split** (documented up front in the plan, not discovered mid-build): the spec places
+weather-driven task adjustment under the subscriber section, so `dailyJobsFn`'s weather step only
+runs for paid users; task slippage ("pushed back... until completed or past the last date") isn't
+tied to subscription anywhere in the spec and reads as general calendar hygiene, so it runs for
+everyone — a free user's manual tasks slip forward exactly like an AI-generated one would. The
+weekly shopping-list job needed no explicit tier check at all: it only ever finds work via
+`planRecommendations.requiresPurchase`, which only exist for users who've generated a grow plan,
+already paid-gated since Phase 5.
+
+New `taskRescheduleEvents` table (RLS-verified, audit trail only — no UI reads it, the spec never
+asks users to see reschedule history). `tasks` gained `cropId` (nullable, set by Phase 5's
+Inngest function for AI-generated tasks so this phase's weekly job can find "the sow task for this
+crop" without a link table), plus `"missed"` added to its status enum and `"weather"` to its
+source enum. `shoppingListItems` gained a `source` column mirroring `tasks.source`, for the same
+"AI" badge treatment already used on `/calendar`.
+
+**Weather is genuinely real** (Open-Meteo, free, no key) — but real weather can't be asserted on
+in a test, so `getForecast()` takes an optional per-call `forceScenario` override, threaded from
+`POST /api/dev/run-jobs`'s request body through the Inngest event into that single job run. This
+is a different shape from the Stripe/Gemini dev-mode fallbacks (which trigger on the *absence* of
+credentials): weather needs no credentials at all, so the override is explicit and per-call rather
+than a standing environment default — letting the Playwright run exercise both the hot/dry and
+rainy branches in the same test run without restarting the dev server between them, which an
+env-var-only approach would have required (as `INNGEST_DEV` did in Phase 5).
+
+Both new Inngest functions accept a `dev/run-jobs` event alongside their real cron trigger
+(`0 6 * * *` / `0 6 * * 1`) — Inngest supports multiple triggers per function — so
+`/api/dev/run-jobs` (session-gated, not public) can fire either job on demand instead of waiting
+for the schedule. Flagged in its own comment as a temporary stand-in for real admin tooling
+(Phase 8) or just relying on cron in a real deployment.
+
+Both jobs iterate tenants via the unscoped `tenants` table (not RLS-protected, same as
+`getCurrentTenant()`) and do all per-tenant work through `withTenant()` for every other table —
+deliberately avoiding the exact class of bug Phase 5 cost real debugging time on (an unscoped
+query against an RLS-protected table silently misbehaving on a pooled connection). No new bugs of
+that kind surfaced this phase, which is what following the rule consistently is supposed to buy.
+
+Verified end-to-end with Playwright, using the real Inngest dev server (not simulated): sign up,
+onboard, subscribe, generate a grow plan → trigger the daily job with `hot_dry` → a "Water your
+plants today" task appears on `/calendar` → trigger again with `rainy` → that task is gone →
+trigger the weekly job → an AI-badged shopping-list item appears on `/shopping-list` → backdate an
+AI task's due date 5 days via direct Postgres access, trigger the daily job → it slips to today
+with a logged `taskRescheduleEvents` row → backdate it again with a past `hardDeadlineDate`,
+trigger once more → it flips to `missed`. 8/8 checks pass, and a direct Postgres query afterward
+confirms the exact counts (0 lingering weather tasks, 1 missed task, 3 AI shopping-list items, 1
+reschedule event with the correct old/new dates) match what the UI showed.

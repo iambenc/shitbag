@@ -42,6 +42,7 @@ export default async function ShoppingListPage() {
             freeText: r.item.freeText,
             quantityLabel: r.item.quantityLabel,
             status: r.item.status,
+            source: r.item.source,
           }))}
           crops={allCrops.map((c) => ({ id: c.id, name: c.name, emoji: c.emoji }))}
         />

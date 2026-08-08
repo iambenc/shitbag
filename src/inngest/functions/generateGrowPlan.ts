@@ -126,6 +126,9 @@ export const generateGrowPlanFn = inngest.createFunction(
                 notes: t.explanation,
                 dueDate: t.dueDate,
                 hardDeadlineDate: t.hardDeadlineDate,
+                // Lets the Phase 6 weekly shopping-list job find "the sow
+                // task for this crop" without a separate link table.
+                cropId: t.cropSlug ? (cropIdBySlug[t.cropSlug] ?? null) : null,
                 source: "ai" as const,
               })),
             );
