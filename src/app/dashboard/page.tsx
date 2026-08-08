@@ -20,6 +20,11 @@ function isoDate(d: Date) {
 
 const RESOURCE_LINKS = [
   {
+    href: "/grow-plan",
+    title: "AI Grow Plan",
+    description: "A plan tailored to your plot, seeds, and experience — membership feature.",
+  },
+  {
     href: "/garden",
     title: "Manage your garden layout",
     description: "Tell us which pots, trays, planters, and beds are set up and ready to grow in.",
@@ -104,6 +109,7 @@ export default async function DashboardPage() {
               title: t.title,
               dueDate: t.dueDate,
               status: t.status,
+              source: t.source,
             }))}
           />
         </div>
@@ -116,9 +122,6 @@ export default async function DashboardPage() {
           <li>Experience: {profile.expertiseLevel ? expertiseLevelLabels[profile.expertiseLevel] : "—"}</li>
           <li>Favourite crops picked: {favoriteCount}</li>
         </ul>
-        <p className="mt-4 text-sm text-[#1f2a1f]/70">
-          AI-generated grow recommendations land in a later phase.
-        </p>
       </div>
 
       {RESOURCE_LINKS.map((link) => (

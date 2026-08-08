@@ -109,7 +109,7 @@ Sequenced so multi-tenancy and the AI async-job pattern (the two hardest things 
 - **Phase 2 — Plot & growing-area inventory.** ✅ Done — see implementation notes below.
 - **Phase 3 — Free-tier core loop.** ✅ Done — see implementation notes below.
 - **Phase 4 — Billing.** ✅ Done — see implementation notes below.
-- **Phase 5 — Grow-planner agent + calendar integration (hardest phase).** AI SDK provider abstraction + `TenantAIConfig`, the async job pattern (GrowPlan row + Inngest + polling + quote interstitial), Zod structured-output schema, wiring recommendations/generated tasks into the Phase 3 calendar UI (same UI, AI-populated data instead of manual).
+- **Phase 5 — Grow-planner agent + calendar integration (hardest phase).** ✅ Done — see implementation notes below.
 - **Phase 6 — Weather + shopping-list automation.** Daily/weekly Inngest jobs, Open-Meteo integration, task slippage logic, auto shopping list feeding the Phase 3 UI.
 - **Phase 7 — Plant-health agent + photo sharing.** Reuses the Phase 5 async-job/interstitial/provider pattern; diagnosis history against Planting/GrowingArea; photo-sharing feed within a tenant.
 - **Phase 8 — White-label/tenant admin tooling.** Admin UI for branding, custom domains, tenant `EquipmentType`/`PartnerLink` management, per-tenant AI provider config, per-tenant Stripe price config — all exposing config tables that already exist from Phase 0 onward, not new data-model work.
@@ -361,3 +361,61 @@ shows the upgrade banner and header shows "Upgrade" → `/upgrade` shows "£5.00
 → banner and header link both gone, confirmed via a fresh dashboard load → Manage subscription
 (dev-mode cancel) → back to "Subscribe" → banner and header link both reappear. 11/11 checks pass,
 and a direct Postgres query confirms the final row (`tier: free`) matches the UI's end state.
+
+---
+
+## Phase 5 — Implementation Notes
+
+No Gemini key exists in this environment (confirmed with the user before building, same as
+Stripe in Phase 4). `src/lib/ai/provider.ts`'s `getModelForTenant()` resolves a `TenantAIConfig`
+row, then `GOOGLE_GENERATIVE_AI_API_KEY`, returning `null` if neither is set — the trigger for
+`src/lib/ai/agents/growPlanner.ts`'s mock path, which produces structurally valid, plausible
+output (harvest dates staggered by recommendation index so gluts are avoided in mock output too,
+`requiresPurchase` computed from real `seedInventory` presence, reasoning text that clearly labels
+itself "[Mock plan]") from the same inputs the real `generateObject` prompt would use, so the
+whole pipeline is genuinely exercised end to end. The real Gemini call path is written against the
+AI SDK's documented `generateObject` API (kept over the newer `generateText({ output: Output.object(...) })`
+form this SDK version's types mark as the replacement — deprecated but still exported and
+functional, and simpler/more stable to write against untested) but is **untested against a live
+key** in this session, same caveat as Phase 4's Stripe integration.
+
+**Inngest runs for real, not simulated** — `npx inngest-cli dev` needs no account, so unlike
+Stripe/Gemini this is genuine local infra (same category as Docker Postgres). Needed
+`INNGEST_DEV=1` in `.env.local` (undocumented in the error message's absence — "In cloud mode but
+no signing key found" only makes sense once you know the SDK defaults to assuming a production
+deployment) and a Next.js dev server restart to pick it up, since Next only reads `.env.local` at
+startup.
+
+New tables `growPlans` and `planRecommendations` (RLS-verified same as every table so far).
+`tasks` gained two additive nullable columns flagged as acceptable back in the Phase 3 notes —
+`source` (`manual`/`ai`) and `hardDeadlineDate` — which is what lets AI-generated tasks appear on
+the existing `/calendar` and dashboard "This week" UI with zero changes to their data-fetching
+logic, just a small "AI" badge and deadline line added to the existing rendering.
+
+**Real bug, the most consequential one found so far**: `getModelForTenant()` originally used the
+plain unscoped `db` client against `tenantAIConfigs` — reasoned at the time as "resolving the
+model is infrastructure, not user data" (see the plan's original wording). This is row-level-
+secured like every tenant table, and outside `withTenant()` it should just filter to zero rows,
+not error — except it didn't. On a **pooled** Postgres connection, once *any* transaction has done
+`SET LOCAL app.tenant_id = ...` (which every `withTenant()` call does), Postgres permanently
+registers a placeholder for that custom GUC on that physical connection; after the transaction
+ends, `current_setting('app.tenant_id', true)` on a later unscoped query over that same pooled
+connection returns `''` (empty string) rather than `NULL` — and the RLS policy's `::uuid` cast on
+that empty string throws a hard `invalid input syntax for type uuid` error instead of silently
+matching nothing. Reproduced directly against Postgres outside the app entirely (a transaction
+setting the GUC, then five plain queries afterward all seeing `''`) to confirm it wasn't
+app-specific. Every other unscoped `db` usage in the codebase was audited and found to only ever
+query the deliberately-global `crops` table (not RLS-protected) — this was the one place the
+existing "always use `withTenant()` for tenant-scoped tables" rule (stated explicitly in
+`withTenant.ts`'s own doc comment since Phase 0) got violated. Fixed by routing the query through
+`withTenant()` like everything else; no exceptions to that rule going forward, including for
+"infrastructure" reads.
+
+Verified end-to-end with Playwright (mock-provider path, real Inngest job): sign up, complete
+onboarding (liking 3 crops, disliking the rest, owning one seed packet) → free user sees a
+paywall on `/grow-plan` → subscribe (Phase 4 dev-mode) → "Generate my grow plan" → interstitial
+with a cycling quote while polling → resolves to 3 recommendations (correctly excluding every
+disliked crop) with reasoning, harvest-date estimates, and a shopping-list badge on the one
+requiring purchase → `/calendar` shows the 7 generated tasks with the AI badge → dashboard
+renders cleanly. 9/9 checks pass, and a direct Postgres query confirms exactly one `complete`
+grow plan with 3 recommendations and 7 AI-sourced tasks — matching the UI, not just plausible.

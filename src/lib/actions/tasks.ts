@@ -17,7 +17,9 @@ export type CreatedTask = {
   title: string;
   notes: string | null;
   dueDate: string;
+  hardDeadlineDate: string | null;
   status: "pending";
+  source: "manual" | "ai";
 };
 
 export type CreateTaskState = { error?: string; task?: CreatedTask };
@@ -51,7 +53,15 @@ export async function createTaskAction(
   });
 
   return {
-    task: { id: task.id, title: task.title, notes: task.notes, dueDate: task.dueDate, status: "pending" },
+    task: {
+      id: task.id,
+      title: task.title,
+      notes: task.notes,
+      dueDate: task.dueDate,
+      hardDeadlineDate: task.hardDeadlineDate,
+      status: "pending",
+      source: task.source,
+    },
   };
 }
 

@@ -13,7 +13,9 @@ type Task = {
   title: string;
   notes: string | null;
   dueDate: string;
+  hardDeadlineDate: string | null;
   status: "pending" | "completed";
+  source: "manual" | "ai";
 };
 
 const WEEKDAY_LABELS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
@@ -185,7 +187,15 @@ export function CalendarView({ initialTasks }: { initialTasks: Task[] }) {
                     <span className={task.status === "completed" ? "line-through text-[#1f2a1f]/50" : ""}>
                       {task.title}
                     </span>
+                    {task.source === "ai" && (
+                      <span className="ml-2 rounded-full bg-(--brand-secondary)/40 px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide">
+                        AI
+                      </span>
+                    )}
                     {task.notes && <p className="text-xs text-[#1f2a1f]/60">{task.notes}</p>}
+                    {task.hardDeadlineDate && (
+                      <p className="text-xs text-[#1f2a1f]/50">Last date: {task.hardDeadlineDate}</p>
+                    )}
                   </span>
                 </label>
                 <button

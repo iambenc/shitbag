@@ -3,7 +3,13 @@
 import { useState } from "react";
 import { toggleTaskCompleteAction } from "@/lib/actions/tasks";
 
-type Task = { id: string; title: string; dueDate: string; status: "pending" | "completed" };
+type Task = {
+  id: string;
+  title: string;
+  dueDate: string;
+  status: "pending" | "completed";
+  source: "manual" | "ai";
+};
 
 export function ThisWeekTasks({ tasks }: { tasks: Task[] }) {
   const [taskList, setTaskList] = useState(tasks);
@@ -32,6 +38,11 @@ export function ThisWeekTasks({ tasks }: { tasks: Task[] }) {
           <span className={task.status === "completed" ? "line-through text-[#1f2a1f]/50" : ""}>
             {task.title}
           </span>
+          {task.source === "ai" && (
+            <span className="rounded-full bg-(--brand-secondary)/40 px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide">
+              AI
+            </span>
+          )}
           <span className="text-xs text-[#1f2a1f]/50">{task.dueDate}</span>
         </li>
       ))}

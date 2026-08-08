@@ -5,11 +5,13 @@ keep a steady harvest from a windowsill to a full allotment. Multi-tenant from d
 product can be white-labelled to garden centres/seed suppliers later.
 
 See [`docs/plan.md`](docs/plan.md) *(or the plan shared with you)* for the full architecture and
-phased build roadmap. This repo is currently at **Phase 4**: auth, multi-tenancy, a branded
+phased build roadmap. This repo is currently at **Phase 5**: auth, multi-tenancy, a branded
 dashboard shell, the full onboarding wizard, a growing-area inventory page (`/garden`), the
-free-tier core loop (calendar, shopping list, harvest log, photo journal), and billing (`/upgrade`)
-— Stripe Checkout/Portal/webhooks are wired up but run in a dev-mode simulation until real Stripe
-test keys are added (see `STRIPE_SECRET_KEY` / `STRIPE_WEBHOOK_SECRET` in `.env.local`).
+free-tier core loop (calendar, shopping list, harvest log, photo journal), billing (`/upgrade`),
+and an AI grow-planner agent (`/grow-plan`) that generates crop recommendations and calendar tasks
+via a durable background job. Stripe and Gemini are both wired up for real but run in dev-mode
+simulations until real credentials are added (`STRIPE_SECRET_KEY`/`STRIPE_WEBHOOK_SECRET`,
+`GOOGLE_GENERATIVE_AI_API_KEY` in `.env.local`).
 
 ## Stack
 
@@ -57,6 +59,16 @@ Postgres row-level security for tenant isolation · Tailwind CSS.
    Visit `http://localhost:3000`. To exercise a second (white-label) tenant locally, insert a row
    into `tenants` and visit `http://<slug>.localhost:3000` — `src/proxy.ts` resolves the tenant
    from the subdomain.
+
+5. **(Phase 5+) Run the Inngest dev server**, needed for the AI grow-planner's background job —
+   this is genuine local infra (no account needed), not a stand-in:
+
+   ```bash
+   npx inngest-cli dev -u http://localhost:3000/api/inngest
+   ```
+
+   `INNGEST_DEV=1` in `.env.local` tells the SDK to expect this local dev server instead of a
+   production signing key.
 
 ## Multi-tenancy model
 

@@ -30,7 +30,9 @@ export default async function CalendarPage() {
             title: t.title,
             notes: t.notes,
             dueDate: t.dueDate,
+            hardDeadlineDate: t.hardDeadlineDate,
             status: t.status,
+            source: t.source,
           }))}
         />
       </div>
