@@ -1,0 +1,69 @@
+import { pgTable, uuid, text, integer, real, unique } from "drizzle-orm/pg-core";
+import { tenants } from "./tenant";
+import { users } from "./user";
+import { tenantIsolationPolicy } from "./_rls";
+
+// Which attribute inputs the equipment picker UI shows for a type:
+// "count" -> just a quantity stepper (watering can, seed trays)
+// "sized" -> repeatable size-label + quantity rows (pots)
+// "dimensions" -> repeatable width/length/(depth) + quantity rows (planters, raised beds, beds)
+export const equipmentCategoryEnum = ["count", "sized", "dimensions"] as const;
+export type EquipmentCategory = (typeof equipmentCategoryEnum)[number];
+
+export const equipmentTypes = pgTable(
+  "equipment_types",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    tenantId: uuid("tenant_id")
+      .notNull()
+      .references(() => tenants.id, { onDelete: "cascade" }),
+    slug: text("slug").notNull(),
+    name: text("name").notNull(),
+    category: text("category", { enum: equipmentCategoryEnum }).notNull(),
+    sortOrder: integer("sort_order").notNull().default(0),
+  },
+  (table) => [
+    unique("equipment_types_tenant_slug_unique").on(table.tenantId, table.slug),
+    tenantIsolationPolicy("equipment_types", table.tenantId),
+  ],
+).enableRLS();
+
+export const partnerLinks = pgTable(
+  "partner_links",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    tenantId: uuid("tenant_id")
+      .notNull()
+      .references(() => tenants.id, { onDelete: "cascade" }),
+    equipmentTypeId: uuid("equipment_type_id")
+      .notNull()
+      .references(() => equipmentTypes.id, { onDelete: "cascade" }),
+    label: text("label").notNull(),
+    url: text("url").notNull(),
+    sortOrder: integer("sort_order").notNull().default(0),
+  },
+  (table) => [tenantIsolationPolicy("partner_links", table.tenantId)],
+).enableRLS();
+
+export const userEquipment = pgTable(
+  "user_equipment",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    tenantId: uuid("tenant_id")
+      .notNull()
+      .references(() => tenants.id, { onDelete: "cascade" }),
+    userId: uuid("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    equipmentTypeId: uuid("equipment_type_id")
+      .notNull()
+      .references(() => equipmentTypes.id, { onDelete: "cascade" }),
+    quantity: integer("quantity").notNull().default(1),
+    // Only one of these is populated, depending on the equipment type's category.
+    sizeLabel: text("size_label"),
+    widthCm: real("width_cm"),
+    lengthCm: real("length_cm"),
+    depthCm: real("depth_cm"),
+  },
+  (table) => [tenantIsolationPolicy("user_equipment", table.tenantId)],
+).enableRLS();

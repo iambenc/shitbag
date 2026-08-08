@@ -2,7 +2,9 @@ import { config } from "dotenv";
 import { drizzle } from "drizzle-orm/postgres-js";
 import postgres from "postgres";
 import { eq } from "drizzle-orm";
-import { tenants, tenantPlans } from "./schema";
+import { tenants, tenantPlans, crops, equipmentTypes, partnerLinks } from "./schema";
+import { cropSeeds } from "./seed-data/crops";
+import { equipmentTypeSeeds } from "./seed-data/equipment";
 
 config({ path: ".env.local" });
 
@@ -40,7 +42,45 @@ async function main() {
     });
   }
 
-  console.log(`Seeded platform tenant "edurnity" (${tenant.id})`);
+  const existingCrops = await db.select({ slug: crops.slug }).from(crops);
+  const existingCropSlugs = new Set(existingCrops.map((c) => c.slug));
+  const newCrops = cropSeeds
+    .filter((c) => !existingCropSlugs.has(c.slug))
+    .map((c, i) => ({ ...c, sortOrder: existingCropSlugs.size + i }));
+  if (newCrops.length > 0) {
+    await db.insert(crops).values(newCrops);
+  }
+
+  const existingTypes = await db
+    .select({ slug: equipmentTypes.slug })
+    .from(equipmentTypes)
+    .where(eq(equipmentTypes.tenantId, tenant.id));
+  const existingTypeSlugs = new Set(existingTypes.map((t) => t.slug));
+  let newTypeCount = 0;
+  for (const [i, seed] of equipmentTypeSeeds.entries()) {
+    if (existingTypeSlugs.has(seed.slug)) continue;
+    const [type] = await db
+      .insert(equipmentTypes)
+      .values({
+        tenantId: tenant.id,
+        slug: seed.slug,
+        name: seed.name,
+        category: seed.category,
+        sortOrder: i,
+      })
+      .returning();
+    await db.insert(partnerLinks).values({
+      tenantId: tenant.id,
+      equipmentTypeId: type.id,
+      label: seed.partnerLinkLabel,
+      url: seed.partnerLinkUrl,
+    });
+    newTypeCount++;
+  }
+
+  console.log(
+    `Seeded platform tenant "edurnity" (${tenant.id}) — ${newCrops.length} new crops, ${newTypeCount} new equipment types`,
+  );
   await sql.end();
 }
 

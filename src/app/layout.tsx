@@ -52,6 +52,9 @@ export default async function RootLayout({ children }: LayoutProps<"/">) {
                 <Link href="/dashboard" className="hover:underline">
                   Dashboard
                 </Link>
+                <Link href="/garden" className="hover:underline">
+                  My Garden
+                </Link>
                 <span className="text-[#1f2a1f]/60">{session.user.email}</span>
                 <form
                   action={async () => {

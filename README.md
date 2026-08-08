@@ -5,8 +5,10 @@ keep a steady harvest from a windowsill to a full allotment. Multi-tenant from d
 product can be white-labelled to garden centres/seed suppliers later.
 
 See [`docs/plan.md`](docs/plan.md) *(or the plan shared with you)* for the full architecture and
-phased build roadmap. This repo is currently at **Phase 0**: auth, multi-tenancy, and a branded
-dashboard shell.
+phased build roadmap. This repo is currently at **Phase 2**: auth, multi-tenancy, a branded
+dashboard shell, the full onboarding wizard (location, favourite crops, plot, equipment, seeds,
+experience), and a growing-area inventory page (`/garden`) for placing owned equipment into
+active, individually-trackable growing space.
 
 ## Stack
 

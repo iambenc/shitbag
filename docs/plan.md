@@ -105,8 +105,8 @@ This pattern is the single most important thing to get right early — every slo
 Sequenced so multi-tenancy and the AI async-job pattern (the two hardest things to retrofit) land early, and every phase is independently demoable.
 
 - **Phase 0 — Scaffold, auth, tenancy skeleton.** ✅ Done — see implementation notes below.
-- **Phase 1 — Onboarding flow.** Signup, postcode→geocode, swipe UI over a seeded `Crop` catalog, plot size + sunlight, household size, equipment picker (owned vs recommended-with-partner-links split), indoor-space flag, seed inventory entry, expertise, time available.
-- **Phase 2 — Plot & growing-area inventory.** Owned-equipment → `GrowingArea` assignment UI, in_use/available state, basic plot visualization — demoable standalone as "manage my garden layout."
+- **Phase 1 — Onboarding flow.** ✅ Done — see implementation notes below.
+- **Phase 2 — Plot & growing-area inventory.** ✅ Done — see implementation notes below.
 - **Phase 3 — Free-tier core loop.** Manual task/calendar CRUD, manual shopping list, manual harvest logging, photo journal (R2) with private/shared-within-tenant visibility, and the **dashboard's "this week's tasks" list** (completable inline, synced to the calendar). This alone is a shippable free product and validates the non-AI data model before AI layers on top.
 - **Phase 4 — Billing.** Stripe Checkout/Portal, `Subscription`/`TenantPlan`, webhooks, gating middleware, upgrade banner + nav item. Ships before AI features so gating has something real to check.
 - **Phase 5 — Grow-planner agent + calendar integration (hardest phase).** AI SDK provider abstraction + `TenantAIConfig`, the async job pattern (GrowPlan row + Inngest + polling + quote interstitial), Zod structured-output schema, wiring recommendations/generated tasks into the Phase 3 calendar UI (same UI, AI-populated data instead of manual).
@@ -177,3 +177,90 @@ login, logout, wrong-password rejection, unauthenticated-redirect, per-tenant br
 subdomain, cross-tenant credential rejection, and same-email-different-tenant signup all pass.
 Also verified directly against Postgres (bypassing the app entirely) that RLS rejects both
 cross-tenant reads and cross-tenant writes.
+
+Two follow-up fixes landed after a user report of "7 console issues" on first load: `auth()` and
+`getCurrentTenant()` were each called once in `RootLayout` and again in the page component for
+every request with no per-request memoization, so a stale/invalid session cookie logged its
+decode error twice; both are now wrapped in React's `cache()`. Separately, `suppressHydrationWarning`
+was added to `<body>` since browser extensions (e.g. Grammarly) inject DOM attributes before
+hydration that React otherwise flags as a mismatch — not an app bug.
+
+---
+
+## Phase 1 — Implementation Notes
+
+Built onboarding as six routes under `/onboarding/*` (`location`, `crops`, `plot`, `equipment`,
+`seeds`, `experience`), each persisting immediately via a server action rather than one final
+submit — a user who abandons partway through keeps whatever they already entered. `src/app/
+dashboard/page.tsx` now redirects to `/onboarding/location` whenever `userProfiles
+.onboardingCompletedAt` is null; finishing the `experience` step sets that timestamp and redirects
+to `/dashboard`.
+
+New schema: `crops` (global, not tenant-scoped — same crop catalog for every tenant) plus
+tenant-scoped `userFavoriteCrops`, `seedInventory`, `equipmentTypes`, `partnerLinks`,
+`userEquipment`, all following the same RLS pattern as Phase 0 (`tenantIsolationPolicy()` +
+`.enableRLS()`), verified with the same direct-Postgres cross-tenant read/write check used in
+Phase 0. Seed data lives in `src/db/seed-data/{crops,equipment}.ts` (25 crops, 6 equipment types +
+placeholder `example.com` partner links) and is applied idempotently by `pnpm db:seed`.
+
+"Recommended equipment" (spec: unowned items get linked to partner sites) is deliberately **not**
+a stored table — the equipment step computes it live as `equipmentTypes` minus whatever the user
+has rows for, joined to `partnerLinks`, so it can never go stale.
+
+The crop swipe deck (`src/app/onboarding/crops/CropSwipeDeck.tsx`) uses `framer-motion`
+(new dependency) for drag-to-swipe with `onDragEnd` threshold detection, plus explicit ✕/♥ buttons
+— both for accessibility and because dragging is impractical to drive from Playwright, so the
+button path is what's actually exercised in the e2e check.
+
+One real bug caught during Playwright verification, not a framework quirk this time: the
+`ExperienceForm`'s expertise-level radio inputs were styled `sr-only` (visually hidden, relying on
+label-click) while the equivalent `PlotForm` radios were left visible — an unintentional
+inconsistency, and it also meant Playwright couldn't click the input directly (the label
+intercepted the click). Fixed by making both steps consistent (visible radio + label), which is
+also simply the more standard pattern.
+
+Verified end-to-end with Playwright: signup → lands in onboarding (not dashboard) → postcode
+geocode via postcodes.io → swipe deck (via buttons) exhausts and advances → plot form → equipment
+step (count/sized/dimensions inputs all exercised, "you might also want" list confirmed showing
+unpicked types with partner links) → seeds step skipped → experience step finishes onboarding →
+dashboard shows the completed-profile summary with correct plot size, expertise, and favourite
+crop count → dashboard no longer redirects on a second visit → equipment step correctly reloads
+previously saved quantities on revisit.
+
+---
+
+## Phase 2 — Implementation Notes
+
+New `growingAreas` table (tenant-scoped, same RLS pattern, verified with the same direct-Postgres
+cross-tenant read/write check) with **no `quantity` column** — deliberately different from
+`userEquipment`, since each row represents one physical, independently-trackable unit (needed so
+a future `Planting` can flip exactly one pot to `in_use` without affecting its siblings). `type`
+covers `seed_tray`/`pot`/`planter`/`raised_bed`/`bed` — seed trays are included (not just pots)
+because the original spec's own worked example of the in_use/available lifecycle is "seedlings
+move from a seed tray to pots, the seed tray frees up and the pot is marked in-use." Every row
+created in this phase has `status: "available"` — there's no `Planting` entity yet to ever set
+`in_use`, but the column and the delete-prefers-`available`-over-`in_use` logic in
+`syncGrowingAreasAction` are already correct for when one exists, so nothing needs revisiting.
+
+New page `/garden` reuses Phase 1's owned-equipment data directly rather than asking the user to
+re-enter anything: one stepper per `userEquipment` row (excluding `watering-can`, which isn't
+growing space) showing "N placed of {quantity owned}". Moving it calls
+`syncGrowingAreasAction(userEquipmentId, desiredCount)`
+(`src/lib/actions/garden/syncGrowingAreas.ts`), which re-clamps the desired count server-side
+rather than trusting the client, and inserts/deletes individual `growingAreas` rows to match.
+The read-only visualization above the steppers is deliberately *not* a separate data source — it's
+derived client-side from the same `placedCount` per equipment row (rendered as N repeated cards),
+so there's only one code path that can go stale, not two drifting in parallel. Width/length rows
+render a proportionally-scaled rectangle (capped/floored in px) for a rough sense of relative
+size; pot/seed-tray cards just show the label.
+
+The equipment-slug → growing-area-type mapping (`src/lib/garden/equipmentMapping.ts`) is shared
+between the server action and the page query rather than duplicated, since both need to agree on
+exactly which equipment types are "placeable."
+
+Verified end-to-end with Playwright: complete onboarding owning 2 pots (20cm) and 1 raised bed
+(100×50×30cm) → `/garden` shows "You own 2" / "You own 1" and an empty "nothing placed yet" state
+→ clicking + twice on pots reaches "2 placed" and the + button correctly disables at the owned
+limit → clicking + on the raised bed shows a scaled card alongside the two pot cards → clicking –
+removes one pot card → reloading the page confirms the placed counts and visualization persisted
+correctly from the database, not just client state.
