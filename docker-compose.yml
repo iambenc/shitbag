@@ -1,0 +1,16 @@
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: edurnity
+      POSTGRES_PASSWORD: edurnity
+      POSTGRES_DB: edurnity
+    ports:
+      - "5434:5432"
+    volumes:
+      - edurnity_pgdata:/var/lib/postgresql/data
+      - ./docker/initdb:/docker-entrypoint-initdb.d:ro
+
+volumes:
+  edurnity_pgdata:
