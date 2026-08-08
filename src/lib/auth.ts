@@ -1,3 +1,4 @@
+import { cache } from "react";
 import NextAuth from "next-auth";
 import Credentials from "next-auth/providers/credentials";
 import { compare } from "bcryptjs";
@@ -25,7 +26,7 @@ declare module "next-auth" {
 // fighting that resolution bug.
 type AppJWT = { userId?: string; role?: string; tenantId?: string };
 
-export const { handlers, signIn, signOut, auth } = NextAuth({
+const { handlers, signIn, signOut, auth: rawAuth } = NextAuth({
   session: { strategy: "jwt" },
   pages: { signIn: "/login" },
   // Multiple tenant subdomains (incl. arbitrary custom domains in Phase 8)
@@ -85,3 +86,10 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
     },
   },
 });
+
+// next-auth v5 doesn't memoize `auth()` itself, and RootLayout + every page
+// both call it — without this, one request does two full JWT decrypt/verify
+// passes (and, if the cookie is stale/invalid, logs the decode error twice).
+// React's cache() gives per-request dedup for free.
+export const auth = cache(rawAuth);
+export { handlers, signIn, signOut };

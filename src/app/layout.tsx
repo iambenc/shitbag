@@ -37,7 +37,10 @@ export default async function RootLayout({ children }: LayoutProps<"/">) {
         } as React.CSSProperties
       }
     >
-      <body className="min-h-full flex flex-col bg-[#faf8f2] text-[#1f2a1f]">
+      <body
+        className="min-h-full flex flex-col bg-[#faf8f2] text-[#1f2a1f]"
+        suppressHydrationWarning
+      >
         <header className="flex items-center justify-between border-b border-(--brand-primary)/15 px-6 py-4">
           <Link href="/" className="flex items-center gap-2 font-semibold text-(--brand-primary)">
             <span aria-hidden>🌱</span>

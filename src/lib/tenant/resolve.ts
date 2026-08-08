@@ -1,4 +1,5 @@
 import "server-only";
+import { cache } from "react";
 import { headers } from "next/headers";
 import { eq, or } from "drizzle-orm";
 import { db } from "@/db/client";
@@ -14,8 +15,12 @@ export type CurrentTenant = typeof tenants.$inferSelect;
  * `withTenant`) because resolving the tenant is what tells us what to scope
  * by in the first place. Falls back to the platform tenant when there's no
  * subdomain/custom-domain match (bare root domain, e.g. local dev).
+ *
+ * Wrapped in React's cache() — layout + page (+ actions) all call this per
+ * request, and without per-request memoization that's a repeat DB query
+ * every time.
  */
-export async function getCurrentTenant(): Promise<CurrentTenant> {
+export const getCurrentTenant = cache(async (): Promise<CurrentTenant> => {
   const headerList = await headers();
   const slug = headerList.get("x-tenant-slug");
   const domain = headerList.get("x-tenant-domain");
@@ -40,4 +45,4 @@ export async function getCurrentTenant(): Promise<CurrentTenant> {
     );
   }
   return tenant;
-}
+});
