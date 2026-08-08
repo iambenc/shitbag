@@ -7,6 +7,8 @@ import { userFavoriteCrops, tasks } from "@/db/schema";
 import { getCurrentTenant } from "@/lib/tenant/resolve";
 import { getUserProfile } from "@/lib/onboarding/profile";
 import { plotSizeLabels, expertiseLevelLabels } from "@/lib/onboarding/labels";
+import { getSubscription, isPaidTier } from "@/lib/billing/subscription";
+import { UpgradeBanner } from "@/components/UpgradeBanner";
 import { ThisWeekTasks } from "./ThisWeekTasks";
 
 function pad(n: number) {
@@ -78,6 +80,7 @@ export default async function DashboardPage() {
     ]);
     return [favorites.filter((r) => r.liked).length, weekTasks];
   });
+  const paid = isPaidTier(await getSubscription(session.user.id, tenant.id));
 
   return (
     <div className="mx-auto max-w-2xl px-6 py-16">
@@ -86,7 +89,13 @@ export default async function DashboardPage() {
       </h1>
       <p className="mt-2 text-sm text-[#1f2a1f]/70">Tenant: {tenant.displayName}</p>
 
-      <div className="mt-8 rounded-lg border border-black/10 bg-white p-6">
+      {!paid && (
+        <div className="mt-6">
+          <UpgradeBanner />
+        </div>
+      )}
+
+      <div className="mt-2 rounded-lg border border-black/10 bg-white p-6">
         <p className="font-medium">This week</p>
         <div className="mt-3">
           <ThisWeekTasks

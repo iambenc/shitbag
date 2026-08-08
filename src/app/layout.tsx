@@ -4,6 +4,7 @@ import Link from "next/link";
 import "./globals.css";
 import { getCurrentTenant } from "@/lib/tenant/resolve";
 import { auth, signOut } from "@/lib/auth";
+import { getSubscription, isPaidTier } from "@/lib/billing/subscription";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -25,6 +26,10 @@ export async function generateMetadata(): Promise<Metadata> {
 
 export default async function RootLayout({ children }: LayoutProps<"/">) {
   const [tenant, session] = await Promise.all([getCurrentTenant(), auth()]);
+  const subscription = session?.user
+    ? await getSubscription(session.user.id, tenant.id)
+    : undefined;
+  const isPaid = isPaidTier(subscription);
 
   return (
     <html
@@ -55,6 +60,14 @@ export default async function RootLayout({ children }: LayoutProps<"/">) {
                 <Link href="/garden" className="hover:underline">
                   My Garden
                 </Link>
+                {!isPaid && (
+                  <Link
+                    href="/upgrade"
+                    className="rounded-full bg-(--brand-secondary) px-3 py-1 font-medium text-[#1f2a1f] hover:opacity-90"
+                  >
+                    Upgrade
+                  </Link>
+                )}
                 <span className="text-[#1f2a1f]/60">{session.user.email}</span>
                 <form
                   action={async () => {

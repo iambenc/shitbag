@@ -5,11 +5,11 @@ keep a steady harvest from a windowsill to a full allotment. Multi-tenant from d
 product can be white-labelled to garden centres/seed suppliers later.
 
 See [`docs/plan.md`](docs/plan.md) *(or the plan shared with you)* for the full architecture and
-phased build roadmap. This repo is currently at **Phase 3**: auth, multi-tenancy, a branded
-dashboard shell, the full onboarding wizard, a growing-area inventory page (`/garden`), and the
-free-tier core loop — a manual task calendar (`/calendar`), shopping list (`/shopping-list`),
-harvest log (`/harvests`), and a photo journal (`/journal`) with private/shared-with-tenant
-visibility, all reflected in a "this week" list on the dashboard.
+phased build roadmap. This repo is currently at **Phase 4**: auth, multi-tenancy, a branded
+dashboard shell, the full onboarding wizard, a growing-area inventory page (`/garden`), the
+free-tier core loop (calendar, shopping list, harvest log, photo journal), and billing (`/upgrade`)
+— Stripe Checkout/Portal/webhooks are wired up but run in a dev-mode simulation until real Stripe
+test keys are added (see `STRIPE_SECRET_KEY` / `STRIPE_WEBHOOK_SECRET` in `.env.local`).
 
 ## Stack
 

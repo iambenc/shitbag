@@ -5,7 +5,7 @@ import { hash } from "bcryptjs";
 import { redirect } from "next/navigation";
 import { getCurrentTenant } from "@/lib/tenant/resolve";
 import { withTenant } from "@/lib/tenant/withTenant";
-import { users, userProfiles } from "@/db/schema";
+import { users, userProfiles, subscriptions } from "@/db/schema";
 import { eq } from "drizzle-orm";
 import { signIn } from "@/lib/auth";
 
@@ -37,6 +37,7 @@ export async function signUpAction(_prevState: SignUpState, formData: FormData):
       .values({ tenantId: tenant.id, email, passwordHash })
       .returning();
     await tx.insert(userProfiles).values({ tenantId: tenant.id, userId: user.id });
+    await tx.insert(subscriptions).values({ tenantId: tenant.id, userId: user.id });
     return user;
   });
 

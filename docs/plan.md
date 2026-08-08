@@ -108,7 +108,7 @@ Sequenced so multi-tenancy and the AI async-job pattern (the two hardest things 
 - **Phase 1 — Onboarding flow.** ✅ Done — see implementation notes below.
 - **Phase 2 — Plot & growing-area inventory.** ✅ Done — see implementation notes below.
 - **Phase 3 — Free-tier core loop.** ✅ Done — see implementation notes below.
-- **Phase 4 — Billing.** Stripe Checkout/Portal, `Subscription`/`TenantPlan`, webhooks, gating middleware, upgrade banner + nav item. Ships before AI features so gating has something real to check.
+- **Phase 4 — Billing.** ✅ Done — see implementation notes below.
 - **Phase 5 — Grow-planner agent + calendar integration (hardest phase).** AI SDK provider abstraction + `TenantAIConfig`, the async job pattern (GrowPlan row + Inngest + polling + quote interstitial), Zod structured-output schema, wiring recommendations/generated tasks into the Phase 3 calendar UI (same UI, AI-populated data instead of manual).
 - **Phase 6 — Weather + shopping-list automation.** Daily/weekly Inngest jobs, Open-Meteo integration, task slippage logic, auto shopping list feeding the Phase 3 UI.
 - **Phase 7 — Plant-health agent + photo sharing.** Reuses the Phase 5 async-job/interstitial/provider pattern; diagnosis history against Planting/GrowingArea; photo-sharing feed within a tenant.
@@ -312,3 +312,52 @@ delete the other. Log a harvest. Upload a photo as private → visible only unde
 upload a second as shared → appears in both "My Photos" and "Shared in {tenant}". 13/13 checks
 pass, and a direct Postgres query afterward confirms row counts/values match exactly what the UI
 showed.
+
+---
+
+## Phase 4 — Implementation Notes
+
+No Stripe account/keys exist in this environment (confirmed with the user before building). Built
+the real integration against the Stripe Node SDK's documented API — `src/lib/actions/billing.ts`
+(Checkout Session + Billing Portal Session creation) and `src/app/api/webhooks/stripe/route.ts`
+(signature-verified webhook handling `checkout.session.completed` /
+`customer.subscription.updated` / `.deleted`) — but it's **untested against a live account**; that's
+a follow-up once test keys exist. `src/lib/billing/stripe.ts`'s `getStripeClient()` returns `null`
+when `STRIPE_SECRET_KEY` is unset, and both billing actions branch on that to a dev-mode path that
+directly writes the `subscriptions` row and logs `[dev-mode] simulating ...` — same stand-in shape
+as Docker Postgres (Phase 0) and local photo storage (Phase 3). This is what Playwright actually
+exercises below.
+
+New `subscriptions` table (tenant-scoped, RLS, spot-checked directly against Postgres like every
+table so far) — one row per user, created at signup alongside `userProfiles`. Deliberately **not**
+embedding tier in the session/JWT as the original architecture doc suggested: a JWT doesn't refresh
+mid-session when the DB changes, so a user who just paid would still read as free until their token
+rotated — a real staleness bug for a paying customer. Instead `getSubscription()`
+(`src/lib/billing/subscription.ts`) is fetched fresh per request, matching how `userProfile` and
+tenant are already handled everywhere else in this app.
+
+**Real bug, caught by Playwright, not a framework quirk**: right after a successful dev-mode
+subscribe/cancel, the `/upgrade` page's own content updated correctly, but the header nav's
+"Upgrade" link (rendered by the shared root layout) kept showing the pre-mutation state — even
+immediately after a hard page reload in one debugging pass, though it resolved on a subsequent
+navigation. Root cause: Next.js's client-side Router Cache treats a layout segment shared between
+the page a Server Action redirects *from* and *to* as unchanged unless explicitly told otherwise,
+so mutating data a layout depends on doesn't invalidate what the client has already cached for it.
+Fixed by calling `revalidatePath("/", "layout")` in both billing actions before their dev-mode
+`redirect()`. Caught by an isolated debug script that dumped page content immediately after each
+step — the original Playwright run's assertions were *also* subtly broken in a related way (see
+below) which had been masking how much of this was really fixed.
+
+**Second issue, this time in the test itself**: `/upgrade`'s dev-mode actions redirect back to
+`/upgrade` — the same URL. `page.waitForURL(/\/upgrade/)` resolves immediately in that case (the
+current URL already matches), so the check that followed ran before the POST had actually
+completed, not after. Replaced with waiting on the actual post-mutation content
+(`page.locator(...).waitFor(...)`) instead of the URL. Worth remembering for any future same-URL
+redirect flow in this codebase.
+
+Verified end-to-end with Playwright (dev-mode path): sign up and complete onboarding → dashboard
+shows the upgrade banner and header shows "Upgrade" → `/upgrade` shows "£5.00/month" (from
+`tenantPlans`, unchanged since Phase 0) → Subscribe → "You're subscribed" + "Manage subscription"
+→ banner and header link both gone, confirmed via a fresh dashboard load → Manage subscription
+(dev-mode cancel) → back to "Subscribe" → banner and header link both reappear. 11/11 checks pass,
+and a direct Postgres query confirms the final row (`tier: free`) matches the UI's end state.
