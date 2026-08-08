@@ -1,11 +1,10 @@
 "use server";
 
 import { eq, and, inArray, count } from "drizzle-orm";
-import { auth } from "@/lib/auth";
-import { getCurrentTenant } from "@/lib/tenant/resolve";
 import { withTenant } from "@/lib/tenant/withTenant";
 import { userEquipment, equipmentTypes, growingAreas } from "@/db/schema";
 import { SLUG_TO_GROWING_AREA_TYPE } from "@/lib/garden/equipmentMapping";
+import { requireSessionAndTenant } from "@/lib/actions/shared";
 
 export type SyncGrowingAreasResult = { ok: true; count: number } | { ok: false; error: string };
 
@@ -21,12 +20,9 @@ export async function syncGrowingAreasAction(
   userEquipmentId: string,
   desiredCount: number,
 ): Promise<SyncGrowingAreasResult> {
-  const session = await auth();
-  if (!session?.user) return { ok: false, error: "Not authenticated" };
-  const tenant = await getCurrentTenant();
-  const userId = session.user.id;
+  const { userId, tenantId } = await requireSessionAndTenant();
 
-  return withTenant(tenant.id, async (tx) => {
+  return withTenant(tenantId, async (tx) => {
     const [row] = await tx
       .select({ equipment: userEquipment, type: equipmentTypes })
       .from(userEquipment)
@@ -51,7 +47,7 @@ export async function syncGrowingAreasAction(
       const toAdd = clamped - existing.length;
       await tx.insert(growingAreas).values(
         Array.from({ length: toAdd }, () => ({
-          tenantId: tenant.id,
+          tenantId,
           userId,
           type: growingAreaType,
           sizeLabel: row.equipment.sizeLabel,

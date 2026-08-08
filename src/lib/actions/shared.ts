@@ -2,7 +2,7 @@ import "server-only";
 import { auth } from "@/lib/auth";
 import { getCurrentTenant } from "@/lib/tenant/resolve";
 
-/** Every onboarding action needs the same "who is this and which tenant" check. */
+/** Every server action needs the same "who is this and which tenant" check. */
 export async function requireSessionAndTenant() {
   const session = await auth();
   if (!session?.user) throw new Error("Not authenticated");

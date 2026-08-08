@@ -5,7 +5,7 @@ import { redirect } from "next/navigation";
 import { eq } from "drizzle-orm";
 import { withTenant } from "@/lib/tenant/withTenant";
 import { userProfiles } from "@/db/schema";
-import { requireSessionAndTenant } from "./shared";
+import { requireSessionAndTenant } from "@/lib/actions/shared";
 import { nextOnboardingStep } from "@/lib/onboarding/steps";
 
 const locationSchema = z.object({

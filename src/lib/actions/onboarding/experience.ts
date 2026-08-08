@@ -5,7 +5,7 @@ import { redirect } from "next/navigation";
 import { eq } from "drizzle-orm";
 import { withTenant } from "@/lib/tenant/withTenant";
 import { userProfiles, expertiseLevelEnum } from "@/db/schema";
-import { requireSessionAndTenant } from "./shared";
+import { requireSessionAndTenant } from "@/lib/actions/shared";
 
 const experienceSchema = z.object({
   expertiseLevel: z.enum(expertiseLevelEnum),

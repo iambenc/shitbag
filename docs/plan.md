@@ -107,7 +107,7 @@ Sequenced so multi-tenancy and the AI async-job pattern (the two hardest things 
 - **Phase 0 — Scaffold, auth, tenancy skeleton.** ✅ Done — see implementation notes below.
 - **Phase 1 — Onboarding flow.** ✅ Done — see implementation notes below.
 - **Phase 2 — Plot & growing-area inventory.** ✅ Done — see implementation notes below.
-- **Phase 3 — Free-tier core loop.** Manual task/calendar CRUD, manual shopping list, manual harvest logging, photo journal (R2) with private/shared-within-tenant visibility, and the **dashboard's "this week's tasks" list** (completable inline, synced to the calendar). This alone is a shippable free product and validates the non-AI data model before AI layers on top.
+- **Phase 3 — Free-tier core loop.** ✅ Done — see implementation notes below.
 - **Phase 4 — Billing.** Stripe Checkout/Portal, `Subscription`/`TenantPlan`, webhooks, gating middleware, upgrade banner + nav item. Ships before AI features so gating has something real to check.
 - **Phase 5 — Grow-planner agent + calendar integration (hardest phase).** AI SDK provider abstraction + `TenantAIConfig`, the async job pattern (GrowPlan row + Inngest + polling + quote interstitial), Zod structured-output schema, wiring recommendations/generated tasks into the Phase 3 calendar UI (same UI, AI-populated data instead of manual).
 - **Phase 6 — Weather + shopping-list automation.** Daily/weekly Inngest jobs, Open-Meteo integration, task slippage logic, auto shopping list feeding the Phase 3 UI.
@@ -264,3 +264,51 @@ Verified end-to-end with Playwright: complete onboarding owning 2 pots (20cm) an
 limit → clicking + on the raised bed shows a scaled card alongside the two pot cards → clicking –
 removes one pot card → reloading the page confirms the placed counts and visualization persisted
 correctly from the database, not just client state.
+
+---
+
+## Phase 3 — Implementation Notes
+
+Four new tables (`tasks`, `shoppingListItems`, `harvestLog`, `photoJournalEntries`), same RLS
+pattern as every table so far, spot-checked directly against Postgres on `tasks`. `shoppingListItems`
+adds a Postgres `CHECK` constraint (`(crop_id is not null) <> (free_text is not null)`) so "exactly
+one of catalog crop or free-text item" is enforced at the database level, not just in Zod — an
+extra bit of defense-in-depth consistent with how RLS itself is used as a backstop everywhere else
+in this project, not merely an app-layer convention.
+
+**Photo storage** (`src/lib/storage/`) is a small `PhotoStorage` interface with a local-filesystem
+implementation (`public/uploads/<tenant>/<user>/<uuid>.<ext>`, gitignored) standing in for R2, the
+same move made for Postgres in Phase 0 (Docker now, Neon later) — swapping in R2 is a new
+implementation of the same interface plus an env var, not an app-code change.
+
+A `requireSessionAndTenant()` helper used to live under `src/lib/actions/onboarding/shared.ts`;
+now that four more feature areas need the identical "who is this and which tenant" check, it moved
+to `src/lib/actions/shared.ts` and every action file (onboarding, garden, and the four new ones)
+imports it from there.
+
+**Real bug found by Playwright, not a framework quirk**: every "add" action (task, shopping item,
+harvest) followed the same optimistic-update shape — insert a client-side placeholder row with an
+id like `optimistic-${Date.now()}` immediately, before the server confirmed anything. The very
+next interaction with that row (toggling complete, marking purchased, deleting) sent that fake
+string to Postgres as a `uuid` parameter and got a hard `22P02 invalid input syntax for type uuid`
+500 error — caught because the e2e check inspected console/page errors, not just DOM assertions
+that happened to still look right (the optimistic *removal* on delete, for instance, made the item
+disappear from the UI regardless of whether the server call underneath actually succeeded, so a
+shallower test would have passed anyway). Fixed by having every create action `.returning()` the
+real inserted row and only adding it to client state once the real id comes back, instead of ever
+inventing one — removed the placeholder-id pattern everywhere rather than special-casing it. The
+same investigation surfaced a second bug in the photo journal: it *did* correctly call
+`router.refresh()` after mutations, but `JournalView`'s `useState(myPhotos)` only consumes its
+prop on first mount, so a refresh alone never actually updated the visible list — fixed by having
+`uploadPhotoAction` return the created photo directly (same fix shape as the others) and dropping
+`router.refresh()` entirely in favour of local state kept in sync by the actions' return values.
+Confirmed the fix is real (not just a client-side illusion) by comparing final Postgres row counts
+and values against what the UI displayed at the end of the Playwright run.
+
+Verified end-to-end with Playwright: add a task on `/calendar` for today → appears there and in
+the dashboard "This week" list → mark complete from the dashboard → shows completed back on
+`/calendar` → delete it. Add a catalog-based and a free-text shopping item → mark one purchased →
+delete the other. Log a harvest. Upload a photo as private → visible only under "My Photos";
+upload a second as shared → appears in both "My Photos" and "Shared in {tenant}". 13/13 checks
+pass, and a direct Postgres query afterward confirms row counts/values match exactly what the UI
+showed.
