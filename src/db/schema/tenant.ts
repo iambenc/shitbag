@@ -1,4 +1,4 @@
-import { pgTable, uuid, text, timestamp, integer, boolean } from "drizzle-orm/pg-core";
+import { pgTable, uuid, text, timestamp, integer, boolean, unique } from "drizzle-orm/pg-core";
 import { tenantIsolationPolicy } from "./_rls";
 
 // `tenants` itself is intentionally NOT row-level-secured — resolving which
@@ -28,8 +28,14 @@ export const tenantPlans = pgTable(
     trialDays: integer("trial_days").notNull().default(0),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },
-  (table) => [tenantIsolationPolicy("tenant_plans", table.tenantId)],
+  (table) => [
+    unique("tenant_plans_tenant_unique").on(table.tenantId),
+    tenantIsolationPolicy("tenant_plans", table.tenantId),
+  ],
 ).enableRLS();
+
+export const tenantAIConfigAgentEnum = ["grow_planner", "plant_health"] as const;
+export type TenantAIConfigAgent = (typeof tenantAIConfigAgentEnum)[number];
 
 export const tenantAIConfigs = pgTable(
   "tenant_ai_configs",
@@ -38,12 +44,15 @@ export const tenantAIConfigs = pgTable(
     tenantId: uuid("tenant_id")
       .notNull()
       .references(() => tenants.id, { onDelete: "cascade" }),
-    agent: text("agent", { enum: ["grow_planner", "plant_health"] }).notNull(),
+    agent: text("agent", { enum: tenantAIConfigAgentEnum }).notNull(),
     provider: text("provider").notNull().default("google"),
     model: text("model").notNull().default("gemini-3.5-flash"),
     apiKeyEncrypted: text("api_key_encrypted"),
     isActive: boolean("is_active").notNull().default(true),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },
-  (table) => [tenantIsolationPolicy("tenant_ai_configs", table.tenantId)],
+  (table) => [
+    unique("tenant_ai_configs_tenant_agent_unique").on(table.tenantId, table.agent),
+    tenantIsolationPolicy("tenant_ai_configs", table.tenantId),
+  ],
 ).enableRLS();

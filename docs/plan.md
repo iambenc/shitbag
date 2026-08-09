@@ -111,8 +111,8 @@ Sequenced so multi-tenancy and the AI async-job pattern (the two hardest things 
 - **Phase 4 — Billing.** ✅ Done — see implementation notes below.
 - **Phase 5 — Grow-planner agent + calendar integration (hardest phase).** ✅ Done — see implementation notes below.
 - **Phase 6 — Weather + shopping-list automation.** ✅ Done — see implementation notes below.
-- **Phase 7 — Plant-health agent + photo sharing.** Reuses the Phase 5 async-job/interstitial/provider pattern; diagnosis history against Planting/GrowingArea; photo-sharing feed within a tenant.
-- **Phase 8 — White-label/tenant admin tooling.** Admin UI for branding, custom domains, tenant `EquipmentType`/`PartnerLink` management, per-tenant AI provider config, per-tenant Stripe price config — all exposing config tables that already exist from Phase 0 onward, not new data-model work.
+- **Phase 7 — Plant-health agent + photo sharing.** ✅ Done — see implementation notes below.
+- **Phase 8 — White-label/tenant admin tooling.** ✅ Done — see implementation notes below.
 
 ---
 
@@ -521,3 +521,91 @@ one `photo_reports` row (correct reporter, reason, and tenant) and exactly two `
 `plant_diagnoses` rows for the first user — matching the UI, not just plausible. `tsc --noEmit` and
 `eslint` both clean. Test users, uploaded files, and the ad-hoc `e2e-check.mjs` script were all
 removed after verification.
+
+---
+
+## Phase 8 — Implementation Notes
+
+The last phase on the original roadmap, and the smallest in new data-model terms — every table
+this phase exposes (`tenants`, `tenantPlans`, `tenantAIConfigs`, `equipmentTypes`/`partnerLinks`,
+`photoReports`) already existed. What this phase actually added was: the first role gate in the
+app, three correctness fixes the admin surface would have otherwise silently exposed, and real
+encryption for a column that had been misleadingly named since Phase 0.
+
+**`role` had existed since Phase 0 and flowed all the way to the session, but nothing had ever
+checked it.** `requireTenantAdmin()` (`src/lib/actions/shared.ts`) is the first place that does,
+and deliberately checks *two* things, not one: `session.user.role === "tenant_admin"` AND
+`session.user.tenantId === (await getCurrentTenant()).id`. Every other action in the app has only
+ever needed one or the other, because RLS fails closed on a row-scoped mismatch (a stale-session
+read/update against the wrong tenant just matches zero rows — safe, if silently so). Admin actions
+are the first place doing INSERT-style config mutations with no existing row's `tenant_id` to fail
+closed against, so a Host-header/session mismatch wouldn't have been caught by RLS at all. No
+self-serve promotion to `tenant_admin` exists, on purpose — the only way is a direct
+`UPDATE users SET role = 'tenant_admin' WHERE email = ...`, same category as the manual Postgres
+role setup from Phase 0. `platform_admin` (also in the enum since Phase 0) stays fully unused —
+this phase is tenant-scoped admin tooling, not a cross-tenant platform console.
+
+**Two latent correctness bugs, found by asking "what happens if the admin UI inserts a second row"
+rather than by anything failing at runtime**: `tenantPlans` and `tenantAIConfigs` had no unique
+constraint per tenant (or per tenant+agent), and `billing.ts`'s `startCheckoutAction` read the
+"first row" of an *unordered* select — non-deterministic the moment a second row could exist.
+Fixed with `unique("tenant_plans_tenant_unique")` and
+`unique("tenant_ai_configs_tenant_agent_unique")`, both migrated cleanly (a real owner-role
+duplicate-row check beforehand found nothing to conflict, as expected — Postgres would have
+refused the migration outright otherwise, so this was hygiene, not a safety net), with every write
+going through `.onConflictDoUpdate()` instead of a plain insert.
+
+**`tenantAIConfigs.apiKeyEncrypted` had been named as if encrypted since Phase 0 but was read and
+stored as plaintext** — harmless while nothing ever wrote to it, but this phase is exactly what
+starts writing tenant-supplied keys into it. New `src/lib/security/secretBox.ts`
+(`encryptSecret`/`decryptSecret`, AES-256-GCM via Node's built-in `crypto`, keyed by a
+`CONFIG_ENCRYPTION_KEY` env var generated once for `.env.local`). This isn't treated like the
+Stripe/Gemini dev-mode fallbacks (those are the *platform's own* single credential, never
+displayed or edited through a UI); a tenant admin's key lives in the same shared Postgres database
+as every tenant's data, so it gets encrypted at rest for real, not caveated. `getModelForTenant()`
+fails soft on a missing key or a decrypt error (falls through to the platform key, same as "no
+tenant key configured"), not hard — a misconfigured `CONFIG_ENCRYPTION_KEY` shouldn't take down
+every tenant's AI features. The admin UI never echoes a decrypted key back — only
+configured/not-configured, with a blank field meaning "leave unchanged" and an explicit "clear"
+control to remove one. Required a dev-server restart to pick up the new env var, same lesson as
+`INNGEST_DEV` in Phase 5.
+
+**Photo-report resolution forces the photo back to `private` rather than hard-deleting it** —
+`photoReports` gained a `status` enum (`pending`/`dismissed`/`actioned`, not just two states, so
+"no violation found" and "photo unshared" stay distinguishable in the admin's history) plus
+`resolvedAt`/`resolvedByUserId` (the latter `onDelete: "set null"`, an audit pointer rather than an
+ownership relationship, matching `taskRescheduleEvents`'s reasoning). A hard delete was considered
+and rejected: `photoJournalEntries` cascades to `plantDiagnoses`, so deleting a photo over one
+bad-faith report would have destroyed the owner's diagnosis history as collateral damage — a
+strictly bigger loss than the actual problem (an unwanted photo in the shared feed). "Unshare
+photo" reuses the same visibility update `setPhotoVisibilityAction` already does for an owner
+un-sharing their own photo, just without the ownership filter, and is batched by
+`photoJournalEntryId` — every pending report against that photo flips to `actioned` at once, not
+just the row clicked, since the thing in dispute (the photo's visibility) is now settled for every
+reporter simultaneously. "Dismiss" stays strictly per-report.
+
+`tenants.logoUrl` had zero consumers since Phase 0 — added a small `<img>` render in
+`src/app/layout.tsx`'s header (falling back to the 🌱 emoji when unset) so the branding form has
+something real to change, not just a DB write with no visible effect.
+
+Verified end-to-end with Playwright (20/20 checks): signed up a user, promoted them to
+`tenant_admin` via direct Postgres (confirming the deliberate no-self-serve-UI decision is real,
+not just documented), logged out and back in (the JWT only picks up a new role on a fresh sign-in)
+→ nav shows "Admin" → branding/billing/AI/equipment/reports sections all exercised through the
+real UI, each cross-checked directly against Postgres rather than trusted at face value — including
+confirming the stored `api_key_encrypted` value is never the plaintext string typed into the form,
+that an equipment-type delete warning shows a real (non-placeholder) usage count, that "Unshare"
+genuinely batches every pending report against a photo rather than just the one clicked, and that
+an owner's `plantDiagnoses` row survives a report resolution untouched. `tsc --noEmit` and `eslint`
+both clean. Two real bugs surfaced and fixed during this phase's own build (a `"use server"` file
+exporting a non-function constant, caught immediately by Next's own build-time check; a test race
+where a pre-existing "Diagnose" button on an older photo got clicked before a newly-uploaded
+photo's button existed, fixed in the test, not the app) — both documented here since the second
+one is exactly the kind of "looks like an app bug at first glance" mistake worth a record of, even
+though it wasn't one. This phase mutates the one shared dev tenant's own config rather than a
+disposable per-test tenant, so — a first for this project's verification approach — the test
+captured the tenant's branding/billing state up front and restored it in a `finally` block instead
+of just deleting rows; confirmed by direct Postgres query afterward that `tenants` and
+`tenant_plans` were back to their exact pre-test values. Test users, the extra equipment type, the
+now-empty `tenant_ai_configs` row, and the ad-hoc `e2e-check.mjs` script were all removed after
+verification.

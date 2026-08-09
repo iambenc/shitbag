@@ -3,9 +3,10 @@ import { eq, and } from "drizzle-orm";
 import type { LanguageModel } from "ai";
 import { createGoogleGenerativeAI } from "@ai-sdk/google";
 import { withTenant } from "@/lib/tenant/withTenant";
-import { tenantAIConfigs } from "@/db/schema";
+import { tenantAIConfigs, type TenantAIConfigAgent } from "@/db/schema";
+import { decryptSecret } from "@/lib/security/secretBox";
 
-export type AgentName = "grow_planner" | "plant_health";
+export type AgentName = TenantAIConfigAgent;
 
 /**
  * Resolves the model to use for a given tenant + agent:
@@ -40,7 +41,19 @@ export async function getModelForTenant(
       ),
   );
 
-  const apiKey = config?.apiKeyEncrypted || process.env.GOOGLE_GENERATIVE_AI_API_KEY;
+  let tenantKey: string | null = null;
+  if (config?.apiKeyEncrypted) {
+    try {
+      tenantKey = decryptSecret(config.apiKeyEncrypted);
+    } catch (err) {
+      // Fail soft: a missing/rotated CONFIG_ENCRYPTION_KEY or a corrupted
+      // stored value shouldn't take down every tenant's AI feature — fall
+      // through to the platform key exactly like "no tenant key configured".
+      console.error(`Failed to decrypt tenant_ai_configs key for tenant ${tenantId}/${agent}:`, err);
+    }
+  }
+
+  const apiKey = tenantKey || process.env.GOOGLE_GENERATIVE_AI_API_KEY;
   if (!apiKey) return null;
 
   const modelId = config?.model || "gemini-3.5-flash";

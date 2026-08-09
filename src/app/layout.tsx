@@ -48,7 +48,12 @@ export default async function RootLayout({ children }: LayoutProps<"/">) {
       >
         <header className="flex items-center justify-between border-b border-(--brand-primary)/15 px-6 py-4">
           <Link href="/" className="flex items-center gap-2 font-semibold text-(--brand-primary)">
-            <span aria-hidden>🌱</span>
+            {tenant.logoUrl ? (
+              // eslint-disable-next-line @next/next/no-img-element -- tenant-admin-supplied logo URL, not a local static asset
+              <img src={tenant.logoUrl} alt="" className="h-6 w-6 rounded object-contain" />
+            ) : (
+              <span aria-hidden>🌱</span>
+            )}
             {tenant.displayName}
           </Link>
           <nav className="flex items-center gap-4 text-sm">
@@ -66,6 +71,11 @@ export default async function RootLayout({ children }: LayoutProps<"/">) {
                     className="rounded-full bg-(--brand-secondary) px-3 py-1 font-medium text-[#1f2a1f] hover:opacity-90"
                   >
                     Upgrade
+                  </Link>
+                )}
+                {session.user.role === "tenant_admin" && (
+                  <Link href="/admin" className="hover:underline">
+                    Admin
                   </Link>
                 )}
                 <span className="text-[#1f2a1f]/60">{session.user.email}</span>
