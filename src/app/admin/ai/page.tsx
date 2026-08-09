@@ -15,10 +15,10 @@ export default async function AdminAIPage() {
   const byAgent = new Map(rows.map((r) => [r.agent, r]));
 
   return (
-    <div className="flex flex-col gap-8">
+    <div className="mx-auto flex max-w-3xl flex-col gap-8">
       <div>
         <h2 className="text-lg font-semibold">AI providers</h2>
-        <p className="mt-1 text-sm text-[#1f2a1f]/70">
+        <p className="mt-1 text-sm text-(--text-muted)">
           Configure a per-tenant API key for each AI agent. Leaving this unset falls back to the
           platform&rsquo;s own key.
         </p>

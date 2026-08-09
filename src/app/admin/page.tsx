@@ -27,7 +27,7 @@ export default async function AdminOverviewPage() {
   });
 
   return (
-    <div className="flex flex-col gap-4">
+    <div className="mx-auto flex max-w-3xl flex-col gap-4">
       {SECTIONS.map((s) => (
         <Link
           key={s.href}
@@ -36,7 +36,7 @@ export default async function AdminOverviewPage() {
         >
           <div>
             <p className="font-medium">{s.title}</p>
-            <p className="mt-1 text-sm text-[#1f2a1f]/70">{s.description}</p>
+            <p className="mt-1 text-sm text-(--text-muted)">{s.description}</p>
           </div>
           <span aria-hidden className="text-xl text-(--brand-primary)">
             →
@@ -49,7 +49,7 @@ export default async function AdminOverviewPage() {
       >
         <div>
           <p className="font-medium">Reports</p>
-          <p className="mt-1 text-sm text-[#1f2a1f]/70">Review photos reported by gardeners.</p>
+          <p className="mt-1 text-sm text-(--text-muted)">Review photos reported by gardeners.</p>
         </div>
         {pendingCount > 0 ? (
           <span className="rounded-full bg-red-100 px-2 py-0.5 text-xs font-medium text-red-800">

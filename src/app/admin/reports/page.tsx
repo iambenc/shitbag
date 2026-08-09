@@ -30,9 +30,9 @@ export default async function AdminReportsPage() {
   });
 
   return (
-    <div>
+    <div className="mx-auto max-w-4xl">
       <h2 className="text-lg font-semibold">Reports</h2>
-      <p className="mt-1 text-sm text-[#1f2a1f]/70">Photos gardeners have reported from the shared feed.</p>
+      <p className="mt-1 text-sm text-(--text-muted)">Photos gardeners have reported from the shared feed.</p>
       <div className="mt-6">
         <ReportsView
           reports={reports.map((r) => ({ ...r, createdAt: r.createdAt.toISOString() }))}

@@ -40,7 +40,7 @@ export function JobInterstitial({ statusUrl, message }: { statusUrl: string; mes
         🌱
       </span>
       <p className="font-medium">{message}</p>
-      <p className="max-w-md text-sm italic text-[#1f2a1f]/70">&ldquo;{GARDENING_QUOTES[quoteIndex]}&rdquo;</p>
+      <p className="max-w-md text-sm italic text-(--text-muted)">&ldquo;{GARDENING_QUOTES[quoteIndex]}&rdquo;</p>
     </div>
   );
 }

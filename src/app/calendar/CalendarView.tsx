@@ -129,7 +129,7 @@ export function CalendarView({ initialTasks }: { initialTasks: Task[] }) {
             →
           </button>
         </div>
-        <div className="grid grid-cols-7 gap-1 text-center text-xs text-[#1f2a1f]/50">
+        <div className="grid grid-cols-7 gap-1 text-center text-xs text-(--text-muted)">
           {WEEKDAY_LABELS.map((w) => (
             <div key={w}>{w}</div>
           ))}
@@ -157,7 +157,7 @@ export function CalendarView({ initialTasks }: { initialTasks: Task[] }) {
                 {day}
                 {count > 0 && (
                   <span
-                    className={`mt-0.5 h-1.5 w-1.5 rounded-full ${isSelected ? "bg-white" : "bg-(--brand-primary)"}`}
+                    className={`mt-0.5 h-2 w-2 rounded-full ${isSelected ? "bg-white" : "bg-(--brand-primary)"}`}
                   />
                 )}
               </button>
@@ -167,9 +167,9 @@ export function CalendarView({ initialTasks }: { initialTasks: Task[] }) {
       </div>
 
       <section>
-        <h2 className="text-sm font-medium text-[#1f2a1f]/70">Tasks for {selectedDate}</h2>
+        <h2 className="text-sm font-medium text-(--text-muted)">Tasks for {selectedDate}</h2>
         {selectedTasks.length === 0 ? (
-          <p className="mt-2 text-sm text-[#1f2a1f]/60">Nothing due this day.</p>
+          <p className="mt-2 text-sm text-(--text-muted)">Nothing due this day.</p>
         ) : (
           <ul className="mt-2 flex flex-col gap-2">
             {selectedTasks.map((task) => (
@@ -189,14 +189,14 @@ export function CalendarView({ initialTasks }: { initialTasks: Task[] }) {
                       type="checkbox"
                       checked={task.status === "completed"}
                       onChange={() => handleToggle(task)}
-                      className="mt-1"
+                      className="mt-1 accent-(--brand-primary)"
                     />
                   )}
                   <span>
                     <span
                       className={
                         task.status === "completed"
-                          ? "line-through text-[#1f2a1f]/50"
+                          ? "line-through text-(--text-muted)"
                           : task.status === "missed"
                             ? "text-red-800"
                             : ""
@@ -214,16 +214,16 @@ export function CalendarView({ initialTasks }: { initialTasks: Task[] }) {
                         Missed
                       </span>
                     )}
-                    {task.notes && <p className="text-xs text-[#1f2a1f]/60">{task.notes}</p>}
+                    {task.notes && <p className="text-xs text-(--text-muted)">{task.notes}</p>}
                     {task.hardDeadlineDate && (
-                      <p className="text-xs text-[#1f2a1f]/50">Last date: {task.hardDeadlineDate}</p>
+                      <p className="text-xs text-(--text-muted)">Last date: {task.hardDeadlineDate}</p>
                     )}
                   </span>
                 </label>
                 <button
                   type="button"
                   onClick={() => handleDelete(task.id)}
-                  className="text-xs text-[#1f2a1f]/50 hover:text-red-700"
+                  className="text-xs text-(--text-muted) hover:text-red-700"
                   aria-label={`Delete ${task.title}`}
                 >
                   Delete

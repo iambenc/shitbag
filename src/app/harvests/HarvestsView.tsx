@@ -103,7 +103,7 @@ export function HarvestsView({ harvests, crops }: { harvests: Harvest[]; crops: 
       </form>
 
       <section className="flex flex-col gap-2">
-        {list.length === 0 && <p className="text-sm text-[#1f2a1f]/60">No harvests logged yet.</p>}
+        {list.length === 0 && <p className="text-sm text-(--text-muted)">No harvests logged yet.</p>}
         {list.map((h) => (
           <div
             key={h.id}
@@ -114,12 +114,12 @@ export function HarvestsView({ harvests, crops }: { harvests: Harvest[]; crops: 
                 {h.cropEmoji} {h.cropName} — {h.quantity}
                 {h.unit} on {h.harvestedAt}
               </span>
-              {h.notes && <p className="text-xs text-[#1f2a1f]/60">{h.notes}</p>}
+              {h.notes && <p className="text-xs text-(--text-muted)">{h.notes}</p>}
             </div>
             <button
               type="button"
               onClick={() => handleDelete(h.id)}
-              className="text-xs text-[#1f2a1f]/50 hover:text-red-700"
+              className="text-xs text-(--text-muted) hover:text-red-700"
               aria-label={`Delete harvest of ${h.cropName}`}
             >
               Delete

@@ -33,7 +33,7 @@ export function AIConfigForm({ agent, config }: { agent: string; config: Config 
         {config.configured ? (
           <span className="text-green-700">(configured)</span>
         ) : (
-          <span className="text-[#1f2a1f]/50">(not configured — using platform default)</span>
+          <span className="text-(--text-muted)">(not configured — using platform default)</span>
         )}
         <input
           name="apiKey"
@@ -50,12 +50,18 @@ export function AIConfigForm({ agent, config }: { agent: string; config: Config 
             name="clearKey"
             checked={clearKey}
             onChange={(e) => setClearKey(e.target.checked)}
+            className="accent-(--brand-primary)"
           />
           Clear the stored key
         </label>
       )}
       <label className="flex items-center gap-2 text-sm">
-        <input type="checkbox" name="isActive" defaultChecked={config.isActive} />
+        <input
+          type="checkbox"
+          name="isActive"
+          defaultChecked={config.isActive}
+          className="accent-(--brand-primary)"
+        />
         Active
       </label>
       {state.error && <p className="text-sm text-red-700">{state.error}</p>}

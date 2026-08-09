@@ -3,7 +3,8 @@ import { auth } from "@/lib/auth";
 import { getCurrentTenant } from "@/lib/tenant/resolve";
 import { withTenant } from "@/lib/tenant/withTenant";
 import { equipmentTypes, partnerLinks, userEquipment } from "@/db/schema";
-import { EquipmentPicker } from "./EquipmentPicker";
+import { EquipmentPicker } from "@/components/EquipmentPicker";
+import { saveEquipmentAction } from "@/lib/actions/onboarding/equipment";
 
 export default async function EquipmentStepPage() {
   const session = await auth();
@@ -23,7 +24,7 @@ export default async function EquipmentStepPage() {
   return (
     <div className="flex flex-col gap-2">
       <h1 className="text-2xl font-semibold text-(--brand-primary)">What equipment do you have?</h1>
-      <p className="text-sm text-[#1f2a1f]/70">Step 4 of 6</p>
+      <p className="text-sm text-(--text-muted)">Step 4 of 6</p>
       <div className="mt-4">
         <EquipmentPicker
           types={types.map((t) => ({
@@ -36,6 +37,7 @@ export default async function EquipmentStepPage() {
               : null,
           }))}
           initialRows={owned.map((o) => ({
+            id: o.id,
             equipmentTypeId: o.equipmentTypeId,
             quantity: o.quantity,
             sizeLabel: o.sizeLabel,
@@ -43,6 +45,7 @@ export default async function EquipmentStepPage() {
             lengthCm: o.lengthCm,
             depthCm: o.depthCm,
           }))}
+          action={saveEquipmentAction}
         />
       </div>
     </div>

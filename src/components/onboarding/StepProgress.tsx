@@ -8,14 +8,14 @@ export function StepProgress() {
   const currentIndex = ONBOARDING_STEPS.findIndex((s) => pathname.endsWith(s.path));
 
   return (
-    <ol className="mx-auto flex max-w-2xl items-center gap-2 px-6 pt-10 text-xs text-[#1f2a1f]/60">
+    <ol className="mx-auto flex max-w-2xl items-center gap-2 px-6 pt-10 text-xs text-(--text-muted)">
       {ONBOARDING_STEPS.map((step, i) => (
         <li key={step.path} className="flex flex-1 items-center gap-2">
           <span
             className={`flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-[11px] font-medium ${
               i <= currentIndex
                 ? "bg-(--brand-primary) text-white"
-                : "bg-black/10 text-[#1f2a1f]/50"
+                : "bg-black/10 text-(--text-muted)"
             }`}
           >
             {i + 1}

@@ -1,0 +1,1 @@
+ALTER TABLE "tenants" ALTER COLUMN "secondary_color" SET DEFAULT '#e8b23d';

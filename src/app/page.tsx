@@ -13,7 +13,7 @@ export default async function Home() {
       <h1 className="text-3xl font-semibold leading-tight text-(--brand-primary)">
         Grow more from the space you&apos;ve got.
       </h1>
-      <p className="text-lg text-[#1f2a1f]/70">
+      <p className="text-lg text-(--text-muted)">
         {tenant.displayName} helps home gardeners plan what to grow, when to sow it, and how to
         keep a steady harvest — from a windowsill to a full allotment.
       </p>

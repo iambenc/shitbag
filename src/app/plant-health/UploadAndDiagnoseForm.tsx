@@ -10,7 +10,13 @@ export function UploadAndDiagnoseForm() {
 
   return (
     <form action={formAction} className="flex flex-col gap-3 rounded-lg border border-black/10 bg-white p-4">
-      <input name="photo" type="file" accept="image/jpeg,image/png,image/webp,image/gif" required />
+      <input
+        name="photo"
+        type="file"
+        accept="image/jpeg,image/png,image/webp,image/gif"
+        required
+        className="text-sm file:mr-3 file:rounded-full file:border-0 file:bg-(--brand-primary) file:px-3 file:py-1.5 file:text-sm file:text-white hover:file:opacity-90"
+      />
       {state.error && <p className="text-sm text-red-700">{state.error}</p>}
       <button
         type="submit"

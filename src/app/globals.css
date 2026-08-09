@@ -4,3 +4,18 @@
   --font-sans: var(--font-geist-sans);
   --font-mono: var(--font-geist-mono);
 }
+
+:root {
+  /* Fixed platform-level tokens (not tenant-configurable, unlike
+     --brand-primary/--brand-secondary which come from the tenants table).
+     Verified WCAG AA: --text-muted 6.89:1 on cream / 7.32:1 on white;
+     --color-terracotta 5.41:1 with white text (never use as foreground text
+     on a light background — it only passes AA paired with white). */
+  --text-muted: #4b5a4d;
+  --color-terracotta: #a8512f;
+}
+
+:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--brand-primary) 70%, black);
+  outline-offset: 2px;
+}

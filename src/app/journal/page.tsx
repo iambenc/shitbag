@@ -36,9 +36,9 @@ export default async function JournalPage() {
   const paid = isPaidTier(await getSubscription(session.user.id, tenant.id));
 
   return (
-    <div className="mx-auto max-w-3xl px-6 py-16">
+    <div className="mx-auto max-w-4xl px-6 py-16">
       <h1 className="text-2xl font-semibold text-(--brand-primary)">Photo journal</h1>
-      <p className="mt-2 text-sm text-[#1f2a1f]/70">Keep a visual record — share what you like.</p>
+      <p className="mt-2 text-sm text-(--text-muted)">Keep a visual record — share what you like.</p>
       <div className="mt-8">
         <JournalView
           tenantName={tenant.displayName}

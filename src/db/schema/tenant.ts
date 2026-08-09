@@ -11,7 +11,7 @@ export const tenants = pgTable("tenants", {
   customDomain: text("custom_domain").unique(),
   logoUrl: text("logo_url"),
   primaryColor: text("primary_color").notNull().default("#2f6b3c"),
-  secondaryColor: text("secondary_color").notNull().default("#e8c34a"),
+  secondaryColor: text("secondary_color").notNull().default("#e8b23d"),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 });
 

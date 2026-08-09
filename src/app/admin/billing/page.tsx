@@ -13,9 +13,9 @@ export default async function AdminBillingPage() {
   });
 
   return (
-    <div>
+    <div className="mx-auto max-w-3xl">
       <h2 className="text-lg font-semibold">Billing</h2>
-      <p className="mt-1 text-sm text-[#1f2a1f]/70">
+      <p className="mt-1 text-sm text-(--text-muted)">
         The membership price gardeners on this tenant are charged.
       </p>
       <div className="mt-6">

@@ -20,9 +20,9 @@ export default async function AdminEquipmentPage() {
   const usageByType = new Map(usageCounts.map((u) => [u.equipmentTypeId, u.count]));
 
   return (
-    <div>
+    <div className="mx-auto max-w-4xl">
       <h2 className="text-lg font-semibold">Equipment &amp; partner links</h2>
-      <p className="mt-1 text-sm text-[#1f2a1f]/70">
+      <p className="mt-1 text-sm text-(--text-muted)">
         Equipment types gardeners can record in their inventory, and where to buy what they don&rsquo;t
         have.
       </p>

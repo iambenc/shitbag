@@ -5,7 +5,9 @@ import { withTenant } from "@/lib/tenant/withTenant";
 import { userFavoriteCrops } from "@/db/schema";
 import { requireSessionAndTenant } from "@/lib/actions/shared";
 
-export async function recordCropSwipeAction(cropId: string, liked: boolean): Promise<void> {
+/** Upserts a user's like/dislike for a crop — used by both the onboarding
+ * swipe deck and the post-registration /favourites editor. */
+export async function setCropPreferenceAction(cropId: string, liked: boolean): Promise<void> {
   const { userId, tenantId } = await requireSessionAndTenant();
   await withTenant(tenantId, async (tx) => {
     await tx

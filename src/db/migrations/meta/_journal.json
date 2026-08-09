@@ -64,6 +64,13 @@
       "when": 1786227715083,
       "tag": "0008_next_iron_lad",
       "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1786279176740,
+      "tag": "0009_known_sugar_man",
+      "breakpoints": true
     }
   ]
 }

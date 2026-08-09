@@ -20,9 +20,9 @@ export default async function CalendarPage() {
   );
 
   return (
-    <div className="mx-auto max-w-2xl px-6 py-16">
+    <div className="mx-auto max-w-4xl px-6 py-16">
       <h1 className="text-2xl font-semibold text-(--brand-primary)">Calendar</h1>
-      <p className="mt-2 text-sm text-[#1f2a1f]/70">Keep track of what needs doing, and when.</p>
+      <p className="mt-2 text-sm text-(--text-muted)">Keep track of what needs doing, and when.</p>
       <div className="mt-8">
         <CalendarView
           initialTasks={userTasks.map((t) => ({

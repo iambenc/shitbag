@@ -70,7 +70,7 @@ export function ShoppingListView({ items, crops }: { items: Item[]; crops: CropO
   return (
     <div className="flex flex-col gap-8">
       <section className="flex flex-col gap-2">
-        {itemList.length === 0 && <p className="text-sm text-[#1f2a1f]/60">Your list is empty.</p>}
+        {itemList.length === 0 && <p className="text-sm text-(--text-muted)">Your list is empty.</p>}
         {[...pending, ...purchased].map((item) => (
           <div
             key={item.id}
@@ -81,8 +81,9 @@ export function ShoppingListView({ items, crops }: { items: Item[]; crops: CropO
                 type="checkbox"
                 checked={item.status === "purchased"}
                 onChange={() => handleToggle(item)}
+                className="accent-(--brand-primary)"
               />
-              <span className={item.status === "purchased" ? "line-through text-[#1f2a1f]/50" : ""}>
+              <span className={item.status === "purchased" ? "line-through text-(--text-muted)" : ""}>
                 {itemLabel(item)} · {item.quantityLabel}
               </span>
               {item.source === "ai" && (
@@ -94,7 +95,7 @@ export function ShoppingListView({ items, crops }: { items: Item[]; crops: CropO
             <button
               type="button"
               onClick={() => handleDelete(item.id)}
-              className="text-xs text-[#1f2a1f]/50 hover:text-red-700"
+              className="text-xs text-(--text-muted) hover:text-red-700"
               aria-label={`Delete ${itemLabel(item)}`}
             >
               Delete

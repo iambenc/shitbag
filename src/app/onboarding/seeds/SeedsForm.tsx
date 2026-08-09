@@ -49,7 +49,7 @@ export function SeedsForm({
       <input type="hidden" name="rows" value={serializedRows} readOnly />
 
       {rows.length === 0 && (
-        <p className="text-sm text-[#1f2a1f]/60">No seeds added yet — add any you already own, or skip.</p>
+        <p className="text-sm text-(--text-muted)">No seeds added yet — add any you already own, or skip.</p>
       )}
 
       {rows.map((row) => (
@@ -106,7 +106,7 @@ export function SeedsForm({
         >
           {pending ? "Saving…" : "Continue"}
         </button>
-        <Link href={nextOnboardingStep("seeds")} className="text-sm text-[#1f2a1f]/60 underline">
+        <Link href={nextOnboardingStep("seeds")} className="text-sm text-(--text-muted) underline">
           Skip for now
         </Link>
       </div>

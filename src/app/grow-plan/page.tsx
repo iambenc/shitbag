@@ -27,7 +27,7 @@ export default async function GrowPlanPage() {
         <h1 className="text-2xl font-semibold text-(--brand-primary)">AI Grow Plan</h1>
         <div className="mt-8 rounded-lg border border-black/10 bg-white p-6">
           <p className="font-medium">This is a membership feature.</p>
-          <p className="mt-2 text-sm text-[#1f2a1f]/70">
+          <p className="mt-2 text-sm text-(--text-muted)">
             Subscribers get an AI-generated plan tailored to their plot, seeds, and experience —
             with reasoning, a shopping list for anything missing, and tasks added straight to the
             calendar.
@@ -64,12 +64,12 @@ export default async function GrowPlanPage() {
     : [];
 
   return (
-    <div className="mx-auto max-w-2xl px-6 py-16">
+    <div className="mx-auto max-w-4xl px-6 py-16">
       <h1 className="text-2xl font-semibold text-(--brand-primary)">AI Grow Plan</h1>
 
       {!latestPlan && (
         <div className="mt-8 rounded-lg border border-black/10 bg-white p-6">
-          <p className="text-sm text-[#1f2a1f]/70">
+          <p className="text-sm text-(--text-muted)">
             Generate a plan based on your plot, seeds, favourite crops, and experience level.
           </p>
           <form action={generateGrowPlanAction} className="mt-4">
@@ -112,12 +112,12 @@ export default async function GrowPlanPage() {
       {latestPlan?.status === "complete" && (
         <div className="mt-8 flex flex-col gap-6">
           <div className="rounded-lg border border-black/10 bg-white p-6">
-            <p className="text-sm text-[#1f2a1f]/80">
+            <p className="text-sm text-(--text-muted)">
               {(latestPlan.rawOutput as { summary?: string } | null)?.summary}
             </p>
           </div>
 
-          <div className="flex flex-col gap-4">
+          <div className="grid gap-4 md:grid-cols-2">
             {recommendations.map(({ recommendation, crop }) => (
               <div key={recommendation.id} className="rounded-lg border border-black/10 bg-white p-6">
                 <p className="font-medium">
@@ -128,9 +128,9 @@ export default async function GrowPlanPage() {
                     </span>
                   )}
                 </p>
-                <p className="mt-2 text-sm text-[#1f2a1f]/70">{recommendation.reasoning}</p>
+                <p className="mt-2 text-sm text-(--text-muted)">{recommendation.reasoning}</p>
                 {recommendation.estimatedHarvestStart && recommendation.estimatedHarvestEnd && (
-                  <p className="mt-2 text-xs text-[#1f2a1f]/50">
+                  <p className="mt-2 text-xs text-(--text-muted)">
                     Estimated harvest: {recommendation.estimatedHarvestStart} – {recommendation.estimatedHarvestEnd}
                   </p>
                 )}
@@ -143,7 +143,7 @@ export default async function GrowPlanPage() {
               View tasks on calendar →
             </Link>
             <form action={generateGrowPlanAction}>
-              <button type="submit" className="text-sm text-[#1f2a1f]/60 underline">
+              <button type="submit" className="text-sm text-(--text-muted) underline">
                 Generate a new plan
               </button>
             </form>

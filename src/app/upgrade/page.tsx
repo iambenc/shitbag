@@ -39,7 +39,7 @@ export default async function UpgradePage() {
         {paid ? (
           <>
             <p className="font-medium">You&apos;re subscribed 🌱</p>
-            <p className="mt-1 text-sm text-[#1f2a1f]/70">
+            <p className="mt-1 text-sm text-(--text-muted)">
               {subscription?.currentPeriodEnd
                 ? `Renews ${new Date(subscription.currentPeriodEnd).toLocaleDateString("en-GB")}.`
                 : "Your membership is active."}
@@ -58,7 +58,7 @@ export default async function UpgradePage() {
             <p className="font-medium">
               {price ? `${price}/month` : "Membership"}
             </p>
-            <p className="mt-2 text-sm text-[#1f2a1f]/70">
+            <p className="mt-2 text-sm text-(--text-muted)">
               Unlock AI-generated grow plans, weather-aware task adjustments, and personalised
               recommendations for your plot. Everything you already have (calendar, shopping list,
               harvest log, photo journal) stays free either way.

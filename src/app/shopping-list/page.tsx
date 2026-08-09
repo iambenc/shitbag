@@ -31,7 +31,7 @@ export default async function ShoppingListPage() {
   return (
     <div className="mx-auto max-w-2xl px-6 py-16">
       <h1 className="text-2xl font-semibold text-(--brand-primary)">Shopping list</h1>
-      <p className="mt-2 text-sm text-[#1f2a1f]/70">Seeds and supplies to pick up.</p>
+      <p className="mt-2 text-sm text-(--text-muted)">Seeds and supplies to pick up.</p>
       <div className="mt-8">
         <ShoppingListView
           items={items.map((r) => ({

@@ -609,3 +609,260 @@ of just deleting rows; confirmed by direct Postgres query afterward that `tenant
 `tenant_plans` were back to their exact pre-test values. Test users, the extra equipment type, the
 now-empty `tenant_ai_configs` row, and the ad-hoc `e2e-check.mjs` script were all removed after
 verification.
+
+---
+
+## UI/UX & Accessibility Pass — "Botanical" palette
+
+Outside the original 8-phase roadmap: a real audit (not a stylistic opinion pass) requested after
+noticing the app "looked dark" — that turned out to be a genuine CSS bug (see the dark-mode
+`globals.css` fix, same session, prior to this note) — followed by a broader assessment. Computed
+WCAG 2.1 contrast ratios for every color pairing actually in use, grepped for repeated patterns,
+and screenshotted key pages before touching anything.
+
+**Real accessibility defects fixed**, not stylistic opinions:
+- The codebase's "muted text" pattern (`text-[#1f2a1f]` at 50/60/70/80% opacity, 92 instances
+  across 35+ files with no evident system) had two tiers that **failed WCAG AA's 4.5:1 minimum**:
+  50% opacity measured 3.02:1, 60% measured 4.02:1. Consolidated all four tiers into a single new
+  solid token, `--text-muted: #4b5a4d` (verified 6.89:1 on the cream background, 7.32:1 on white
+  cards) — defined in `globals.css`'s `:root` and consumed as `text-(--text-muted)`, mirroring
+  exactly how `--brand-primary`/`--brand-secondary` are already consumed everywhere via Tailwind
+  v4's arbitrary-value-referencing-a-CSS-var syntax. Done as a mechanical `sed` pass, not manual
+  per-file edits, since it was a pure token substitution with no visual-design judgment per
+  instance.
+- No `:focus-visible` styling existed anywhere — keyboard focus relied entirely on the browser
+  default. Added an on-brand ring in `globals.css`: `outline: 2px solid color-mix(in srgb,
+  var(--brand-primary) 70%, black)`. `color-mix()` is the only place this pass reaches for it —
+  considered and explicitly declined for a card-hover effect, since nothing in the audit flagged
+  card hover as broken.
+- Native `<input type="file">` (photo upload in `/journal` and `/plant-health`) rendered the bare
+  OS file-picker button, clashing against the branded buttons next to it — restyled via Tailwind's
+  `file:` variant to match. Every native checkbox/radio in the app (task-complete checkboxes,
+  photo-visibility radio, onboarding plot/experience radios, admin AI-config checkboxes) gained
+  `accent-(--brand-primary)` so they tint instead of rendering the browser's default blue.
+
+**Palette** — evolves, not replaces, the existing one (it already scored well: primary `#2f6b3c`
+forest green measured 6.01:1/6.38:1 on cream/white, more than adequate — a wholesale swap would
+have been bad practice for its own sake):
+
+| Token | Hex | Role | Verified contrast |
+|---|---|---|---|
+| Fern (primary) | `#2f6b3c` | unchanged — buttons, links, headings | 6.01:1 cream / 6.38:1 white |
+| Marigold (accent) | `#e8b23d` | deepened from `#e8c34a` for a richer "harvest gold" | 7.71:1 with dark text only (1.93:1 with white — never pair with white text) |
+| Terracotta (new) | `#a8512f` | clay-pot warmth; medium-severity plant-diagnosis badge | 5.41:1 with white text only (2.76:1 with dark — never use as foreground text) |
+| Soil (new) | `#4b5a4d` | `--text-muted`, see above | 6.89:1 cream / 7.32:1 white |
+| Linen / white | `#faf8f2` / `#ffffff` | unchanged — background / card surfaces | — |
+| Error | Tailwind `red-*` | unchanged — red is a universal convention, not reinvented | — |
+
+Fern and Marigold stay tenant-configurable (`tenants.primaryColor`/`secondaryColor`, unchanged
+mechanism, still editable per-tenant via `/admin/branding`). Terracotta and Soil are new **fixed**
+platform-level tokens in `globals.css` — deliberately not tenant-configurable, since they're
+structural (muted text, a severity color) rather than brand identity. Rolled out via: the
+`tenants.secondaryColor` column default (migration `0009_known_sugar_man.sql`, a plain `ALTER
+COLUMN ... SET DEFAULT`, no data migration needed since it only affects future inserts),
+`seed.ts`'s insert value for fresh seeds, and a direct Postgres update of the one live seeded
+"edurnity" tenant row (no throwaway admin account existed to drive it through `/admin/branding`
+at the time, and creating one just for a single field felt like more ceremony than the change
+warranted — flagged as a fine fallback in the plan itself).
+
+**Usability gaps fixed**:
+- Plant-health severity badges (`none`/`low`/`medium`/`high`) rendered identically regardless of
+  severity — real gap, not cosmetic (a gardener couldn't tell urgency at a glance). Now
+  differentiated: none/low get a calm `--brand-primary`-tinted pill, medium gets solid Terracotta
+  with white text, high keeps its existing `red-200`/`red-800` pairing untouched (already distinct
+  and appropriately alarming — not broken, not touched). Verified against a real Gemini diagnosis
+  (the demo account's test upload, correctly identified as "no plant visible" by the actual API,
+  not a mock) rendering the new none/low style correctly.
+- Calendar's "task due" indicator was a barely-visible 6px dot (`h-1.5 w-1.5`) — enlarged to 8px
+  (`h-2 w-2`), confirmed visibly clearer via screenshot.
+- Layout width: every page — genuinely form-shaped content and grid-shaped content (the calendar
+  grid, photo journal grid, admin equipment/report lists) alike — was squeezed into the same
+  narrow column, wasting most of the viewport on desktop for the latter. Introduced a two-tier
+  system: forms stay narrow (`max-w-2xl`/`max-w-3xl`, unchanged), content pages widen to
+  `max-w-4xl` (`/calendar`, `/journal`, `/admin/equipment`, `/admin/reports`). Required
+  restructuring `src/app/admin/layout.tsx` first — it wrapped *every* admin page (including the
+  genuinely-form-shaped Branding/Billing/AI) in one shared width, so Equipment/Reports couldn't
+  widen independently; pulled the constraint out of the layout and down into each page, matching
+  how every other top-level page in the app already owns its own `mx-auto max-w-*` wrapper.
+  Journal's photo grid also gained an `lg:grid-cols-4` tier so the extra width is actually used.
+
+**Scoped out, documented as a follow-up, not done now**: reworking the 13 `hover:opacity-90`
+button hover states to a proper `color-mix()`-based darken (reducing opacity over a light page
+background makes a saturated button *lighter*, not a real pressed-state darkening — a real but
+separable improvement that would have doubled this pass's diff for a marginal visual win beyond
+what the audit actually flagged as broken).
+
+Verified: Playwright screenshots of `/login`, `/dashboard`, `/calendar`, `/journal`, `/plant-health`
+(light theme, matching the already-fixed dark-mode-OS-preference behavior), a keyboard-tab
+screenshot confirming the new on-brand focus ring renders in place of the browser default, and a
+`getComputedStyle` check confirming `--text-muted`, `--color-terracotta`, `--brand-primary`, and
+the newly-rolled-out `--brand-secondary` all resolve to their intended values on a live page.
+`tsc --noEmit` and `eslint` both clean. Test diagnosis/photo data generated against the demo
+account during verification was cleaned up afterward (DB rows and the orphaned upload file).
+
+---
+
+## Layout Pass
+
+Follow-up to the accessibility/palette pass, this time auditing at 375px (mobile) alongside the
+usual 1280px desktop — not checked in either prior UI pass this session.
+
+**Real bug found**: the site header (previously inline in `src/app/layout.tsx`) had zero
+responsive behavior — confirmed via screenshot, the logo and "Dashboard" link visually ran
+together at 375px with no wrapping, and the email address broke awkwardly mid-row. Fixed by
+extracting a new `src/components/SiteHeader.tsx` (`"use client"`, needs `useState` for the mobile
+toggle, which an async Server Component can't hold). `layout.tsx` hoisted its inline sign-out
+closure to a named `async function signOutAction() { "use server"; ... }` and now passes
+`tenant`/`session`/`isPaid`/`signOutAction` down as props — passing a Server Action reference into
+a Client Component is standard Next.js behavior, confirmed correct for this project's Next 16.3.0,
+though it's a new pattern here (nothing else in the codebase did this before).
+
+The mobile nav follows the WAI-ARIA *disclosure* pattern (not a modal): `aria-expanded` +
+`aria-controls` + a toggling `aria-label` on the hamburger button, Escape-to-close, and — since the
+open/closed panel is conditionally rendered rather than CSS-hidden — closed-state links are
+automatically out of the tab order for free. Deliberately **not** built: focus trapping or
+forced-focus-into-panel-on-open, both real requirements for a Dialog/Modal but not for a disclosure
+widget pushing inline content, confirmed via a design-validation pass before implementing so as not
+to over-engineer a simple nav reveal. Bundled in one related defensive fix: the header's email
+`<span>` gained `max-w-[180px] truncate` (with a `title` for the full value) since a long
+institutional email — this is a multi-tenant app — could still overflow the row even above the
+`md:` collapse breakpoint.
+
+**Real underuse of space found**: `/dashboard` and `/grow-plan` were both capped at `max-w-2xl` on
+a 1280px viewport, wasting over half the screen — missed in the prior pass because neither looked
+"grid-shaped" at a glance, unlike the calendar/photo-journal/admin-list pages that were already
+widened. Fixed:
+- `/dashboard` (→ `max-w-5xl`) now splits into a two-column hierarchy on `lg:`: a primary column
+  (This week's tasks + garden profile — the actually-actionable content) and a secondary rail (the
+  7 navigational resource-link cards, correctly de-emphasized as secondary, tightened from `p-6` to
+  `p-4`). Collapses to the original single column below `lg:` automatically via CSS Grid, so mobile
+  is unaffected and content order stays primary-then-secondary.
+- `/grow-plan` (→ `max-w-4xl`) and `/plant-health` (→ `max-w-4xl`) both changed their
+  recommendation/history lists from a forced single column to a `grid md:grid-cols-2` /
+  `grid lg:grid-cols-2` respectively — grow-plan's cards are shorter (crop name, badge, reasoning,
+  harvest estimate) so they split at a narrower breakpoint than plant-health's denser cards
+  (explanation + two lists + a date), which need more room per column before doubling up.
+
+Verified via Playwright screenshots at both 375px and 1280px across `/dashboard`, `/grow-plan`,
+`/plant-health`, and the header on `/login`: mobile shows a working hamburger menu opening a
+stacked link panel (screenshotted), desktop nav is visually unchanged from before this pass, the
+dashboard two-column split and the grow-plan/plant-health grids all render correctly at desktop
+width and correctly collapse to one column on mobile. Confirmed programmatically (not just
+visually): `aria-expanded` flips `false`→`true` on menu open, and Escape closes the panel
+(`#mobile-nav` element count drops to 0). `tsc --noEmit` and `eslint` both clean.
+
+---
+
+## Bug Fix — /garden had no way to add or edit equipment
+
+Reported: "`/garden` isn't doing anything, can't add growing spaces or edit their equipment."
+Root-caused, not guessed at: `userEquipment` (owned pots/trays/planters/beds) was only ever written
+by the onboarding wizard's equipment step — a one-time step, with zero other write sites anywhere
+in the app (confirmed via grep). `/garden`'s placement mechanism (`GrowingAreaManager`'s +/-
+steppers, `syncGrowingAreasAction`) was independently verified correct and unrelated to the bug —
+it just had nothing to place for any account with zero recorded equipment (true of the demo
+account, and of any real user who wants to record equipment bought after signup).
+
+**The obvious fix was wrong, and worth recording why.** `saveEquipmentAction`'s existing save logic
+deletes every one of a user's `userEquipment` rows and reinserts them fresh on every save — fine
+for onboarding (nothing references those rows yet), but `growingAreas.sourceUserEquipmentId`
+references `userEquipment.id` with `ON DELETE SET NULL`. Reusing that logic verbatim for a
+post-onboarding editor would've assigned new random ids to every row on every save — even rows the
+user didn't touch — silently severing every existing placement's link on each edit (not deleting
+the growing area, just orphaning it and making it vanish from `/garden`'s "placed" counts). Caught
+during planning, before writing any code, by reading the FK definition rather than assuming the
+existing action was safe to copy.
+
+**Fix**: new `src/lib/garden/equipmentRows.ts` — a real upsert-by-id (`applyEquipmentRows`), not a
+delete-all-reinsert-all. Every row (existing or new) always carries a client-generated
+`crypto.randomUUID()`; the sync is `DELETE ... WHERE user_id = X AND id NOT IN (submitted)` followed
+by a single batched `INSERT ... ON CONFLICT (id) DO UPDATE`, matching this codebase's established
+upsert idiom (`src/lib/actions/admin.ts`) rather than a hand-rolled per-row loop. Added
+`setWhere: eq(userEquipment.userId, userId)` on the conflict clause — a pattern not used elsewhere
+in this codebase yet, but necessary here: RLS only enforces tenant isolation, not per-user, so
+without it a same-tenant user could in principle submit another user's real `userEquipment.id` as a
+"new" row and overwrite it via the upsert.
+
+`EquipmentPicker` (the row-editing form UI) moved from `src/app/onboarding/equipment/` to
+`src/components/` — matching this codebase's convention that cross-route-tree components live
+there (`SiteHeader.tsx`, `JobInterstitial.tsx`) — and its submit action/button labels became props
+instead of hardcoded, so the identical component now serves both `/onboarding/equipment` (labelled
+"Continue", redirects to the next step) and the new `/garden` "Your equipment" section (labelled
+"Save equipment", stays on the page and shows a "Saved." confirmation via the same `ActionState`
+shape already used by every admin form).
+
+**Deliberately deferred**: reducing an equipment type's quantity below its currently-*placed* count
+via the new editor doesn't auto-shrink the existing `growingAreas` rows — the `+` stepper correctly
+disables, but a stale "N placed" count persists until manually clicked down via the already-correct
+`syncGrowingAreasAction` clamp. No data corruption, just a cosmetic over-count; out of scope for
+"let people add equipment at all," and the clamping logic already exists to wire up later if needed.
+
+Verified end-to-end against the live demo account (which had zero equipment, exactly reproducing
+the report): added equipment via the new editor, placed growing areas from it, then — the critical
+check — edited equipment again (bumping one type's quantity, leaving another untouched) and
+confirmed via direct Postgres query that **both** rows kept their original ids and both existing
+placements stayed correctly linked, not orphaned. Then removed a row entirely and confirmed its
+growing area survived with `source_user_equipment_id` set to `NULL` rather than being deleted.
+Separately confirmed the onboarding equipment step itself still saves and advances normally for a
+fresh signup (shared logic, regression risk). `tsc --noEmit` and `eslint` clean. The demo account's
+equipment/growing-area state and the fresh onboarding test user were both cleaned up afterward,
+restoring the demo account to the zero-equipment state it was in before this fix (screenshotted, not
+just asserted, to confirm the editor now genuinely renders and works).
+
+---
+
+## Feature — editable favourite crops after registration
+
+Requested directly: favourite fruit/veg picking only happened once, during the onboarding swipe
+deck (`/onboarding/crops`), with no way to revisit it afterward. Unlike the `/garden` equipment fix,
+this needed no data-model care — `userFavoriteCrops` (one row per user+crop, `liked: boolean`,
+unique on `(userId, cropId)`) isn't referenced by any other table, and the existing
+`recordCropSwipeAction` was already a correct, generic upsert (`onConflictDoUpdate` on the unique
+pair) with no onboarding-specific behavior baked in — safe to reuse as-is, just renamed and moved.
+
+Moved `src/lib/actions/onboarding/crops.ts` → `src/lib/actions/crops.ts` as
+`setCropPreferenceAction` (same signature, same logic — "record*Swipe*" no longer described its
+callers once a heart-tap on a grid could invoke it too, not just a swipe gesture). New
+`/favourites` page + `FavouriteCropsGrid.tsx`: unlike the swipe deck (queue of undecided crops,
+one at a time, first-impressions UX), editing calls for reviewing *all* crops at once — a grid of
+every seeded crop (26 today) with a heart toggle per card, liked ones visually distinguished
+(filled heart, tinted border). Un-favouriting sets `liked: false` rather than deleting the row,
+matching the schema's existing model (grow-planner reads `dislikedCropSlugs` from exactly this
+signal to actively avoid recommending them, not just "no opinion").
+
+Surfaced two ways from `/dashboard`: a new "Favourite crops" resource-link card, and the existing
+"Favourite crops picked: N" line in the garden-profile summary is now itself a link.
+
+Verified against the live demo account (zero preferences beforehand): toggled two crops on,
+confirmed both rows in Postgres; un-favourited one, confirmed the row persists with `liked: false`
+rather than being deleted while the untouched one stays correct; confirmed the dashboard's count
+updates to match. Separately confirmed the onboarding swipe deck still records preferences
+correctly under the new import path (regression risk from the move/rename). One real test race hit
+during verification, fixed in the test not the app: the grid's heart-toggle button label and the
+"N favourited" count both update optimistically on click, before the server round-trip resolves —
+asserting against Postgres immediately after a `waitForSelector` on that optimistic state was racy;
+fixed by waiting for the button's own pending-disabled state to clear instead. `tsc --noEmit` and
+`eslint` clean. Demo account preferences and the fresh onboarding test user were cleaned up
+afterward.
+
+---
+
+## UI tweak — dashboard "This week" grouped by date, AI badge removed
+
+Requested directly. `src/app/dashboard/ThisWeekTasks.tsx` grouped its flat, date-sorted task list
+under a heading per due date (`Today`/`Tomorrow`/`Weekday, D Mon` — computed client-side, since the
+server already scopes the list to the next 7 days and passes each task's plain `dueDate` string) and
+dropped the per-task `uppercase` source pill for `"ai"`-sourced tasks; the `"weather"` pill (a
+distinct, useful signal — this is the task that appears/disappears based on the actual forecast) was
+kept. The now-redundant trailing date text on each row was removed too, since the group heading
+already conveys it.
+
+While verifying, found the demo account had accumulated 5 grow plans and 25 duplicate tasks from
+repeated `pnpm`-adjacent testing across earlier sessions (each "Generate a new plan" call during
+verification left its tasks behind — `tasks` has no FK back to the `grow_plans` row that created
+them, so old plans' tasks never got cleaned up even though the grow-plan UI itself only ever shows
+the latest plan). Not something the user asked for, but directly relevant to whether "This week"
+actually looks good, and a byproduct of my own testing on a persistent demo account rather than real
+user data — cleaned it up (deleted all grow_plans/plan_recommendations/tasks for the demo user,
+regenerated one fresh grow plan through the real UI) rather than leaving it for a future session to
+trip over.

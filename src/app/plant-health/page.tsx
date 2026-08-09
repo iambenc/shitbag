@@ -17,6 +17,16 @@ const severityLabels: Record<string, string> = {
   high: "High severity",
 };
 
+// Differentiated by severity so a gardener can tell urgency at a glance,
+// not just read it — terracotta only ever pairs with white text (fails
+// WCAG AA with dark text), the reverse of the brand-primary tint below.
+const severityBadgeClasses: Record<string, string> = {
+  none: "bg-(--brand-primary)/15 text-[#1f2a1f]",
+  low: "bg-(--brand-primary)/15 text-[#1f2a1f]",
+  medium: "bg-(--color-terracotta) text-white",
+  high: "bg-red-200 text-red-800",
+};
+
 type RawOutput = {
   likelyCauses?: string[];
   careInstructions?: string[];
@@ -40,7 +50,7 @@ export default async function PlantHealthPage() {
         <h1 className="text-2xl font-semibold text-(--brand-primary)">Plant Health</h1>
         <div className="mt-8 rounded-lg border border-black/10 bg-white p-6">
           <p className="font-medium">This is a membership feature.</p>
-          <p className="mt-2 text-sm text-[#1f2a1f]/70">
+          <p className="mt-2 text-sm text-(--text-muted)">
             Subscribers can upload a photo of a struggling plant and get an AI diagnosis — likely
             causes, severity, and care instructions.
           </p>
@@ -66,9 +76,9 @@ export default async function PlantHealthPage() {
   const pending = diagnoses.find((d) => d.status === "pending");
 
   return (
-    <div className="mx-auto max-w-2xl px-6 py-16">
+    <div className="mx-auto max-w-4xl px-6 py-16">
       <h1 className="text-2xl font-semibold text-(--brand-primary)">Plant Health</h1>
-      <p className="mt-2 text-sm text-[#1f2a1f]/70">
+      <p className="mt-2 text-sm text-(--text-muted)">
         Upload a photo of a plant you&rsquo;re worried about for an AI diagnosis.
       </p>
 
@@ -88,6 +98,7 @@ export default async function PlantHealthPage() {
       {diagnoses.length > 0 && (
         <div className="mt-8 flex flex-col gap-4">
           <p className="font-medium">History</p>
+          <div className="grid gap-4 lg:grid-cols-2">
           {diagnoses
             .filter((d) => d.status !== "pending")
             .map((d) => {
@@ -106,16 +117,18 @@ export default async function PlantHealthPage() {
                   <p className="font-medium">
                     {d.issue}
                     {d.severity && (
-                      <span className="ml-2 rounded-full bg-(--brand-secondary)/40 px-2 py-0.5 text-xs">
+                      <span
+                        className={`ml-2 rounded-full px-2 py-0.5 text-xs ${severityBadgeClasses[d.severity] ?? "bg-(--brand-secondary)/40 text-[#1f2a1f]"}`}
+                      >
                         {severityLabels[d.severity] ?? d.severity}
                       </span>
                     )}
                   </p>
-                  {raw?.explanation && <p className="mt-2 text-sm text-[#1f2a1f]/70">{raw.explanation}</p>}
+                  {raw?.explanation && <p className="mt-2 text-sm text-(--text-muted)">{raw.explanation}</p>}
                   {raw?.likelyCauses && raw.likelyCauses.length > 0 && (
                     <div className="mt-3">
-                      <p className="text-xs font-medium text-[#1f2a1f]/60">Likely causes</p>
-                      <ul className="mt-1 list-inside list-disc text-sm text-[#1f2a1f]/70">
+                      <p className="text-xs font-medium text-(--text-muted)">Likely causes</p>
+                      <ul className="mt-1 list-inside list-disc text-sm text-(--text-muted)">
                         {raw.likelyCauses.map((c, i) => (
                           <li key={i}>{c}</li>
                         ))}
@@ -124,20 +137,21 @@ export default async function PlantHealthPage() {
                   )}
                   {raw?.careInstructions && raw.careInstructions.length > 0 && (
                     <div className="mt-3">
-                      <p className="text-xs font-medium text-[#1f2a1f]/60">Care instructions</p>
-                      <ul className="mt-1 list-inside list-disc text-sm text-[#1f2a1f]/70">
+                      <p className="text-xs font-medium text-(--text-muted)">Care instructions</p>
+                      <ul className="mt-1 list-inside list-disc text-sm text-(--text-muted)">
                         {raw.careInstructions.map((c, i) => (
                           <li key={i}>{c}</li>
                         ))}
                       </ul>
                     </div>
                   )}
-                  <p className="mt-3 text-xs text-[#1f2a1f]/50">
+                  <p className="mt-3 text-xs text-(--text-muted)">
                     {new Date(d.createdAt).toLocaleDateString("en-GB")}
                   </p>
                 </div>
               );
             })}
+          </div>
         </div>
       )}
     </div>

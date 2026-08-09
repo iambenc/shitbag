@@ -34,6 +34,7 @@ export function ExperienceForm({
                 value={level}
                 required
                 defaultChecked={initial.expertiseLevel === level}
+                className="accent-(--brand-primary)"
               />
               {expertiseLevelLabels[level]}
             </label>

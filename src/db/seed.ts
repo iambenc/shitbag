@@ -25,7 +25,7 @@ async function main() {
           slug: "edurnity",
           displayName: "Edurnity",
           primaryColor: "#2f6b3c",
-          secondaryColor: "#e8c34a",
+          secondaryColor: "#e8b23d",
         })
         .returning()
     )[0];

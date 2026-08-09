@@ -35,6 +35,7 @@ export function PlotForm({
                 value={size}
                 required
                 defaultChecked={initial.plotSize === size}
+                className="accent-(--brand-primary)"
               />
               {plotSizeLabels[size]}
             </label>
@@ -74,6 +75,7 @@ export function PlotForm({
           name="hasIndoorSeedlingSpace"
           type="checkbox"
           defaultChecked={initial.hasIndoorSeedlingSpace ?? false}
+          className="accent-(--brand-primary)"
         />
         I have indoor space (windowsill, greenhouse, etc.) for starting seedlings early
       </label>

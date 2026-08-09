@@ -7,9 +7,9 @@ export default async function AdminBrandingPage() {
   const tenant = await getCurrentTenant();
 
   return (
-    <div>
+    <div className="mx-auto max-w-3xl">
       <h2 className="text-lg font-semibold">Branding</h2>
-      <p className="mt-1 text-sm text-[#1f2a1f]/70">Changes apply to everyone on this tenant immediately.</p>
+      <p className="mt-1 text-sm text-(--text-muted)">Changes apply to everyone on this tenant immediately.</p>
       <div className="mt-6">
         <BrandingForm
           tenant={{

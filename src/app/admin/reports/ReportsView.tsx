@@ -33,7 +33,7 @@ export function ReportsView({ reports }: { reports: Report[] }) {
   const visible = reports.filter((r) => !handled.has(r.id));
 
   if (visible.length === 0) {
-    return <p className="text-sm text-[#1f2a1f]/60">No pending reports.</p>;
+    return <p className="text-sm text-(--text-muted)">No pending reports.</p>;
   }
 
   return (
@@ -56,7 +56,7 @@ export function ReportsView({ reports }: { reports: Report[] }) {
               <p>
                 <span className="font-medium">Reason:</span> {report.reason}
               </p>
-              <p className="text-[#1f2a1f]/50">{new Date(report.createdAt).toLocaleString("en-GB")}</p>
+              <p className="text-(--text-muted)">{new Date(report.createdAt).toLocaleString("en-GB")}</p>
               <div className="mt-2 flex gap-3">
                 <button type="button" onClick={() => handleDismiss(report.id)} className="text-(--brand-primary) underline">
                   Dismiss

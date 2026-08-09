@@ -75,7 +75,7 @@ export function EquipmentTypeRow({ type, links }: { type: EquipmentType; links: 
             >
               {updatePending ? "Saving…" : "Save"}
             </button>
-            <button type="button" onClick={() => setEditing(false)} className="text-sm text-[#1f2a1f]/60 underline">
+            <button type="button" onClick={() => setEditing(false)} className="text-sm text-(--text-muted) underline">
               Cancel
             </button>
           </div>
@@ -84,9 +84,9 @@ export function EquipmentTypeRow({ type, links }: { type: EquipmentType; links: 
         <div className="flex items-center justify-between">
           <div>
             <p className="font-medium">
-              {type.name} <span className="text-xs text-[#1f2a1f]/50">({type.slug})</span>
+              {type.name} <span className="text-xs text-(--text-muted)">({type.slug})</span>
             </p>
-            <p className="text-xs text-[#1f2a1f]/50">
+            <p className="text-xs text-(--text-muted)">
               {type.category} · sort {type.sortOrder} · {type.usageCount} in gardener inventories
             </p>
           </div>
@@ -94,7 +94,7 @@ export function EquipmentTypeRow({ type, links }: { type: EquipmentType; links: 
             <button type="button" onClick={() => setEditing(true)} className="text-(--brand-primary) underline">
               Edit
             </button>
-            <button type="button" onClick={handleDelete} className="text-[#1f2a1f]/50 hover:text-red-700">
+            <button type="button" onClick={handleDelete} className="text-(--text-muted) hover:text-red-700">
               Delete
             </button>
           </div>
@@ -102,7 +102,7 @@ export function EquipmentTypeRow({ type, links }: { type: EquipmentType; links: 
       )}
 
       <div className="mt-4 border-t border-black/10 pt-3">
-        <p className="text-xs font-medium text-[#1f2a1f]/60">Partner links</p>
+        <p className="text-xs font-medium text-(--text-muted)">Partner links</p>
         <ul className="mt-2 flex flex-col gap-1">
           {links.map((link) => (
             <li key={link.id} className="flex items-center justify-between text-sm">
@@ -112,13 +112,13 @@ export function EquipmentTypeRow({ type, links }: { type: EquipmentType; links: 
               <button
                 type="button"
                 onClick={() => deletePartnerLinkAction(link.id)}
-                className="text-xs text-[#1f2a1f]/50 hover:text-red-700"
+                className="text-xs text-(--text-muted) hover:text-red-700"
               >
                 Remove
               </button>
             </li>
           ))}
-          {links.length === 0 && <li className="text-sm text-[#1f2a1f]/50">No partner links yet.</li>}
+          {links.length === 0 && <li className="text-sm text-(--text-muted)">No partner links yet.</li>}
         </ul>
         <form action={linkAction} className="mt-2 flex flex-wrap gap-2">
           <input type="hidden" name="equipmentTypeId" value={type.id} />

@@ -20,7 +20,7 @@ export default async function SeedsStepPage() {
   return (
     <div className="flex flex-col gap-2">
       <h1 className="text-2xl font-semibold text-(--brand-primary)">Any seeds already in the shed?</h1>
-      <p className="text-sm text-[#1f2a1f]/70">
+      <p className="text-sm text-(--text-muted)">
         Step 5 of 6 — optional. We&apos;ll prioritise seeds you already own when planning.
       </p>
       <div className="mt-4">

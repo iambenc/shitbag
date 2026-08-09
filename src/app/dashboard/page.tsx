@@ -25,6 +25,11 @@ const RESOURCE_LINKS = [
     description: "A plan tailored to your plot, seeds, and experience — membership feature.",
   },
   {
+    href: "/favourites",
+    title: "Favourite crops",
+    description: "Update what fruit and veg you're most excited to grow.",
+  },
+  {
     href: "/garden",
     title: "Manage your garden layout",
     description: "Tell us which pots, trays, planters, and beds are set up and ready to grow in.",
@@ -93,11 +98,11 @@ export default async function DashboardPage() {
   const paid = isPaidTier(await getSubscription(session.user.id, tenant.id));
 
   return (
-    <div className="mx-auto max-w-2xl px-6 py-16">
+    <div className="mx-auto max-w-5xl px-6 py-16">
       <h1 className="text-2xl font-semibold text-(--brand-primary)">
         Welcome, {session.user.email}
       </h1>
-      <p className="mt-2 text-sm text-[#1f2a1f]/70">Tenant: {tenant.displayName}</p>
+      <p className="mt-2 text-sm text-(--text-muted)">Tenant: {tenant.displayName}</p>
 
       {!paid && (
         <div className="mt-6">
@@ -105,45 +110,53 @@ export default async function DashboardPage() {
         </div>
       )}
 
-      <div className="mt-2 rounded-lg border border-black/10 bg-white p-6">
-        <p className="font-medium">This week</p>
-        <div className="mt-3">
-          <ThisWeekTasks
-            tasks={weekTasks.map((t) => ({
-              id: t.id,
-              title: t.title,
-              dueDate: t.dueDate,
-              status: t.status,
-              source: t.source,
-            }))}
-          />
+      <div className="mt-6 grid gap-6 lg:grid-cols-3">
+        <div className="flex flex-col gap-4 lg:col-span-2">
+          <div className="rounded-lg border border-black/10 bg-white p-6">
+            <p className="font-medium">This week</p>
+            <div className="mt-3">
+              <ThisWeekTasks
+                tasks={weekTasks.map((t) => ({
+                  id: t.id,
+                  title: t.title,
+                  dueDate: t.dueDate,
+                  status: t.status,
+                  source: t.source,
+                }))}
+              />
+            </div>
+          </div>
+
+          <div className="rounded-lg border border-black/10 bg-white p-6">
+            <p className="font-medium">Your garden profile is set up.</p>
+            <ul className="mt-3 flex flex-col gap-1 text-sm text-(--text-muted)">
+              <li>Plot: {profile.plotSize ? plotSizeLabels[profile.plotSize] : "—"}</li>
+              <li>Experience: {profile.expertiseLevel ? expertiseLevelLabels[profile.expertiseLevel] : "—"}</li>
+              <li>
+                Favourite crops picked: {favoriteCount}{" "}
+                <Link href="/favourites" className="text-(--brand-primary) underline">
+                  edit
+                </Link>
+              </li>
+            </ul>
+          </div>
+        </div>
+
+        <div className="flex flex-col gap-3">
+          {RESOURCE_LINKS.map((link) => (
+            <Link
+              key={link.href}
+              href={link.href}
+              className="flex items-center justify-between rounded-lg border border-black/10 bg-white p-4 hover:border-(--brand-primary)/40"
+            >
+              <div>
+                <p className="font-medium">{link.title}</p>
+                <p className="mt-1 text-sm text-(--text-muted)">{link.description}</p>
+              </div>
+            </Link>
+          ))}
         </div>
       </div>
-
-      <div className="mt-4 rounded-lg border border-black/10 bg-white p-6">
-        <p className="font-medium">Your garden profile is set up.</p>
-        <ul className="mt-3 flex flex-col gap-1 text-sm text-[#1f2a1f]/70">
-          <li>Plot: {profile.plotSize ? plotSizeLabels[profile.plotSize] : "—"}</li>
-          <li>Experience: {profile.expertiseLevel ? expertiseLevelLabels[profile.expertiseLevel] : "—"}</li>
-          <li>Favourite crops picked: {favoriteCount}</li>
-        </ul>
-      </div>
-
-      {RESOURCE_LINKS.map((link) => (
-        <Link
-          key={link.href}
-          href={link.href}
-          className="mt-4 flex items-center justify-between rounded-lg border border-black/10 bg-white p-6 hover:border-(--brand-primary)/40"
-        >
-          <div>
-            <p className="font-medium">{link.title}</p>
-            <p className="mt-1 text-sm text-[#1f2a1f]/70">{link.description}</p>
-          </div>
-          <span aria-hidden className="text-xl text-(--brand-primary)">
-            →
-          </span>
-        </Link>
-      ))}
     </div>
   );
 }

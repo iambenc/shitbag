@@ -1,14 +1,13 @@
 "use server";
 
-import { redirect } from "next/navigation";
+import { revalidatePath } from "next/cache";
 import { withTenant } from "@/lib/tenant/withTenant";
 import { requireSessionAndTenant } from "@/lib/actions/shared";
-import { nextOnboardingStep } from "@/lib/onboarding/steps";
 import { applyEquipmentRows, equipmentRowsSchema, type EquipmentState } from "@/lib/garden/equipmentRows";
 
 export type { EquipmentState };
 
-export async function saveEquipmentAction(
+export async function updateEquipmentAction(
   _prevState: EquipmentState,
   formData: FormData,
 ): Promise<EquipmentState> {
@@ -22,5 +21,6 @@ export async function saveEquipmentAction(
   const { userId, tenantId } = await requireSessionAndTenant();
   await withTenant(tenantId, (tx) => applyEquipmentRows(tx, { tenantId, userId, rows }));
 
-  redirect(nextOnboardingStep("equipment"));
+  revalidatePath("/garden");
+  return { success: true };
 }

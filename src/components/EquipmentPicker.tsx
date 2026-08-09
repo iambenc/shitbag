@@ -1,7 +1,7 @@
 "use client";
 
 import { useActionState, useState } from "react";
-import { saveEquipmentAction, type EquipmentState } from "@/lib/actions/onboarding/equipment";
+import type { EquipmentState } from "@/lib/garden/equipmentRows";
 import type { EquipmentCategory } from "@/db/schema";
 
 type EquipmentTypeInfo = {
@@ -13,6 +13,7 @@ type EquipmentTypeInfo = {
 };
 
 type OwnedRowInput = {
+  id: string;
   equipmentTypeId: string;
   quantity: number;
   sizeLabel: string | null;
@@ -22,7 +23,7 @@ type OwnedRowInput = {
 };
 
 type Row = {
-  key: string;
+  id: string;
   equipmentTypeId: string;
   quantity: number;
   sizeLabel: string;
@@ -35,7 +36,7 @@ const initialState: EquipmentState = {};
 
 function emptyRow(equipmentTypeId: string): Row {
   return {
-    key: `${equipmentTypeId}-${Math.random().toString(36).slice(2)}`,
+    id: crypto.randomUUID(),
     equipmentTypeId,
     quantity: 1,
     sizeLabel: "",
@@ -48,14 +49,20 @@ function emptyRow(equipmentTypeId: string): Row {
 export function EquipmentPicker({
   types,
   initialRows,
+  action,
+  submitLabel = "Continue",
+  pendingLabel = "Saving…",
 }: {
   types: EquipmentTypeInfo[];
   initialRows: OwnedRowInput[];
+  action: (prevState: EquipmentState, formData: FormData) => Promise<EquipmentState>;
+  submitLabel?: string;
+  pendingLabel?: string;
 }) {
-  const [state, formAction, pending] = useActionState(saveEquipmentAction, initialState);
+  const [state, formAction, pending] = useActionState(action, initialState);
   const [rows, setRows] = useState<Row[]>(() =>
     initialRows.map((r) => ({
-      key: `${r.equipmentTypeId}-${Math.random().toString(36).slice(2)}`,
+      id: r.id,
       equipmentTypeId: r.equipmentTypeId,
       quantity: r.quantity,
       sizeLabel: r.sizeLabel ?? "",
@@ -65,14 +72,14 @@ export function EquipmentPicker({
     })),
   );
 
-  function updateRow(key: string, patch: Partial<Row>) {
-    setRows((rs) => rs.map((r) => (r.key === key ? { ...r, ...patch } : r)));
+  function updateRow(id: string, patch: Partial<Row>) {
+    setRows((rs) => rs.map((r) => (r.id === id ? { ...r, ...patch } : r)));
   }
   function addRow(equipmentTypeId: string) {
     setRows((rs) => [...rs, emptyRow(equipmentTypeId)]);
   }
-  function removeRow(key: string) {
-    setRows((rs) => rs.filter((r) => r.key !== key));
+  function removeRow(id: string) {
+    setRows((rs) => rs.filter((r) => r.id !== id));
   }
   function countQuantity(typeId: string) {
     return rows.find((r) => r.equipmentTypeId === typeId)?.quantity ?? 0;
@@ -92,6 +99,7 @@ export function EquipmentPicker({
     rows
       .filter((r) => r.quantity > 0)
       .map((r) => ({
+        id: r.id,
         equipmentTypeId: r.equipmentTypeId,
         quantity: r.quantity,
         sizeLabel: r.sizeLabel || null,
@@ -130,7 +138,7 @@ export function EquipmentPicker({
             rows
               .filter((r) => r.equipmentTypeId === type.id)
               .map((row) => (
-                <div key={row.key} className="flex flex-wrap items-end gap-2">
+                <div key={row.id} className="flex flex-wrap items-end gap-2">
                   {type.category === "sized" && (
                     <label className="flex flex-col gap-1 text-xs">
                       Size
@@ -138,7 +146,7 @@ export function EquipmentPicker({
                         type="text"
                         placeholder="e.g. 20cm"
                         value={row.sizeLabel}
-                        onChange={(e) => updateRow(row.key, { sizeLabel: e.target.value })}
+                        onChange={(e) => updateRow(row.id, { sizeLabel: e.target.value })}
                         className="w-28 rounded-md border border-black/15 px-2 py-1.5 text-sm"
                       />
                     </label>
@@ -151,7 +159,7 @@ export function EquipmentPicker({
                           type="number"
                           min={1}
                           value={row.widthCm}
-                          onChange={(e) => updateRow(row.key, { widthCm: e.target.value })}
+                          onChange={(e) => updateRow(row.id, { widthCm: e.target.value })}
                           className="w-24 rounded-md border border-black/15 px-2 py-1.5 text-sm"
                         />
                       </label>
@@ -161,7 +169,7 @@ export function EquipmentPicker({
                           type="number"
                           min={1}
                           value={row.lengthCm}
-                          onChange={(e) => updateRow(row.key, { lengthCm: e.target.value })}
+                          onChange={(e) => updateRow(row.id, { lengthCm: e.target.value })}
                           className="w-24 rounded-md border border-black/15 px-2 py-1.5 text-sm"
                         />
                       </label>
@@ -172,7 +180,7 @@ export function EquipmentPicker({
                             type="number"
                             min={1}
                             value={row.depthCm}
-                            onChange={(e) => updateRow(row.key, { depthCm: e.target.value })}
+                            onChange={(e) => updateRow(row.id, { depthCm: e.target.value })}
                             className="w-24 rounded-md border border-black/15 px-2 py-1.5 text-sm"
                           />
                         </label>
@@ -187,14 +195,14 @@ export function EquipmentPicker({
                       max={99}
                       value={row.quantity}
                       onChange={(e) =>
-                        updateRow(row.key, { quantity: Math.max(1, Number(e.target.value)) })
+                        updateRow(row.id, { quantity: Math.max(1, Number(e.target.value)) })
                       }
                       className="w-20 rounded-md border border-black/15 px-2 py-1.5 text-sm"
                     />
                   </label>
                   <button
                     type="button"
-                    onClick={() => removeRow(row.key)}
+                    onClick={() => removeRow(row.id)}
                     className="rounded-md border border-black/15 px-2 py-1.5 text-xs hover:bg-black/5"
                   >
                     Remove
@@ -241,12 +249,13 @@ export function EquipmentPicker({
       )}
 
       {state.error && <p className="text-sm text-red-700">{state.error}</p>}
+      {state.success && <p className="text-sm text-green-700">Saved.</p>}
       <button
         type="submit"
         disabled={pending}
         className="self-start rounded-full bg-(--brand-primary) px-6 py-2 text-white disabled:opacity-60"
       >
-        {pending ? "Saving…" : "Continue"}
+        {pending ? pendingLabel : submitLabel}
       </button>
     </form>
   );

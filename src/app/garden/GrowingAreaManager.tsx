@@ -54,7 +54,7 @@ function VisualizationCard({ row, index }: { row: EquipmentRow; index: number })
         {emoji}
       </div>
       <span className="text-xs font-medium">{label}</span>
-      {size && <span className="text-[11px] text-[#1f2a1f]/60">{size}</span>}
+      {size && <span className="text-[11px] text-(--text-muted)">{size}</span>}
     </div>
   );
 }
@@ -87,9 +87,9 @@ export function GrowingAreaManager({ equipment }: { equipment: EquipmentRow[] })
   return (
     <div className="flex flex-col gap-10">
       <section>
-        <h2 className="text-sm font-medium text-[#1f2a1f]/70">Your plot right now</h2>
+        <h2 className="text-sm font-medium text-(--text-muted)">Your plot right now</h2>
         {visualCards.length === 0 ? (
-          <p className="mt-3 text-sm text-[#1f2a1f]/60">
+          <p className="mt-3 text-sm text-(--text-muted)">
             Nothing placed yet — use the steppers below to add growing space.
           </p>
         ) : (
@@ -102,9 +102,9 @@ export function GrowingAreaManager({ equipment }: { equipment: EquipmentRow[] })
       </section>
 
       <section className="flex flex-col gap-4">
-        <h2 className="text-sm font-medium text-[#1f2a1f]/70">Place your equipment</h2>
+        <h2 className="text-sm font-medium text-(--text-muted)">Place your equipment</h2>
         {rows.length === 0 && (
-          <p className="text-sm text-[#1f2a1f]/60">
+          <p className="text-sm text-(--text-muted)">
             You haven&apos;t recorded any pots, trays, planters, or beds yet.
           </p>
         )}
@@ -118,9 +118,9 @@ export function GrowingAreaManager({ equipment }: { equipment: EquipmentRow[] })
               <div>
                 <p className="text-sm font-medium">
                   {growingAreaTypeEmoji[row.type]} {row.name}
-                  {size && <span className="text-[#1f2a1f]/60"> · {size}</span>}
+                  {size && <span className="text-(--text-muted)"> · {size}</span>}
                 </p>
-                <p className="text-xs text-[#1f2a1f]/60">You own {row.quantityOwned}</p>
+                <p className="text-xs text-(--text-muted)">You own {row.quantityOwned}</p>
               </div>
               <div className="flex items-center gap-3">
                 <button

@@ -20,6 +20,11 @@ added (`STRIPE_SECRET_KEY`/`STRIPE_WEBHOOK_SECRET`, `GOOGLE_GENERATIVE_AI_API_KE
 test explicitly overrides it. `CONFIG_ENCRYPTION_KEY` (also in `.env.local`) encrypts tenant-
 supplied AI provider keys at rest.
 
+The UI runs a "Botanical" palette (Fern green primary, Marigold gold accent, Terracotta and Soil
+as new fixed neutral/severity tokens) chosen and WCAG-AA-verified in a dedicated accessibility
+pass — see `docs/plan.md`'s "UI/UX & Accessibility Pass" notes for the full contrast table and
+rationale.
+
 ## Stack
 
 Next.js (App Router, TypeScript) · Postgres + Drizzle ORM · Auth.js v5 (credentials) ·

@@ -37,7 +37,13 @@ function UploadForm({ onUploaded }: { onUploaded: (photo: NonNullable<UploadPhot
       action={formAction}
       className="flex flex-col gap-3 rounded-lg border border-black/10 bg-white p-4"
     >
-      <input name="photo" type="file" accept="image/jpeg,image/png,image/webp,image/gif" required />
+      <input
+        name="photo"
+        type="file"
+        accept="image/jpeg,image/png,image/webp,image/gif"
+        required
+        className="text-sm file:mr-3 file:rounded-full file:border-0 file:bg-(--brand-primary) file:px-3 file:py-1.5 file:text-sm file:text-white hover:file:opacity-90"
+      />
       <input
         name="caption"
         type="text"
@@ -46,10 +52,10 @@ function UploadForm({ onUploaded }: { onUploaded: (photo: NonNullable<UploadPhot
       />
       <div className="flex gap-4 text-sm">
         <label className="flex items-center gap-1">
-          <input type="radio" name="visibility" value="private" defaultChecked /> Just me
+          <input type="radio" name="visibility" value="private" defaultChecked className="accent-(--brand-primary)" /> Just me
         </label>
         <label className="flex items-center gap-1">
-          <input type="radio" name="visibility" value="shared_tenant" /> Shared with everyone here
+          <input type="radio" name="visibility" value="shared_tenant" className="accent-(--brand-primary)" /> Shared with everyone here
         </label>
       </div>
       {state.error && <p className="text-sm text-red-700">{state.error}</p>}
@@ -141,9 +147,9 @@ export function JournalView({
 
       {tab === "mine" ? (
         mine.length === 0 ? (
-          <p className="text-sm text-[#1f2a1f]/60">No photos yet.</p>
+          <p className="text-sm text-(--text-muted)">No photos yet.</p>
         ) : (
-          <div className="grid grid-cols-2 gap-4 sm:grid-cols-3">
+          <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-4">
             {mine.map((photo) => (
               <div key={photo.id} className="flex flex-col gap-1 overflow-hidden rounded-lg border border-black/10 bg-white">
                 {/* eslint-disable-next-line @next/next/no-img-element -- locally-stored user upload, not an optimizable static asset */}
@@ -158,7 +164,7 @@ export function JournalView({
                       Diagnose
                     </button>
                   )}
-                  <button type="button" onClick={() => handleDelete(photo.id)} className="text-left text-[#1f2a1f]/50 hover:text-red-700">
+                  <button type="button" onClick={() => handleDelete(photo.id)} className="text-left text-(--text-muted) hover:text-red-700">
                     Delete
                   </button>
                 </div>
@@ -167,21 +173,21 @@ export function JournalView({
           </div>
         )
       ) : shared.length === 0 ? (
-        <p className="text-sm text-[#1f2a1f]/60">No one has shared a photo yet.</p>
+        <p className="text-sm text-(--text-muted)">No one has shared a photo yet.</p>
       ) : (
-        <div className="grid grid-cols-2 gap-4 sm:grid-cols-3">
+        <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-4">
           {shared.map((photo) => (
             <div key={photo.id} className="flex flex-col gap-1 overflow-hidden rounded-lg border border-black/10 bg-white">
               {/* eslint-disable-next-line @next/next/no-img-element -- locally-stored user upload, not an optimizable static asset */}
               <img src={photo.url} alt={photo.caption ?? "Garden photo"} className="aspect-square w-full object-cover" />
               <div className="flex flex-col gap-1 p-2 text-xs">
                 {photo.caption && <p>{photo.caption}</p>}
-                <p className="text-[#1f2a1f]/50">{photo.isOwn ? "You" : photo.ownerEmail}</p>
+                <p className="text-(--text-muted)">{photo.isOwn ? "You" : photo.ownerEmail}</p>
                 {!photo.isOwn && (
                   reportedIds.has(photo.id) ? (
-                    <p className="text-[#1f2a1f]/50">Reported</p>
+                    <p className="text-(--text-muted)">Reported</p>
                   ) : (
-                    <button type="button" onClick={() => handleReport(photo.id)} className="text-left text-[#1f2a1f]/50 hover:text-red-700">
+                    <button type="button" onClick={() => handleReport(photo.id)} className="text-left text-(--text-muted) hover:text-red-700">
                       Report
                     </button>
                   )

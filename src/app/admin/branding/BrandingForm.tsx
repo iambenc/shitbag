@@ -65,7 +65,7 @@ export function BrandingForm({ tenant }: { tenant: Tenant }) {
           placeholder="garden.example.com"
           className="rounded-md border border-black/15 px-3 py-2"
         />
-        <span className="text-xs text-[#1f2a1f]/50">
+        <span className="text-xs text-(--text-muted)">
           Saved here, but not yet provisioned — no live DNS check runs.
         </span>
       </label>

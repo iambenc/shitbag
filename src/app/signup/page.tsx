@@ -13,7 +13,7 @@ export default function SignUpPage() {
     <div className="mx-auto flex max-w-sm flex-col gap-6 px-6 py-16">
       <div>
         <h1 className="text-2xl font-semibold text-(--brand-primary)">Start your plot</h1>
-        <p className="mt-1 text-sm text-[#1f2a1f]/70">
+        <p className="mt-1 text-sm text-(--text-muted)">
           Create an account — we&apos;ll walk you through setting up your garden next.
         </p>
       </div>
@@ -48,7 +48,7 @@ export default function SignUpPage() {
           {pending ? "Creating account…" : "Create account"}
         </button>
       </form>
-      <p className="text-sm text-[#1f2a1f]/70">
+      <p className="text-sm text-(--text-muted)">
         Already growing with us?{" "}
         <Link href="/login" className="text-(--brand-primary) underline">
           Log in

@@ -28,7 +28,7 @@ export default async function CropsStepPage() {
   return (
     <div className="flex flex-col gap-2">
       <h1 className="text-2xl font-semibold text-(--brand-primary)">What do you want to grow?</h1>
-      <p className="text-sm text-[#1f2a1f]/70">
+      <p className="text-sm text-(--text-muted)">
         Step 2 of 6 — swipe right (or tap ♥) for crops you&apos;d like, left (or ✕) to skip.
       </p>
       <div className="mt-6">
