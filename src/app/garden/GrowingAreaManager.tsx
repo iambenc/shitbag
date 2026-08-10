@@ -152,7 +152,7 @@ export function GrowingAreaManager({ equipment }: { equipment: EquipmentRow[] })
           return (
             <div
               key={row.userEquipmentId}
-              className="flex items-center justify-between gap-4 rounded-lg border border-black/10 bg-white p-4"
+              className="flex items-center justify-between gap-4 rounded-lg border border-black/10 bg-white p-4 shadow-card"
             >
               <div>
                 <p className="text-sm font-medium">

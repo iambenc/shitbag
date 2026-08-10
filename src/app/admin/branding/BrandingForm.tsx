@@ -17,7 +17,7 @@ export function BrandingForm({ tenant }: { tenant: Tenant }) {
   const [state, formAction, pending] = useActionState(updateBrandingAction, initialState);
 
   return (
-    <form action={formAction} className="flex flex-col gap-4 rounded-lg border border-black/10 bg-white p-6">
+    <form action={formAction} className="flex flex-col gap-4 rounded-lg border border-black/10 bg-white p-6 shadow-card">
       <label className="flex flex-col gap-1 text-sm">
         Display name
         <input
@@ -74,7 +74,7 @@ export function BrandingForm({ tenant }: { tenant: Tenant }) {
       <button
         type="submit"
         disabled={pending}
-        className="self-start rounded-full bg-(--brand-primary) px-6 py-2 text-sm text-white disabled:opacity-60"
+        className="self-start rounded-full bg-(--brand-primary) px-6 py-2 text-sm text-white hover:brightness-90 active:scale-95 transition disabled:opacity-60"
       >
         {pending ? "Saving…" : "Save branding"}
       </button>

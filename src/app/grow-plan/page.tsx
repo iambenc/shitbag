@@ -11,6 +11,7 @@ import { getGrowPlanGenerationsToday } from "@/lib/actions/growPlan";
 import { MAX_DAILY_GROW_PLAN_GENERATIONS, MAX_RECOMMENDATION_REGENERATIONS } from "@/lib/ai/limits";
 import { JobInterstitial } from "@/components/JobInterstitial";
 import { LeafAccent } from "@/components/LeafAccent";
+import { FadeIn } from "@/components/FadeIn";
 import { growingAreaTypeLabels, growingAreaTypeEmoji, formatSizeValue } from "@/lib/garden/labels";
 import { RecommendationActionButtons } from "./RecommendationActionButtons";
 import { RegeneratingCard } from "./RegeneratingCard";
@@ -153,7 +154,7 @@ export default async function GrowPlanPage() {
     return (
       <div className="mx-auto max-w-xl px-6 py-16">
         <h1 className="font-display text-3xl font-semibold text-(--brand-primary)">AI Grow Plan</h1>
-        <div className="mt-8 rounded-lg border border-black/10 bg-white p-6">
+        <div className="mt-8 rounded-lg border border-black/10 bg-white p-6 shadow-card">
           <p className="flex items-center gap-2 font-display text-lg font-semibold">
             <LeafAccent className="h-5 w-5 shrink-0 text-(--brand-primary)" />
             This is a membership feature.
@@ -165,7 +166,7 @@ export default async function GrowPlanPage() {
           </p>
           <Link
             href="/upgrade"
-            className="mt-4 inline-block rounded-full bg-(--brand-primary) px-6 py-2 text-sm text-white hover:opacity-90"
+            className="mt-4 inline-block rounded-full bg-(--brand-primary) px-6 py-2 text-sm text-white hover:brightness-90 active:scale-95 transition"
           >
             View membership
           </Link>
@@ -257,7 +258,7 @@ export default async function GrowPlanPage() {
       <h1 className="font-display text-3xl font-semibold text-(--brand-primary)">AI Grow Plan</h1>
 
       {!latestPlan && !hasGrowingArea && (
-        <div className="mt-8 rounded-lg border border-black/10 bg-white p-6">
+        <div className="mt-8 rounded-lg border border-black/10 bg-white p-6 shadow-card">
           <p className="font-display text-lg font-semibold">Add a growing area to get started.</p>
           <p className="mt-2 text-sm text-(--text-muted)">
             The grow planner fills space you already have — pots, trays, planters, raised beds, or
@@ -265,7 +266,7 @@ export default async function GrowPlanPage() {
           </p>
           <Link
             href="/garden"
-            className="mt-4 inline-block rounded-full bg-(--brand-primary) px-6 py-2 text-sm text-white hover:opacity-90"
+            className="mt-4 inline-block rounded-full bg-(--brand-primary) px-6 py-2 text-sm text-white hover:brightness-90 active:scale-95 transition"
           >
             Go to your garden
           </Link>
@@ -273,7 +274,7 @@ export default async function GrowPlanPage() {
       )}
 
       {hasGrowingArea && !latestPlan && (
-        <div className="mt-8 rounded-lg border border-black/10 bg-white p-6">
+        <div className="mt-8 rounded-lg border border-black/10 bg-white p-6 shadow-card">
           <p className="text-sm text-(--text-muted)">
             Generate a plan based on your plot, seeds, favourite crops, and experience level.
           </p>
@@ -282,7 +283,7 @@ export default async function GrowPlanPage() {
               <div className="mt-4">
                 <GeneratePlanButton
                   label="Generate my grow plan"
-                  className="rounded-full bg-(--brand-primary) px-6 py-2 text-sm text-white hover:opacity-90"
+                  className="rounded-full bg-(--brand-primary) px-6 py-2 text-sm text-white hover:brightness-90 active:scale-95 transition"
                 />
               </div>
               <p className="mt-2 text-xs text-(--text-muted)">
@@ -315,7 +316,7 @@ export default async function GrowPlanPage() {
               <div className="mt-4">
                 <GeneratePlanButton
                   label="Try again"
-                  className="rounded-full bg-(--brand-primary) px-6 py-2 text-sm text-white hover:opacity-90"
+                  className="rounded-full bg-(--brand-primary) px-6 py-2 text-sm text-white hover:brightness-90 active:scale-95 transition"
                 />
               </div>
               <p className="mt-2 text-xs text-red-700">
@@ -333,14 +334,14 @@ export default async function GrowPlanPage() {
 
       {latestPlan?.status === "complete" && (
         <div className="mt-8 flex flex-col gap-6">
-          <div className="rounded-lg border border-black/10 bg-white p-6">
+          <div className="rounded-lg border border-black/10 border-t-4 border-t-(--brand-secondary) bg-white p-6 shadow-card">
             <p className="text-sm text-(--text-muted)">
               {(latestPlan.rawOutput as { summary?: string } | null)?.summary}
             </p>
           </div>
 
           <div className="grid gap-4 md:grid-cols-2">
-            {groupedRecommendations.map((group) =>
+            {groupedRecommendations.map((group, i) =>
               group.status === "regenerating" ? (
                 <RegeneratingCard
                   key={group.key}
@@ -348,7 +349,8 @@ export default async function GrowPlanPage() {
                   statusUrl={`/api/plan-recommendations/${group.recommendationIds[0]}/status`}
                 />
               ) : (
-                <div key={group.key} className="rounded-lg border border-black/10 bg-white p-6">
+                <FadeIn key={group.key} index={i}>
+                <div className="rounded-lg border border-black/10 bg-white p-6 shadow-card">
                   <p className="font-display text-lg font-semibold">
                     {group.crop.emoji} {groupHeading(group)}
                     {group.requiresPurchase && (
@@ -392,6 +394,7 @@ export default async function GrowPlanPage() {
                     retriesRemaining={Math.max(0, MAX_RECOMMENDATION_REGENERATIONS - group.regenerationCount)}
                   />
                 </div>
+                </FadeIn>
               ),
             )}
           </div>

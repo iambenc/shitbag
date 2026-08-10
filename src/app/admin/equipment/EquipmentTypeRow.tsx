@@ -37,7 +37,7 @@ export function EquipmentTypeRow({ type, links }: { type: EquipmentType; links: 
   }
 
   return (
-    <div className="rounded-lg border border-black/10 bg-white p-4">
+    <div className="rounded-lg border border-black/10 bg-white p-4 shadow-card">
       {editing ? (
         <form action={updateAction} className="flex flex-col gap-3">
           <input type="hidden" name="id" value={type.id} />
@@ -71,7 +71,7 @@ export function EquipmentTypeRow({ type, links }: { type: EquipmentType; links: 
             <button
               type="submit"
               disabled={updatePending}
-              className="rounded-full bg-(--brand-primary) px-6 py-2 text-sm text-white disabled:opacity-60"
+              className="rounded-full bg-(--brand-primary) px-6 py-2 text-sm text-white hover:brightness-90 active:scale-95 transition disabled:opacity-60"
             >
               {updatePending ? "Saving…" : "Save"}
             </button>

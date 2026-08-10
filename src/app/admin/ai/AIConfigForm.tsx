@@ -12,7 +12,7 @@ export function AIConfigForm({ agent, config }: { agent: string; config: Config 
   const [clearKey, setClearKey] = useState(false);
 
   return (
-    <form action={formAction} className="flex flex-col gap-3 rounded-lg border border-black/10 bg-white p-4">
+    <form action={formAction} className="flex flex-col gap-3 rounded-lg border border-black/10 bg-white p-4 shadow-card">
       <input type="hidden" name="agent" value={agent} />
       <div className="flex gap-4">
         <label className="flex flex-1 flex-col gap-1 text-sm">
@@ -69,7 +69,7 @@ export function AIConfigForm({ agent, config }: { agent: string; config: Config 
       <button
         type="submit"
         disabled={pending}
-        className="self-start rounded-full bg-(--brand-primary) px-6 py-2 text-sm text-white disabled:opacity-60"
+        className="self-start rounded-full bg-(--brand-primary) px-6 py-2 text-sm text-white hover:brightness-90 active:scale-95 transition disabled:opacity-60"
       >
         {pending ? "Saving…" : "Save"}
       </button>

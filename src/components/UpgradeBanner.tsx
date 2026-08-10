@@ -34,7 +34,7 @@ export function UpgradeBanner() {
   if (dismissed) return null;
 
   return (
-    <div className="mb-4 flex items-center justify-between gap-4 rounded-lg bg-(--brand-secondary)/25 px-4 py-3 text-sm">
+    <div className="mb-4 flex items-center justify-between gap-4 rounded-lg border-l-4 border-l-(--brand-secondary) bg-(--brand-secondary)/40 px-4 py-3 text-sm">
       <p>
         Unlock AI-generated grow plans and weather-aware tasks with a{" "}
         <Link href="/upgrade" className="font-medium underline">

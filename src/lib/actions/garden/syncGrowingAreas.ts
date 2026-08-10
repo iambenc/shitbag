@@ -4,6 +4,7 @@ import { eq, and, inArray, count } from "drizzle-orm";
 import { withTenant } from "@/lib/tenant/withTenant";
 import { userEquipment, equipmentTypes, growingAreas } from "@/db/schema";
 import { SLUG_TO_GROWING_AREA_TYPE } from "@/lib/garden/equipmentMapping";
+import { buildGrowingAreaRows } from "@/lib/garden/growingAreaSync";
 import { requireSessionAndTenant } from "@/lib/actions/shared";
 
 export type SyncGrowingAreasResult = { ok: true; count: number } | { ok: false; error: string };
@@ -44,9 +45,8 @@ export async function syncGrowingAreasAction(
       .where(eq(growingAreas.sourceUserEquipmentId, userEquipmentId));
 
     if (existing.length < clamped) {
-      const toAdd = clamped - existing.length;
-      await tx.insert(growingAreas).values(
-        Array.from({ length: toAdd }, () => ({
+      const newRows = buildGrowingAreaRows(
+        {
           tenantId,
           userId,
           type: growingAreaType,
@@ -56,8 +56,10 @@ export async function syncGrowingAreasAction(
           lengthCm: row.equipment.lengthCm,
           depthCm: row.equipment.depthCm,
           sourceUserEquipmentId: userEquipmentId,
-        })),
+        },
+        clamped - existing.length,
       );
+      await tx.insert(growingAreas).values(newRows);
     } else if (existing.length > clamped) {
       const removable = existing
         .filter((r) => r.status === "available")

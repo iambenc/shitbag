@@ -44,7 +44,7 @@ export function CropSwipeDeck({ crops }: { crops: CropCard[] }) {
         <p className="text-lg font-medium">That&apos;s everything!</p>
         <Link
           href={nextOnboardingStep("crops")}
-          className="rounded-full bg-(--brand-primary) px-6 py-2 text-white hover:opacity-90"
+          className="rounded-full bg-(--brand-primary) px-6 py-2 text-white hover:brightness-90 active:scale-95 transition"
         >
           Continue
         </Link>
@@ -94,7 +94,7 @@ export function CropSwipeDeck({ crops }: { crops: CropCard[] }) {
           type="button"
           onClick={() => decide(true)}
           aria-label={`Favourite ${current.name}`}
-          className="flex h-14 w-14 items-center justify-center rounded-full bg-(--brand-primary) text-2xl text-white hover:opacity-90"
+          className="flex h-14 w-14 items-center justify-center rounded-full bg-(--brand-primary) text-2xl text-white hover:brightness-90 active:scale-95 transition"
         >
           ♥
         </button>

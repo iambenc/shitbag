@@ -31,7 +31,7 @@ export function RegeneratingCard({ cropName, statusUrl }: { cropName: string; st
   }, [statusUrl, router]);
 
   return (
-    <div className="flex flex-col items-center gap-2 rounded-lg border border-black/10 bg-white p-6 text-center">
+    <div className="flex flex-col items-center gap-2 rounded-lg border border-black/10 bg-white p-6 shadow-card text-center">
       <span className="motion-safe:animate-[grow-pulse_1.8s_ease-in-out_infinite] text-3xl" aria-hidden>
         🌱
       </span>

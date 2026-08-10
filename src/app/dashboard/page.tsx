@@ -13,7 +13,9 @@ import { UpgradeBanner } from "@/components/UpgradeBanner";
 import { CalendarView } from "@/app/calendar/CalendarView";
 import { ThisWeekTasks } from "./ThisWeekTasks";
 import { getWeeklyForecast } from "@/lib/weather";
-import { weatherCodeEmoji, weatherCodeLabel } from "@/lib/weather/labels";
+import { weatherCodeLabel, weatherCodeIcon } from "@/lib/weather/labels";
+import { EquipmentIcon } from "@/components/icons";
+import { FadeIn } from "@/components/FadeIn";
 
 function pad(n: number) {
   return n.toString().padStart(2, "0");
@@ -52,7 +54,14 @@ function shoppingItemLabel(item: {
   freeText: string | null;
 }) {
   if (item.cropName) return `${item.cropEmoji ?? ""} ${item.cropName}`.trim();
-  if (item.equipmentTypeName) return `🧰 ${item.equipmentTypeName}`;
+  if (item.equipmentTypeName) {
+    return (
+      <span className="inline-flex items-center gap-1">
+        <EquipmentIcon className="h-3.5 w-3.5 shrink-0 text-(--text-muted)" />
+        {item.equipmentTypeName}
+      </span>
+    );
+  }
   return item.freeText;
 }
 
@@ -128,7 +137,8 @@ export default async function DashboardPage() {
 
       <div className="mt-8 grid gap-6 lg:grid-cols-3">
         <div className="flex flex-col gap-4 lg:col-span-2">
-          <div className="rounded-lg border border-black/10 bg-white p-6">
+          <FadeIn index={0}>
+          <div className="rounded-lg border border-black/10 bg-white p-6 shadow-card">
             <p className="font-display text-lg font-semibold">Weather this week</p>
             <div className="mt-3">
               {!weeklyForecast ? (
@@ -137,27 +147,32 @@ export default async function DashboardPage() {
                 </p>
               ) : (
                 <div className="grid grid-cols-4 gap-3 sm:grid-cols-7">
-                  {weeklyForecast.map((day, i) => (
-                    <div key={day.date} className="flex flex-col items-center gap-1 text-center text-xs">
-                      <p className="text-(--text-muted)">
-                        {i === 0 ? "Today" : new Date(day.date).toLocaleDateString("en-GB", { weekday: "short" })}
-                      </p>
-                      <span className="text-2xl" role="img" aria-label={weatherCodeLabel(day.weatherCode)} title={weatherCodeLabel(day.weatherCode)}>
-                        {weatherCodeEmoji(day.weatherCode)}
-                      </span>
-                      <p className="font-medium">{Math.round(day.maxTempC)}°</p>
-                      <p className="text-(--text-muted)">{Math.round(day.minTempC)}°</p>
-                      {day.precipitationMm >= 1 && (
-                        <p className="text-(--text-muted)">💧{Math.round(day.precipitationMm)}mm</p>
-                      )}
-                    </div>
-                  ))}
+                  {weeklyForecast.map((day, i) => {
+                    const WeatherIcon = weatherCodeIcon(day.weatherCode);
+                    return (
+                      <div key={day.date} className="flex flex-col items-center gap-1 text-center text-xs">
+                        <p className="text-(--text-muted)">
+                          {i === 0 ? "Today" : new Date(day.date).toLocaleDateString("en-GB", { weekday: "short" })}
+                        </p>
+                        <span role="img" aria-label={weatherCodeLabel(day.weatherCode)} title={weatherCodeLabel(day.weatherCode)}>
+                          <WeatherIcon className="h-8 w-8 text-(--brand-primary)" />
+                        </span>
+                        <p className="font-medium">{Math.round(day.maxTempC)}°</p>
+                        <p className="text-(--text-muted)">{Math.round(day.minTempC)}°</p>
+                        {day.precipitationMm >= 1 && (
+                          <p className="text-(--text-muted)">💧{Math.round(day.precipitationMm)}mm</p>
+                        )}
+                      </div>
+                    );
+                  })}
                 </div>
               )}
             </div>
           </div>
+          </FadeIn>
 
-          <div className="rounded-lg border border-black/10 bg-white p-6">
+          <FadeIn index={1}>
+          <div className="rounded-lg border border-black/10 border-t-4 border-t-(--brand-secondary) bg-white p-6 shadow-card">
             <p className="font-display text-lg font-semibold">This week</p>
             <div className="mt-3">
               <ThisWeekTasks
@@ -173,8 +188,10 @@ export default async function DashboardPage() {
               />
             </div>
           </div>
+          </FadeIn>
 
-          <div className="rounded-lg border border-black/10 bg-white p-6">
+          <FadeIn index={2}>
+          <div className="rounded-lg border border-black/10 bg-white p-6 shadow-card">
             <div className="flex items-center justify-between">
               <p className="font-display text-lg font-semibold">Shopping list</p>
               <Link href="/shopping-list" className="text-sm text-(--brand-primary) underline">
@@ -196,8 +213,10 @@ export default async function DashboardPage() {
               )}
             </div>
           </div>
+          </FadeIn>
 
-          <div className="rounded-lg border border-black/10 bg-white p-6">
+          <FadeIn index={3}>
+          <div className="rounded-lg border border-black/10 bg-white p-6 shadow-card">
             <div className="flex items-center justify-between">
               <p className="font-display text-lg font-semibold">Plant health</p>
               <Link href="/plant-health" className="text-sm text-(--brand-primary) underline">
@@ -229,8 +248,10 @@ export default async function DashboardPage() {
               )}
             </div>
           </div>
+          </FadeIn>
 
-          <div className="rounded-lg border border-black/10 bg-white p-6">
+          <FadeIn index={4}>
+          <div className="rounded-lg border border-black/10 bg-white p-6 shadow-card">
             <div className="flex items-center justify-between">
               <p className="font-display text-lg font-semibold">Calendar</p>
               <Link href="/calendar" className="text-sm text-(--brand-primary) underline">
@@ -253,8 +274,10 @@ export default async function DashboardPage() {
               />
             </div>
           </div>
+          </FadeIn>
 
-          <div className="rounded-lg border border-black/10 bg-white p-6">
+          <FadeIn index={5}>
+          <div className="rounded-lg border border-black/10 bg-white p-6 shadow-card">
             <p className="font-display text-lg font-semibold">Your garden profile is set up.</p>
             <ul className="mt-3 flex flex-col gap-1 text-sm text-(--text-muted)">
               <li>Plot: {profile.plotSize ? plotSizeLabels[profile.plotSize] : "—"}</li>
@@ -267,20 +290,22 @@ export default async function DashboardPage() {
               </li>
             </ul>
           </div>
+          </FadeIn>
         </div>
 
         <div className="flex flex-col gap-3">
-          {RESOURCE_LINKS.map((link) => (
-            <Link
-              key={link.href}
-              href={link.href}
-              className="flex items-center justify-between rounded-lg border border-black/10 bg-white p-4 hover:border-(--brand-primary)/40"
-            >
-              <div>
-                <p className="font-display text-lg font-semibold">{link.title}</p>
-                <p className="mt-1 text-sm text-(--text-muted)">{link.description}</p>
-              </div>
-            </Link>
+          {RESOURCE_LINKS.map((link, i) => (
+            <FadeIn key={link.href} index={i + 6}>
+              <Link
+                href={link.href}
+                className="flex items-center justify-between rounded-lg border border-black/10 bg-white p-4 shadow-card hover:border-(--brand-primary)/40 hover:-translate-y-0.5 hover:shadow-lg transition-all duration-200"
+              >
+                <div>
+                  <p className="font-display text-lg font-semibold">{link.title}</p>
+                  <p className="mt-1 text-sm text-(--text-muted)">{link.description}</p>
+                </div>
+              </Link>
+            </FadeIn>
           ))}
         </div>
       </div>

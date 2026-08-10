@@ -8,6 +8,7 @@ import {
   type AddShoppingItemState,
 } from "@/lib/actions/shopping";
 import { LeafAccent } from "@/components/LeafAccent";
+import { EquipmentIcon } from "@/components/icons";
 
 type Item = {
   id: string;
@@ -27,9 +28,24 @@ type EquipmentOption = { id: string; name: string };
 
 const initialState: AddShoppingItemState = {};
 
+// Plain-text version — for aria-label/alt-text contexts, which can't render
+// the icon markup itemLabel() below uses for on-screen display.
+function itemLabelText(item: Item) {
+  if (item.cropId) return `${item.cropEmoji ?? ""} ${item.cropName}`.trim();
+  if (item.equipmentTypeId) return item.equipmentTypeName ?? "";
+  return item.freeText ?? "";
+}
+
 function itemLabel(item: Item) {
   if (item.cropId) return `${item.cropEmoji ?? ""} ${item.cropName}`.trim();
-  if (item.equipmentTypeId) return `🧰 ${item.equipmentTypeName}`;
+  if (item.equipmentTypeId) {
+    return (
+      <span className="inline-flex items-center gap-1">
+        <EquipmentIcon className="h-3.5 w-3.5 shrink-0 text-(--text-muted)" />
+        {item.equipmentTypeName}
+      </span>
+    );
+  }
   return item.freeText;
 }
 
@@ -96,7 +112,7 @@ export function ShoppingListView({
         {[...pending, ...purchased].map((item) => (
           <div
             key={item.id}
-            className="flex items-center justify-between gap-3 rounded-lg border border-black/10 bg-white p-3"
+            className="flex items-center justify-between gap-3 rounded-lg border border-black/10 bg-white p-3 shadow-card"
           >
             <label className="flex flex-1 items-center gap-2 text-sm">
               <input
@@ -118,7 +134,7 @@ export function ShoppingListView({
               type="button"
               onClick={() => handleDelete(item.id)}
               className="text-xs text-(--text-muted) hover:text-red-700"
-              aria-label={`Delete ${itemLabel(item)}`}
+              aria-label={`Delete ${itemLabelText(item)}`}
             >
               Delete
             </button>
@@ -126,7 +142,7 @@ export function ShoppingListView({
         ))}
       </section>
 
-      <form action={formAction} className="flex flex-col gap-3 rounded-lg border border-black/10 bg-white p-4">
+      <form action={formAction} className="flex flex-col gap-3 rounded-lg border border-black/10 bg-white p-4 shadow-card">
         <div className="flex gap-2 text-sm">
           <button
             type="button"
@@ -193,7 +209,7 @@ export function ShoppingListView({
           />
           <button
             type="submit"
-            className="rounded-full bg-(--brand-primary) px-6 py-2 text-sm text-white hover:opacity-90"
+            className="rounded-full bg-(--brand-primary) px-6 py-2 text-sm text-white hover:brightness-90 active:scale-95 transition"
           >
             Add
           </button>

@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import Link from "next/link";
+import { MenuIcon, CloseIcon } from "@/components/icons";
 
 type Session = { user: { email: string; role: string } } | null;
 type Tenant = { displayName: string; logoUrl: string | null };
@@ -25,7 +26,7 @@ function NavItems({
         </Link>
         <Link
           href="/signup"
-          className="rounded-full bg-(--brand-primary) px-4 py-1.5 text-white hover:opacity-90"
+          className="rounded-full bg-(--brand-primary) px-4 py-1.5 text-white hover:brightness-90 active:scale-95 transition"
           onClick={onNavigate}
         >
           Sign up
@@ -48,7 +49,7 @@ function NavItems({
       {!isPaid && (
         <Link
           href="/upgrade"
-          className="rounded-full bg-(--brand-secondary) px-3 py-1 font-medium text-(--text-heading) hover:opacity-90"
+          className="rounded-full bg-(--brand-secondary) px-3 py-1 font-medium text-(--text-heading) hover:brightness-90 active:scale-95 transition"
           onClick={onNavigate}
         >
           Upgrade
@@ -89,7 +90,7 @@ export function SiteHeader({
 
   return (
     <header
-      className="border-b border-(--brand-primary)/15"
+      className="sticky top-0 z-40 border-b border-(--brand-primary)/15 bg-(--background)/90 shadow-card backdrop-blur-sm"
       onKeyDown={(e) => {
         if (e.key === "Escape") setOpen(false);
       }}
@@ -111,13 +112,13 @@ export function SiteHeader({
 
         <button
           type="button"
-          className="rounded-md border border-(--brand-primary)/30 px-3 py-1.5 text-sm md:hidden"
+          className="rounded-md border border-(--brand-primary)/30 p-1.5 md:hidden"
           aria-expanded={open}
           aria-controls="mobile-nav"
           aria-label={open ? "Close menu" : "Open menu"}
           onClick={() => setOpen((o) => !o)}
         >
-          {open ? "✕" : "☰"}
+          {open ? <CloseIcon className="h-5 w-5" /> : <MenuIcon className="h-5 w-5" />}
         </button>
       </div>
 

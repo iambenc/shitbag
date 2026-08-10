@@ -3,6 +3,7 @@ import { eq } from "drizzle-orm";
 import { withTenant } from "@/lib/tenant/withTenant";
 import { photoReports } from "@/db/schema";
 import { requireTenantAdmin } from "@/lib/actions/shared";
+import { ChevronRightIcon } from "@/components/icons";
 
 const SECTIONS = [
   { href: "/admin/branding", title: "Branding", description: "Display name, logo, colors, and custom domain." },
@@ -32,20 +33,18 @@ export default async function AdminOverviewPage() {
         <Link
           key={s.href}
           href={s.href}
-          className="flex items-center justify-between rounded-lg border border-black/10 bg-white p-6 hover:border-(--brand-primary)/40"
+          className="flex items-center justify-between rounded-lg border border-black/10 bg-white p-6 shadow-card hover:border-(--brand-primary)/40 hover:-translate-y-0.5 hover:shadow-lg transition-all duration-200"
         >
           <div>
             <p className="font-display text-lg font-semibold">{s.title}</p>
             <p className="mt-1 text-sm text-(--text-muted)">{s.description}</p>
           </div>
-          <span aria-hidden className="text-xl text-(--brand-primary)">
-            →
-          </span>
+          <ChevronRightIcon className="h-5 w-5 shrink-0 text-(--brand-primary)" />
         </Link>
       ))}
       <Link
         href="/admin/reports"
-        className="flex items-center justify-between rounded-lg border border-black/10 bg-white p-6 hover:border-(--brand-primary)/40"
+        className="flex items-center justify-between rounded-lg border border-black/10 bg-white p-6 shadow-card hover:border-(--brand-primary)/40 hover:-translate-y-0.5 hover:shadow-lg transition-all duration-200"
       >
         <div>
           <p className="font-display text-lg font-semibold">Reports</p>
@@ -56,9 +55,7 @@ export default async function AdminOverviewPage() {
             {pendingCount} pending
           </span>
         ) : (
-          <span aria-hidden className="text-xl text-(--brand-primary)">
-            →
-          </span>
+          <ChevronRightIcon className="h-5 w-5 shrink-0 text-(--brand-primary)" />
         )}
       </Link>
     </div>

@@ -9,6 +9,7 @@ import {
 } from "@/lib/actions/photos";
 import { diagnoseExistingPhotoAction, reportPhotoAction } from "@/lib/actions/plantHealth";
 import { LeafAccent } from "@/components/LeafAccent";
+import { EyeIcon, TrashIcon } from "@/components/icons";
 
 type Photo = {
   id: string;
@@ -36,7 +37,7 @@ function UploadForm({ onUploaded }: { onUploaded: (photo: NonNullable<UploadPhot
     <form
       ref={formRef}
       action={formAction}
-      className="flex flex-col gap-3 rounded-lg border border-black/10 bg-white p-4"
+      className="flex flex-col gap-3 rounded-lg border border-black/10 bg-white p-4 shadow-card"
     >
       <input
         name="photo"
@@ -63,7 +64,7 @@ function UploadForm({ onUploaded }: { onUploaded: (photo: NonNullable<UploadPhot
       <button
         type="submit"
         disabled={pending}
-        className="self-start rounded-full bg-(--brand-primary) px-6 py-2 text-sm text-white disabled:opacity-60"
+        className="self-start rounded-full bg-(--brand-primary) px-6 py-2 text-sm text-white hover:brightness-90 active:scale-95 transition disabled:opacity-60"
       >
         {pending ? "Uploading…" : "Upload photo"}
       </button>
@@ -160,31 +161,53 @@ export function JournalView({
         ) : (
           <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-4">
             {mine.map((photo) => (
-              <div key={photo.id} className="flex flex-col gap-1 overflow-hidden rounded-lg border border-black/10 bg-white">
-                {/* eslint-disable-next-line @next/next/no-img-element -- locally-stored user upload, not an optimizable static asset */}
-                <img src={photo.url} alt={photo.caption ?? "Garden photo"} className="aspect-square w-full object-cover" />
-                <div className="flex flex-col gap-1 p-2 text-xs">
-                  {photo.caption && <p>{photo.caption}</p>}
-                  <button type="button" onClick={() => handleToggleVisibility(photo)} className="text-left text-(--brand-primary) underline">
-                    {photo.visibility === "private" ? "Private — share it" : "Shared — make private"}
-                  </button>
-                  {paid &&
-                    (diagnosesRemainingToday > 0 ? (
+              <div key={photo.id} className="group flex flex-col gap-1 overflow-hidden rounded-lg border border-black/10 bg-white shadow-card">
+                <div className="relative aspect-square w-full overflow-hidden">
+                  {/* eslint-disable-next-line @next/next/no-img-element -- locally-stored user upload, not an optimizable static asset */}
+                  <img src={photo.url} alt={photo.caption ?? "Garden photo"} className="h-full w-full object-cover" />
+
+                  <span
+                    className="absolute left-1.5 top-1.5 flex items-center gap-1 rounded-full bg-black/50 px-2 py-0.5 text-[10px] font-medium text-white"
+                    title={photo.visibility === "private" ? "Only visible to you" : `Shared with everyone in ${tenantName}`}
+                  >
+                    <EyeIcon className="h-3 w-3 shrink-0" />
+                    {photo.visibility === "private" ? "Private" : "Shared"}
+                  </span>
+
+                  <div className="absolute inset-0 flex items-center justify-center gap-2 bg-black/50 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100">
+                    <button
+                      type="button"
+                      onClick={() => handleToggleVisibility(photo)}
+                      className="rounded-full bg-white/90 p-2 hover:bg-white active:scale-95 transition"
+                      aria-label={photo.visibility === "private" ? "Share this photo" : "Make this photo private"}
+                      title={photo.visibility === "private" ? "Share" : "Make private"}
+                    >
+                      <EyeIcon className="h-4 w-4 text-(--text-heading)" />
+                    </button>
+                    {paid && (
                       <button
                         type="button"
                         onClick={() => handleDiagnose(photo.id)}
-                        disabled={diagnosingId !== null}
-                        className="text-left text-(--brand-primary) underline disabled:opacity-50"
+                        disabled={diagnosingId !== null || diagnosesRemainingToday === 0}
+                        className="rounded-full bg-white/90 p-2 hover:bg-white active:scale-95 transition disabled:opacity-50"
+                        aria-label="Diagnose this plant"
+                        title={diagnosesRemainingToday === 0 ? "No plant checks left today" : diagnosingId === photo.id ? "Diagnosing…" : "Diagnose"}
                       >
-                        {diagnosingId === photo.id ? "Diagnosing…" : "Diagnose"}
+                        <LeafAccent className="h-4 w-4 text-(--brand-primary)" />
                       </button>
-                    ) : (
-                      <p className="text-(--text-muted)">No plant checks left today</p>
-                    ))}
-                  <button type="button" onClick={() => handleDelete(photo.id)} className="text-left text-(--text-muted) hover:text-red-700">
-                    Delete
-                  </button>
+                    )}
+                    <button
+                      type="button"
+                      onClick={() => handleDelete(photo.id)}
+                      className="rounded-full bg-white/90 p-2 hover:bg-red-100 active:scale-95 transition"
+                      aria-label="Delete this photo"
+                      title="Delete"
+                    >
+                      <TrashIcon className="h-4 w-4 text-red-700" />
+                    </button>
+                  </div>
                 </div>
+                {photo.caption && <p className="p-2 text-xs">{photo.caption}</p>}
               </div>
             ))}
           </div>

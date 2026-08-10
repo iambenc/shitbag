@@ -113,7 +113,8 @@ export default async function GardenPage() {
     <div className="mx-auto max-w-2xl px-6 py-16">
       <h1 className="font-display text-3xl font-semibold text-(--brand-primary)">Your growing space</h1>
       <p className="mt-2 text-sm text-(--text-muted)">
-        Tell us which of your equipment is actually set up and ready to grow in right now.
+        Newly added equipment is automatically ready to grow in — adjust the counts below if you
+        want to hold some back.
       </p>
 
       <div className="mt-8">

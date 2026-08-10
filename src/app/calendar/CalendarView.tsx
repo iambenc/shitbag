@@ -1,6 +1,7 @@
 "use client";
 
 import { useActionState, useMemo, useState } from "react";
+import { motion } from "framer-motion";
 import {
   createTaskAction,
   toggleTaskCompleteAction,
@@ -9,6 +10,7 @@ import {
   type CreateTaskState,
 } from "@/lib/actions/tasks";
 import { LeafAccent } from "@/components/LeafAccent";
+import { ChevronLeftIcon, ChevronRightIcon, WarningIcon } from "@/components/icons";
 import type { TaskStatus, TaskSource } from "@/db/schema";
 
 type Task = {
@@ -126,10 +128,10 @@ export function CalendarView({ initialTasks }: { initialTasks: Task[] }) {
           <button
             type="button"
             onClick={() => changeMonth(-1)}
-            className="rounded-full border border-black/15 px-3 py-1 text-sm hover:bg-black/5"
+            className="rounded-full border border-black/15 p-1.5 hover:bg-black/5"
             aria-label="Previous month"
           >
-            ←
+            <ChevronLeftIcon className="h-4 w-4" />
           </button>
           <p className="font-medium">
             {MONTH_LABELS[viewMonth]} {viewYear}
@@ -137,10 +139,10 @@ export function CalendarView({ initialTasks }: { initialTasks: Task[] }) {
           <button
             type="button"
             onClick={() => changeMonth(1)}
-            className="rounded-full border border-black/15 px-3 py-1 text-sm hover:bg-black/5"
+            className="rounded-full border border-black/15 p-1.5 hover:bg-black/5"
             aria-label="Next month"
           >
-            →
+            <ChevronRightIcon className="h-4 w-4" />
           </button>
         </div>
         <div className="grid grid-cols-7 gap-1 text-center text-xs text-(--text-muted)">
@@ -160,18 +162,25 @@ export function CalendarView({ initialTasks }: { initialTasks: Task[] }) {
                 type="button"
                 key={date}
                 onClick={() => setSelectedDate(date)}
-                className={`flex aspect-square flex-col items-center justify-center rounded-md text-sm ${
+                className={`relative flex aspect-square flex-col items-center justify-center overflow-hidden rounded-md text-sm ${
                   isSelected
-                    ? "bg-(--brand-primary) text-white"
+                    ? "text-white"
                     : isToday
                       ? "border border-(--brand-primary) text-(--brand-primary)"
                       : "hover:bg-black/5"
                 }`}
               >
-                {day}
+                {isSelected && (
+                  <motion.div
+                    layoutId="calendar-day-highlight"
+                    className="absolute inset-0 bg-(--brand-primary)"
+                    transition={{ type: "spring", duration: 0.35, bounce: 0.15 }}
+                  />
+                )}
+                <span className="relative">{day}</span>
                 {count > 0 && (
                   <span
-                    className={`mt-0.5 h-2 w-2 rounded-full ${isSelected ? "bg-white" : "bg-(--brand-primary)"}`}
+                    className={`relative mt-0.5 h-2 w-2 rounded-full ${isSelected ? "bg-white" : "bg-(--brand-primary)"}`}
                   />
                 )}
               </button>
@@ -198,9 +207,7 @@ export function CalendarView({ initialTasks }: { initialTasks: Task[] }) {
               >
                 <label className="flex flex-1 items-start gap-2 text-sm">
                   {task.status === "missed" ? (
-                    <span className="mt-1 text-red-700" aria-hidden>
-                      ⚠
-                    </span>
+                    <WarningIcon className="mt-1 h-4 w-4 shrink-0 text-red-700" />
                   ) : (
                     <input
                       type="checkbox"
@@ -211,13 +218,13 @@ export function CalendarView({ initialTasks }: { initialTasks: Task[] }) {
                   )}
                   <span>
                     <span
-                      className={
+                      className={`transition-colors duration-300 ${
                         task.status === "completed"
                           ? "line-through text-(--text-muted)"
                           : task.status === "missed"
                             ? "text-red-800"
                             : ""
-                      }
+                      }`}
                     >
                       {task.title}
                     </span>
@@ -277,7 +284,7 @@ export function CalendarView({ initialTasks }: { initialTasks: Task[] }) {
           </ul>
         )}
 
-        <form action={createFormAction} className="mt-4 flex flex-col gap-2 rounded-lg border border-black/10 bg-white p-3">
+        <form action={createFormAction} className="mt-4 flex flex-col gap-2 rounded-lg border border-black/10 bg-white p-3 shadow-card">
           <input type="hidden" name="dueDate" value={selectedDate} readOnly />
           <div className="flex gap-2">
             <input
@@ -289,7 +296,7 @@ export function CalendarView({ initialTasks }: { initialTasks: Task[] }) {
             />
             <button
               type="submit"
-              className="rounded-full bg-(--brand-primary) px-4 py-1.5 text-sm text-white hover:opacity-90"
+              className="rounded-full bg-(--brand-primary) px-4 py-1.5 text-sm text-white hover:brightness-90 active:scale-95 transition"
             >
               Add
             </button>

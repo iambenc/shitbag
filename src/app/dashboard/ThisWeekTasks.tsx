@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { toggleTaskCompleteAction } from "@/lib/actions/tasks";
 import { LeafAccent } from "@/components/LeafAccent";
+import { WarningIcon } from "@/components/icons";
 import type { TaskStatus, TaskSource } from "@/db/schema";
 
 type Task = {
@@ -78,9 +79,7 @@ export function ThisWeekTasks({ tasks }: { tasks: Task[] }) {
             {dayTasks.map((task) => (
               <li key={task.id} className="flex items-center gap-2 text-sm">
                 {task.status === "missed" ? (
-                  <span className="text-red-700" aria-hidden>
-                    ⚠
-                  </span>
+                  <WarningIcon className="h-4 w-4 shrink-0 text-red-700" />
                 ) : (
                   <input
                     type="checkbox"
@@ -90,13 +89,13 @@ export function ThisWeekTasks({ tasks }: { tasks: Task[] }) {
                   />
                 )}
                 <span
-                  className={
+                  className={`transition-colors duration-300 ${
                     task.status === "completed"
                       ? "line-through text-(--text-muted)"
                       : task.status === "missed"
                         ? "text-red-800"
                         : ""
-                  }
+                  }`}
                 >
                   {task.title}
                 </span>

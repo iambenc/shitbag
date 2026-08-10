@@ -1891,3 +1891,229 @@ visual review is explicitly handed to the user: no browser tool this session, so
 good" was never claimed as verified, only "is this internally consistent and AA-compliant by the
 numbers" — worth a look at `/dashboard`, `/grow-plan`, `/journal`, `/calendar`, and one admin page on
 the running dev server before considering this done.
+
+---
+
+## Feature — design-review Priority 1 (elevation, buttons, Marigold, sticky header)
+
+Follow-up to the previous pass: the user said the app "is still quite dull." Rather than guess,
+dispatched a general-purpose subagent with an award-winning-designer framing to review the actual
+source (same no-browser-tool constraint — code-based critique, not a rendered screenshot) and
+produce a prioritized, cited list of concrete gaps, not mood-board language. Its core finding: two
+prior passes made the app *consistent*, not *crafted* — grep-confirmed zero `shadow`/`gradient`
+usage anywhere in the codebase before this pass, one flat card style used 40 times, one button style
+everywhere, and `hover:opacity-90` on every solid-colored button — which the design review correctly
+flagged as a real, previously-known bug (called out but deferred in both earlier passes): reducing
+*opacity* on a saturated color over a light page makes it visually *lighter* on hover, not darker, so
+every click in the app looked broken rather than tactile. User chose to implement the review's
+Priority 1 tier (the cheap, CSS-only, high-impact items) as-is.
+
+**1. Card elevation**: new `--shadow-card` token in `globals.css`'s `@theme inline` (tinted toward
+`--text-heading` rather than pure black, for palette cohesion) — produces a `shadow-card` utility the
+same mechanism as the existing `--font-display`. Verified it actually compiles before rolling out
+broadly: applied to one card first, fetched the live dev server's compiled CSS, confirmed the real
+rule (`box-shadow: ... #1f2a1f0d ... #1f2a1f12`) was present — not assumed from Tailwind v4 docs.
+Then applied via a precise regex substitution (not a blind sed, to avoid double-applying to the
+already-edited test card) across all 31 real instances of the flat `border-black/10 bg-white`
+pattern in 17 files — additive, kept the existing border rather than replacing it.
+
+**2. Fixed the button hover bug + added press feedback**: mechanical `hover:opacity-90` →
+`hover:brightness-90` across all 14 solid-colored buttons (`bg-(--brand-primary)`/
+`bg-(--brand-secondary)`) — `brightness` filter correctly darkens a color's own pixels regardless of
+what's behind it, unlike `opacity`, which blends toward the page background. Also found and fixed the
+same gap's other half while in this code: 14 more primary submit buttons (`disabled:opacity-60`
+pattern — login, signup, every onboarding step, every admin form) had *no* hover treatment
+whatsoever, not even the buggy one. Same fix applied there too, plus `active:scale-95 transition` on
+all 28 buttons for press feedback — a small, real interaction cue that was completely absent from the
+app before this (motion/micro-interaction pass proper is still Priority 2, not attempted here).
+
+**3. Put Marigold to work**: it was WCAG-verified but only ever used as a low-opacity pill fill.
+Added `border-t-4 border-t-(--brand-secondary)` to the two clearest "featured card" candidates — the
+upgrade/pricing card and the grow-plan AI-summary card. Redesigned `UpgradeBanner.tsx` (the dismissible
+upsell nudge) with a `border-l-4` Marigold accent stripe, a proper notification-banner treatment it
+didn't have before. Deliberately did not touch button gradients or anything with white text sitting on
+Marigold — `globals.css`'s own token comment already documents Marigold fails AA with white
+foreground text (1.93:1), so every application here uses it as a border/background behind dark text
+or no text at all.
+
+**4. Sticky, elevated header**: `SiteHeader.tsx` gained `sticky top-0 z-40 bg-(--background)/90
+shadow-card backdrop-blur-sm` — previously scrolled away entirely with no way to navigate without
+scrolling back up on long pages (dashboard, grow-plan). Checked for z-index conflicts before picking
+`z-40`: `JobInterstitial.tsx`'s full-screen overlay is the only other z-indexed element in the app, at
+`z-50`, so the header correctly stays beneath it. Skipped the design review's suggested
+scroll-triggered shadow (JS scroll listener) in favor of a permanent one — matches "cheap, CSS-only"
+Priority 1 framing better than adding client-side scroll state for a marginal difference.
+
+**5. Standardized badge/pill tint**: found only one real outlier once actually checked (`UpgradeBanner.tsx`'s
+`/25`, vs. the rest of the app's established `/15` "subtle" and `/40` "strong" tiers) — bumped it to
+`/40` to match other attention-drawing badges, folded into the same banner redesign as point 3.
+
+Verified: `tsc --noEmit` and `eslint` clean. Confirmed `shadow-card` genuinely compiles (fetched the
+live dev server's generated CSS twice — once after the first test application, once again at the end
+covering `brightness-90`/`scale-95`/`sticky`/`backdrop-blur-sm`/`border-t-4` — rather than assuming
+Tailwind v4's `@theme` namespace behavior). Grep-confirmed zero remaining `hover:opacity-90` and zero
+double-applied `shadow-card shadow-card` anywhere. Same explicit caveat as the previous pass: no
+browser tool this session, so visual quality itself is for the user to judge on the running dev
+server — this pass's own verification is "compiles, is internally consistent, matches what the
+design review asked for," not "confirmed to look better."
+
+---
+
+## Feature — design-review Priority 2 (icons, dashboard hero, motion, journal cards)
+
+Continuation of the design review from the previous entry — user said "let's go" to proceed straight
+into the review's Priority 2 tier (moderate-lift items building on infrastructure already in the
+app) with no further scoping questions.
+
+**1. New icon set** (`src/components/icons.tsx`): replaced the OS-inconsistent chrome/functional
+emoji the review flagged (☰ ✕ ⚠ 🧰, the calendar's `←`/`→` nav, admin's decorative `→`, and all 9
+distinct `weatherCodeEmoji` glyphs) with `currentColor` inline SVGs — same style as the existing
+`LeafAccent.tsx`, no icon-library dependency. Deliberately left content-identity emoji alone (crop
+emoji, growing-area-type emoji) — only glyphs functioning as UI chrome were in scope, and plain-text
+arrow characters inside link copy ("View full list →") were correctly identified as typographic, not
+emoji, so left untouched too. The 8 weather icons deliberately share one cloud base (three overlapping
+circles + a rounded rect — a forgiving shape, not a hand-derived bezier path) so the set reads as one
+family with different accessories rather than 8 unrelated glyphs; several close WMO codes intentionally
+collapse onto one icon (e.g. all snow variants) the same way the existing `weatherCodeLabel` already
+does semantically. New `weatherCodeIcon(code)` in `weather/labels.ts` returns the icon component
+itself (not JSX), consumed via `const WeatherIcon = weatherCodeIcon(code); <WeatherIcon .../>` in
+`dashboard/page.tsx`. One real complication: `🧰` was embedded in template-string-returning helper
+functions (`shoppingItemLabel`, `itemLabel`) also used inside an `aria-label` string context — can't
+render JSX there, so `shopping-list/ShoppingListView.tsx` split into two functions, a plain-text
+`itemLabelText` for aria-label and a JSX-returning `itemLabel` for display, rather than trying to
+force one function to serve both.
+
+**2. Dashboard visual hero**: the "This week" tasks card (arguably the most actionable content on the
+page) got the same `border-t-4 border-t-(--brand-secondary)` featured-card treatment already
+established for the upgrade/grow-plan cards in Priority 1 — reused the proven pattern rather than
+inventing a new one, so the other 5 dashboard cards now read as calmer siblings by comparison.
+
+**3. Motion pass**, split by risk/mechanism:
+- **Hover-lift** (`hover:-translate-y-0.5 hover:shadow-lg transition-all duration-200`, CSS-only): the
+  3 real "navigate away" nav cards (2 in `admin/page.tsx`, dashboard's resource links) — deliberately
+  not applied to `FavouriteCropsGrid.tsx`'s selection tiles, a toggle interaction, not a navigation
+  one, where a lift-on-hover would send the wrong affordance signal.
+- **Staggered fade/slide-in on load**: new `src/components/FadeIn.tsx`, a thin `"use client"` wrapper
+  around `framer-motion` (already an installed dependency, previously used in exactly one component)
+  so server-rendered cards in `dashboard/page.tsx` (6 cards) and `grow-plan/page.tsx`'s recommendation
+  grid can animate in without becoming client components themselves — a standard RSC pattern (a client
+  component can wrap server-rendered `children` without those children needing `"use client"`).
+  Delay scales linearly with index; not capped, since this app's card counts stay small.
+- **Calendar day sliding highlight** (`CalendarView.tsx`): replaced the instant background-color swap
+  on day selection with a `layoutId`-based shared-layout animation — a `motion.div` sharing one
+  `layoutId` across renders, so framer-motion automatically interpolates its position when a different
+  button starts rendering it. Real stacking-order risk here, reasoned through carefully rather than
+  guessed: the highlight is `absolute inset-0`, so the day-number and task-count dot both needed an
+  explicit `relative` wrapper to guarantee they paint above it (a later same-context positioned
+  sibling stacks above an earlier one at the same auto z-index; without `relative` on the text, a
+  plain static-positioned span does not reliably out-paint an absolutely-positioned sibling).
+- **Task-complete transition**: `transition-colors duration-300` added to the task-title span in both
+  `CalendarView.tsx` and `ThisWeekTasks.tsx`, so the strike-through/muted-color change on completion
+  fades rather than snaps — kept deliberately modest (didn't attempt to animate the `line-through`
+  text-decoration itself, which doesn't tween reliably, or force animation onto the native
+  `<input type="checkbox">`, which can't be restyled that way without replacing it with a custom
+  control — a bigger change than this pass's scope).
+- **Explicitly not re-done**: button press feedback — already covered by Priority 1's
+  `active:scale-95`, so no framer-motion `whileTap` duplicate was added.
+
+**4. Journal photo cards**: replaced the stacked-text-link footer (`Private — share it` / `Diagnose`
+/ `Delete`) with a hover-revealed icon overlay directly on the photo — a standard photo-grid pattern.
+Two new icons (`EyeIcon`, `TrashIcon`); the existing `LeafAccent` reused for "Diagnose" (thematically
+apt — a leaf for a plant health check — and avoided a redundant near-duplicate icon). A small always-
+visible visibility badge (not hover-gated) was added in the photo's top-left corner, since "is this
+shared" is ambient information worth seeing without hovering, unlike the action buttons. Accessibility
+carried through deliberately: `group-focus-within:opacity-100` alongside `group-hover:opacity-100`, so
+keyboard-tabbing to a button reveals the overlay the same way a mouse hover does — a hover-only overlay
+would have made these controls unreachable by keyboard.
+
+Verified: `tsc --noEmit` and `eslint` clean throughout (including after the largest structural change,
+the 6 `FadeIn`-wrapped dashboard cards, built incrementally one card at a time — each intermediate
+unclosed-tag state surfaced immediately as a parse error, confirming the JSX structure was assembled
+correctly rather than trusting the final file). Every touched route (`/dashboard`, `/grow-plan`,
+`/calendar`, `/journal`, `/admin`, `/login`, `/`) confirmed responding without a 500 via the running
+dev server — the real risk point for this pass given `"use client"` boundary changes and new
+`framer-motion` usage beyond its one prior call site. Compiled CSS re-checked for the new utilities
+(`translate-y`, `brand-secondary` border, `shadow-lg`, `group-hover`). No stray test files. Same
+caveat as every pass this session without a browser tool: compiles and is structurally sound, not
+confirmed to look right — genuinely worth the user's own look this time given how much of this pass
+(icon shapes, overlay stacking, animation feel) is inherently visual judgment a code-only check can't
+substitute for.
+
+---
+
+## Feature — auto-place growing-space equipment on add
+
+Requested (terse original): "let's work on the equipment inventory, assume that once an item is
+added that it is part of a growing area in the user's garden apart from the garden equipment."
+Today, adding a pot/tray/planter/bed to inventory (`userEquipment`) only recorded ownership — a
+user separately "placed" some or all of it as usable growing space via `/garden`'s manual +/-
+steppers. This was genuinely deliberate original design, not an oversight: `growingAreas`'s own
+schema comment explains the two-table split exists so each physical unit can be tracked
+independently (`available`/`reserved`/`in_use`), and the grow planner's `unplacedEquipment` AI
+nudge exists specifically because "owned" and "ready to grow in" were meant to be two different
+facts. Confirmed directly with the user before designing, since this reverses documented intent:
+(1) yes, collapse them, up to owned quantity; (2) keep the manual steppers so a reduction can still
+be made deliberately — auto-place only ever *increases* placed count automatically, never
+decreases it; (3) garden beds get the same treatment as the 4 purchasable types, all 5 uniform.
+Non-growing-space tools (the watering can) are unaffected either way, same exclusion mechanism
+(no entry in `SLUG_TO_GROWING_AREA_TYPE`) already used everywhere else.
+
+Design was validated in a review pass before implementation. It confirmed the site inventory
+(exactly 2 `applyEquipmentRows` call sites, exactly 1 `growingAreas` insert site, no bypass path)
+and caught one real, important bug in the first draft: diffing "existing placed count" against
+"current owned quantity" on every save — but `EquipmentPicker` resubmits the *entire* row set on
+every save, not a diff, so an unrelated save (e.g. adding a watering can) would have silently
+re-placed equipment a user had deliberately reduced via the steppers, on a save that never touched
+that row at all. Fixed by diffing against each row's *pre-save* quantity (snapshotted before the
+upsert) instead of its owned quantity — auto-place now only ever fills the increase within the
+current save, never backfills a standing gap from an earlier manual reduction or a prior quantity
+decrease (a separate, pre-existing, deliberately-deferred gap, not this change's job to close).
+
+**New pure helper** `src/lib/garden/growingAreaSync.ts`: `buildGrowingAreaRows(params, count)` — no
+DB access, just shapes N insert-ready rows. Used by both `syncGrowingAreasAction`'s existing
+increase branch (refactored to call it, no behavior change) and the new auto-place logic, so the
+two insert shapes can't drift apart.
+
+**Extended `applyEquipmentRows`** (`src/lib/garden/equipmentRows.ts`) — the shared core both
+onboarding's and `/garden`'s equipment-save actions already call, confirmed the right integration
+point (no separate onboarding growing-area step exists; duplicating into both action files would
+risk the exact drift the shared helper exists to prevent). All in the same transaction as the
+existing upsert (atomicity — equipment saved without its placement, or vice versa, would be a bad
+partial state): snapshot each submitted row's pre-save quantity before the upsert runs; after,
+resolve each row's equipment-type slug, filter to growing-space rows (silently skip tools, matching
+the established silent-drop-on-ineligible convention used identically in `/garden/page.tsx`'s
+`placeable` filter and `generateGrowPlan.ts`'s `unplacedEquipment` filter); fetch existing
+`growingAreas` counts for those rows and reduce in JS (matching this codebase's existing convention
+for this exact kind of count — no `GROUP BY` usage exists anywhere else in the repo, so introducing
+one here would've been a new idiom for no reason); for each, `increase = max(0, newQty -
+preSaveQty)`, `insertCount = max(0, min(increase, newQty - existingPlaced))` — the inner `min`
+guards against overshooting when owned quantity was previously shrunk below placed count (the known
+deferred gap). Docblock rewritten — it no longer just "syncs `userEquipment`."
+
+**`syncGrowingAreasAction`**: unchanged behavior, refactored internals only. Still the only way to
+manually decrease placed count, still the only place enforcing the `available`-only-removal safety
+rule protecting live `reserved`/`in_use` grow-plan claims.
+
+**Copy tweak** (`/garden/page.tsx`): "Tell us which of your equipment is actually set up and ready
+to grow in right now" (implied placement was a required manual step) → "Newly added equipment is
+automatically ready to grow in — adjust the counts below if you want to hold some back."
+
+Verified via the same direct-SQL-replication testing workaround used throughout this session
+(server actions need auth context unavailable to a plain script) against the demo account's real
+data — all four scenarios, and one genuinely useful thing the test itself revealed: the demo
+account's `planters` row (owned 3) turned out to already have 2 of its 3 areas `in_use` from
+earlier real grow-plan testing this session, with only 1 truly `available`. (a) A brand-new pot row
+(quantity 4) auto-placed all 4. (b) Simulating a manual reduction could only remove that one
+`available` area (correctly — the safety rule protecting the 2 `in_use` ones held throughout, exactly
+as designed, not something this feature touches); the reduced count then correctly survived an
+unrelated save (an unchanged/never-decremented value stayed put — the exact bug the review caught,
+confirmed fixed). (c) Increasing that row's owned quantity afterward correctly auto-placed only the
+delta, arithmetic re-verified against the *actual* (not originally assumed) starting count and
+matched exactly. (d) Adding a watering-can row created zero `growingAreas` rows. One test-scaffolding
+bug on my side (the cleanup step only handled "add more," not "remove excess," from the removal-only-
+found-1-not-2 surprise above) left one extra `available` test row briefly — caught, and the demo
+account's `planters` row confirmed restored to its exact original state (2 `in_use` + 1 `available`)
+before finishing. `tsc --noEmit` and `eslint` clean throughout; `/garden` and
+`/onboarding/equipment` confirmed compiling via the dev server. The demo account already had
+owned == placed for every existing row, so the planned one-time backfill turned out to be a no-op
+in practice — checked, not assumed, before treating it as done. No stray test files.

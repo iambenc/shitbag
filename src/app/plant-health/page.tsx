@@ -34,7 +34,7 @@ export default async function PlantHealthPage() {
     return (
       <div className="mx-auto max-w-xl px-6 py-16">
         <h1 className="font-display text-3xl font-semibold text-(--brand-primary)">Plant Health</h1>
-        <div className="mt-8 rounded-lg border border-black/10 bg-white p-6">
+        <div className="mt-8 rounded-lg border border-black/10 bg-white p-6 shadow-card">
           <p className="font-display text-lg font-semibold">This is a membership feature.</p>
           <p className="mt-2 text-sm text-(--text-muted)">
             Subscribers can upload a photo of a struggling plant and get an AI diagnosis — likely
@@ -42,7 +42,7 @@ export default async function PlantHealthPage() {
           </p>
           <Link
             href="/upgrade"
-            className="mt-4 inline-block rounded-full bg-(--brand-primary) px-6 py-2 text-sm text-white hover:opacity-90"
+            className="mt-4 inline-block rounded-full bg-(--brand-primary) px-6 py-2 text-sm text-white hover:brightness-90 active:scale-95 transition"
           >
             View membership
           </Link>
@@ -86,7 +86,7 @@ export default async function PlantHealthPage() {
           </p>
         </div>
       ) : (
-        <div className="mt-8 rounded-lg border border-black/10 bg-white p-6">
+        <div className="mt-8 rounded-lg border border-black/10 bg-white p-6 shadow-card">
           <p className="text-sm text-(--text-muted)">
             You&rsquo;ve used all {MAX_DAILY_PLANT_DIAGNOSES} plant checks for today — come back tomorrow.
           </p>
@@ -111,7 +111,7 @@ export default async function PlantHealthPage() {
 
               const raw = d.rawOutput as RawOutput | null;
               return (
-                <div key={d.id} className="rounded-lg border border-black/10 bg-white p-6">
+                <div key={d.id} className="rounded-lg border border-black/10 bg-white p-6 shadow-card">
                   <p className="font-display text-lg font-semibold">
                     {d.issue}
                     {d.severity && (

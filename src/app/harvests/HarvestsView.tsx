@@ -53,7 +53,7 @@ export function HarvestsView({ harvests, crops }: { harvests: Harvest[]; crops: 
 
   return (
     <div className="flex flex-col gap-8">
-      <form action={formAction} className="flex flex-col gap-3 rounded-lg border border-black/10 bg-white p-4">
+      <form action={formAction} className="flex flex-col gap-3 rounded-lg border border-black/10 bg-white p-4 shadow-card">
         <div className="flex flex-wrap gap-2">
           <select name="cropId" required className="rounded-md border border-black/15 px-3 py-2 text-sm">
             {crops.map((c) => (
@@ -95,7 +95,7 @@ export function HarvestsView({ harvests, crops }: { harvests: Harvest[]; crops: 
         />
         <button
           type="submit"
-          className="self-start rounded-full bg-(--brand-primary) px-6 py-2 text-sm text-white hover:opacity-90"
+          className="self-start rounded-full bg-(--brand-primary) px-6 py-2 text-sm text-white hover:brightness-90 active:scale-95 transition"
         >
           Log harvest
         </button>
@@ -107,7 +107,7 @@ export function HarvestsView({ harvests, crops }: { harvests: Harvest[]; crops: 
         {list.map((h) => (
           <div
             key={h.id}
-            className="flex items-center justify-between gap-3 rounded-lg border border-black/10 bg-white p-3 text-sm"
+            className="flex items-center justify-between gap-3 rounded-lg border border-black/10 bg-white p-3 shadow-card text-sm"
           >
             <div>
               <span>
