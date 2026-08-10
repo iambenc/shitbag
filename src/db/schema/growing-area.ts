@@ -1,7 +1,7 @@
 import { pgTable, uuid, text, real, timestamp } from "drizzle-orm/pg-core";
 import { tenants } from "./tenant";
 import { users } from "./user";
-import { userEquipment } from "./equipment";
+import { userEquipment, sizeUnitEnum } from "./equipment";
 import { tenantIsolationPolicy } from "./_rls";
 
 // Excludes "watering_can" (a tool, not growing space). Includes "seed_tray" —
@@ -10,7 +10,11 @@ import { tenantIsolationPolicy } from "./_rls";
 export const growingAreaTypeEnum = ["seed_tray", "pot", "planter", "raised_bed", "bed"] as const;
 export type GrowingAreaType = (typeof growingAreaTypeEnum)[number];
 
-export const growingAreaStatusEnum = ["available", "in_use"] as const;
+// "reserved" = earmarked for a later stage of a specific recommendation's
+// multi-stage lifecycle (e.g. the pot a seed-tray crop will move into) —
+// claimed so nothing else can take it, but not physically holding anything
+// yet. See planRecommendationStages in grow-plan.ts.
+export const growingAreaStatusEnum = ["available", "reserved", "in_use"] as const;
 export type GrowingAreaStatus = (typeof growingAreaStatusEnum)[number];
 
 // Deliberately no `quantity` column: unlike userEquipment ("3x 20cm pots" as
@@ -28,7 +32,8 @@ export const growingAreas = pgTable(
       .notNull()
       .references(() => users.id, { onDelete: "cascade" }),
     type: text("type", { enum: growingAreaTypeEnum }).notNull(),
-    sizeLabel: text("size_label"),
+    sizeValue: real("size_value"),
+    sizeUnit: text("size_unit", { enum: sizeUnitEnum }),
     widthCm: real("width_cm"),
     lengthCm: real("length_cm"),
     depthCm: real("depth_cm"),

@@ -12,7 +12,7 @@ export default function LoginPage() {
   return (
     <div className="mx-auto flex max-w-sm flex-col gap-6 px-6 py-16">
       <div>
-        <h1 className="text-2xl font-semibold text-(--brand-primary)">Welcome back</h1>
+        <h1 className="font-display text-3xl font-semibold text-(--brand-primary)">Welcome back</h1>
         <p className="mt-1 text-sm text-(--text-muted)">Log in to tend to your plot.</p>
       </div>
       <form action={formAction} className="flex flex-col gap-4">
@@ -40,7 +40,7 @@ export default function LoginPage() {
         <button
           type="submit"
           disabled={pending}
-          className="rounded-full bg-(--brand-primary) px-4 py-2 text-white disabled:opacity-60"
+          className="rounded-full bg-(--brand-primary) px-6 py-2 text-white disabled:opacity-60"
         >
           {pending ? "Logging in…" : "Log in"}
         </button>

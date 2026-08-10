@@ -34,12 +34,38 @@ export function JobInterstitial({ statusUrl, message }: { statusUrl: string; mes
     return () => clearInterval(pollTimer);
   }, [statusUrl, router]);
 
+  // Full-screen for the duration of the wait — covers the header/nav too
+  // (it has no z-index of its own, so a fixed overlay sits above it
+  // unconditionally) so there's no visible way to navigate off before the
+  // response lands. Body scroll is locked to match — nothing behind the
+  // overlay is reachable either way, but an unlocked page can still scroll
+  // underneath, which reads as broken.
+  useEffect(() => {
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => {
+      document.body.style.overflow = previousOverflow;
+    };
+  }, []);
+
   return (
-    <div className="flex flex-col items-center gap-4 rounded-lg border border-black/10 bg-white px-6 py-16 text-center">
-      <span className="text-4xl" aria-hidden>
+    <div className="fixed inset-0 z-50 flex flex-col items-center justify-center gap-6 bg-white px-6 text-center">
+      <span
+        className="motion-safe:animate-[grow-pulse_1.8s_ease-in-out_infinite] text-8xl"
+        aria-hidden
+      >
         🌱
       </span>
-      <p className="font-medium">{message}</p>
+      <p className="text-lg font-medium">{message}</p>
+      <span className="flex gap-3" aria-hidden>
+        {[0, 1, 2].map((i) => (
+          <span
+            key={i}
+            className="h-3 w-3 rounded-full bg-(--brand-primary) motion-safe:animate-bounce"
+            style={{ animationDelay: `${i * 150}ms` }}
+          />
+        ))}
+      </span>
       <p className="max-w-md text-sm italic text-(--text-muted)">&ldquo;{GARDENING_QUOTES[quoteIndex]}&rdquo;</p>
     </div>
   );

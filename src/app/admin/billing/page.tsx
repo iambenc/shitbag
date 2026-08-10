@@ -14,11 +14,11 @@ export default async function AdminBillingPage() {
 
   return (
     <div className="mx-auto max-w-3xl">
-      <h2 className="text-lg font-semibold">Billing</h2>
+      <h2 className="font-display text-lg font-semibold">Billing</h2>
       <p className="mt-1 text-sm text-(--text-muted)">
         The membership price gardeners on this tenant are charged.
       </p>
-      <div className="mt-6">
+      <div className="mt-8">
         <PlanForm
           plan={{
             monthlyAmount: plan ? (plan.monthlyAmountPence / 100).toFixed(2) : "5.00",

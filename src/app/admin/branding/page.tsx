@@ -8,9 +8,9 @@ export default async function AdminBrandingPage() {
 
   return (
     <div className="mx-auto max-w-3xl">
-      <h2 className="text-lg font-semibold">Branding</h2>
+      <h2 className="font-display text-lg font-semibold">Branding</h2>
       <p className="mt-1 text-sm text-(--text-muted)">Changes apply to everyone on this tenant immediately.</p>
-      <div className="mt-6">
+      <div className="mt-8">
         <BrandingForm
           tenant={{
             displayName: tenant.displayName,

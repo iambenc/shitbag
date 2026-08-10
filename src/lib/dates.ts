@@ -16,3 +16,10 @@ export function addDaysIso(days: number): string {
   d.setDate(d.getDate() + days);
   return isoDate(d);
 }
+
+/** Start of today on the server's own clock — same caveat as todayIso(). */
+export function startOfTodayLocal(): Date {
+  const d = new Date();
+  d.setHours(0, 0, 0, 0);
+  return d;
+}

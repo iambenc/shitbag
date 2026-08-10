@@ -30,7 +30,7 @@ export default async function FavouritesPage() {
 
   return (
     <div className="mx-auto max-w-4xl px-6 py-16">
-      <h1 className="text-2xl font-semibold text-(--brand-primary)">Favourite crops</h1>
+      <h1 className="font-display text-3xl font-semibold text-(--brand-primary)">Favourite crops</h1>
       <p className="mt-2 text-sm text-(--text-muted)">
         Tap the heart to update what you&rsquo;re most excited to grow — this feeds your AI grow
         plan.

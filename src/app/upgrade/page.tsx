@@ -31,14 +31,14 @@ export default async function UpgradePage() {
 
   return (
     <div className="mx-auto max-w-xl px-6 py-16">
-      <h1 className="text-2xl font-semibold text-(--brand-primary)">
+      <h1 className="font-display text-3xl font-semibold text-(--brand-primary)">
         {tenant.displayName} membership
       </h1>
 
       <div className="mt-8 rounded-lg border border-black/10 bg-white p-6">
         {paid ? (
           <>
-            <p className="font-medium">You&apos;re subscribed 🌱</p>
+            <p className="font-display text-lg font-semibold">You&apos;re subscribed 🌱</p>
             <p className="mt-1 text-sm text-(--text-muted)">
               {subscription?.currentPeriodEnd
                 ? `Renews ${new Date(subscription.currentPeriodEnd).toLocaleDateString("en-GB")}.`
@@ -55,7 +55,7 @@ export default async function UpgradePage() {
           </>
         ) : (
           <>
-            <p className="font-medium">
+            <p className="font-display text-lg font-semibold">
               {price ? `${price}/month` : "Membership"}
             </p>
             <p className="mt-2 text-sm text-(--text-muted)">

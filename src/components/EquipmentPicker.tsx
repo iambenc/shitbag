@@ -2,7 +2,7 @@
 
 import { useActionState, useState } from "react";
 import type { EquipmentState } from "@/lib/garden/equipmentRows";
-import type { EquipmentCategory } from "@/db/schema";
+import type { EquipmentCategory, SizeUnit } from "@/db/schema";
 
 type EquipmentTypeInfo = {
   id: string;
@@ -16,7 +16,8 @@ type OwnedRowInput = {
   id: string;
   equipmentTypeId: string;
   quantity: number;
-  sizeLabel: string | null;
+  sizeValue: number | null;
+  sizeUnit: SizeUnit | null;
   widthCm: number | null;
   lengthCm: number | null;
   depthCm: number | null;
@@ -26,7 +27,8 @@ type Row = {
   id: string;
   equipmentTypeId: string;
   quantity: number;
-  sizeLabel: string;
+  sizeValue: string;
+  sizeUnit: SizeUnit;
   widthCm: string;
   lengthCm: string;
   depthCm: string;
@@ -39,7 +41,8 @@ function emptyRow(equipmentTypeId: string): Row {
     id: crypto.randomUUID(),
     equipmentTypeId,
     quantity: 1,
-    sizeLabel: "",
+    sizeValue: "",
+    sizeUnit: "cm",
     widthCm: "",
     lengthCm: "",
     depthCm: "",
@@ -65,7 +68,10 @@ export function EquipmentPicker({
       id: r.id,
       equipmentTypeId: r.equipmentTypeId,
       quantity: r.quantity,
-      sizeLabel: r.sizeLabel ?? "",
+      sizeValue: r.sizeValue?.toString() ?? "",
+      // Every pre-existing row needs an explicit unit, not just new ones —
+      // relying on the <select>'s default option would be fragile.
+      sizeUnit: r.sizeUnit ?? "cm",
       widthCm: r.widthCm?.toString() ?? "",
       lengthCm: r.lengthCm?.toString() ?? "",
       depthCm: r.depthCm?.toString() ?? "",
@@ -102,7 +108,8 @@ export function EquipmentPicker({
         id: r.id,
         equipmentTypeId: r.equipmentTypeId,
         quantity: r.quantity,
-        sizeLabel: r.sizeLabel || null,
+        sizeValue: r.sizeValue ? Number(r.sizeValue) : null,
+        sizeUnit: r.sizeValue ? r.sizeUnit : null,
         widthCm: r.widthCm ? Number(r.widthCm) : null,
         lengthCm: r.lengthCm ? Number(r.lengthCm) : null,
         depthCm: r.depthCm ? Number(r.depthCm) : null,
@@ -142,13 +149,25 @@ export function EquipmentPicker({
                   {type.category === "sized" && (
                     <label className="flex flex-col gap-1 text-xs">
                       Size
-                      <input
-                        type="text"
-                        placeholder="e.g. 20cm"
-                        value={row.sizeLabel}
-                        onChange={(e) => updateRow(row.id, { sizeLabel: e.target.value })}
-                        className="w-28 rounded-md border border-black/15 px-2 py-1.5 text-sm"
-                      />
+                      <div className="flex gap-1">
+                        <input
+                          type="number"
+                          min={0}
+                          step="any"
+                          placeholder="e.g. 20"
+                          value={row.sizeValue}
+                          onChange={(e) => updateRow(row.id, { sizeValue: e.target.value })}
+                          className="w-20 rounded-md border border-black/15 px-2 py-1.5 text-sm"
+                        />
+                        <select
+                          value={row.sizeUnit}
+                          onChange={(e) => updateRow(row.id, { sizeUnit: e.target.value as SizeUnit })}
+                          className="rounded-md border border-black/15 px-2 py-1.5 text-sm"
+                        >
+                          <option value="cm">cm</option>
+                          <option value="litres">L</option>
+                        </select>
+                      </div>
                     </label>
                   )}
                   {type.category === "dimensions" && (
@@ -224,7 +243,7 @@ export function EquipmentPicker({
 
       {notOwned.length > 0 && (
         <div className="rounded-lg bg-black/5 p-4 text-sm">
-          <p className="font-medium">You might also want</p>
+          <p className="font-display text-lg font-semibold">You might also want</p>
           <ul className="mt-2 flex flex-col gap-1">
             {notOwned.map((t) => (
               <li key={t.id}>

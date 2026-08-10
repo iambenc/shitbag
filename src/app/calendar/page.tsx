@@ -21,7 +21,7 @@ export default async function CalendarPage() {
 
   return (
     <div className="mx-auto max-w-4xl px-6 py-16">
-      <h1 className="text-2xl font-semibold text-(--brand-primary)">Calendar</h1>
+      <h1 className="font-display text-3xl font-semibold text-(--brand-primary)">Calendar</h1>
       <p className="mt-2 text-sm text-(--text-muted)">Keep track of what needs doing, and when.</p>
       <div className="mt-8">
         <CalendarView
@@ -33,6 +33,8 @@ export default async function CalendarPage() {
             hardDeadlineDate: t.hardDeadlineDate,
             status: t.status,
             source: t.source,
+            isIndoor: t.isIndoor,
+            successionSeriesId: t.successionSeriesId,
           }))}
         />
       </div>

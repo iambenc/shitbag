@@ -7,12 +7,15 @@ import {
   deleteShoppingItemAction,
   type AddShoppingItemState,
 } from "@/lib/actions/shopping";
+import { LeafAccent } from "@/components/LeafAccent";
 
 type Item = {
   id: string;
   cropId: string | null;
   cropName: string | null;
   cropEmoji: string | null;
+  equipmentTypeId: string | null;
+  equipmentTypeName: string | null;
   freeText: string | null;
   quantityLabel: string;
   status: "pending" | "purchased";
@@ -20,20 +23,32 @@ type Item = {
 };
 
 type CropOption = { id: string; name: string; emoji: string };
+type EquipmentOption = { id: string; name: string };
 
 const initialState: AddShoppingItemState = {};
 
 function itemLabel(item: Item) {
-  return item.cropId ? `${item.cropEmoji ?? ""} ${item.cropName}`.trim() : item.freeText;
+  if (item.cropId) return `${item.cropEmoji ?? ""} ${item.cropName}`.trim();
+  if (item.equipmentTypeId) return `🧰 ${item.equipmentTypeName}`;
+  return item.freeText;
 }
 
-export function ShoppingListView({ items, crops }: { items: Item[]; crops: CropOption[] }) {
+export function ShoppingListView({
+  items,
+  crops,
+  equipmentTypes,
+}: {
+  items: Item[];
+  crops: CropOption[];
+  equipmentTypes: EquipmentOption[];
+}) {
   const [itemList, setItemList] = useState(items);
-  const [mode, setMode] = useState<"crop" | "custom">("crop");
+  const [mode, setMode] = useState<"crop" | "equipment" | "custom">("crop");
   const [state, formAction] = useActionState(async (prev: AddShoppingItemState, formData: FormData) => {
     const result = await addShoppingItemAction(prev, formData);
     if (result.item) {
       const crop = crops.find((c) => c.id === result.item!.cropId);
+      const equipmentType = equipmentTypes.find((t) => t.id === result.item!.equipmentTypeId);
       setItemList((items) => [
         ...items,
         {
@@ -41,6 +56,8 @@ export function ShoppingListView({ items, crops }: { items: Item[]; crops: CropO
           cropId: result.item!.cropId,
           cropName: crop?.name ?? null,
           cropEmoji: crop?.emoji ?? null,
+          equipmentTypeId: result.item!.equipmentTypeId,
+          equipmentTypeName: equipmentType?.name ?? null,
           freeText: result.item!.freeText,
           quantityLabel: result.item!.quantityLabel,
           status: "pending",
@@ -70,7 +87,12 @@ export function ShoppingListView({ items, crops }: { items: Item[]; crops: CropO
   return (
     <div className="flex flex-col gap-8">
       <section className="flex flex-col gap-2">
-        {itemList.length === 0 && <p className="text-sm text-(--text-muted)">Your list is empty.</p>}
+        {itemList.length === 0 && (
+          <div className="flex items-center gap-2 rounded-lg bg-(--surface-tint) p-3">
+            <LeafAccent className="h-5 w-5 shrink-0 text-(--brand-primary)" />
+            <p className="text-sm text-(--text-muted)">Your list is empty.</p>
+          </div>
+        )}
         {[...pending, ...purchased].map((item) => (
           <div
             key={item.id}
@@ -115,6 +137,13 @@ export function ShoppingListView({ items, crops }: { items: Item[]; crops: CropO
           </button>
           <button
             type="button"
+            onClick={() => setMode("equipment")}
+            className={`rounded-full px-3 py-1 ${mode === "equipment" ? "bg-(--brand-primary) text-white" : "border border-black/15"}`}
+          >
+            Equipment
+          </button>
+          <button
+            type="button"
             onClick={() => setMode("custom")}
             className={`rounded-full px-3 py-1 ${mode === "custom" ? "bg-(--brand-primary) text-white" : "border border-black/15"}`}
           >
@@ -122,7 +151,7 @@ export function ShoppingListView({ items, crops }: { items: Item[]; crops: CropO
           </button>
         </div>
 
-        {mode === "crop" ? (
+        {mode === "crop" && (
           <select name="cropId" required className="rounded-md border border-black/15 px-3 py-2 text-sm">
             {crops.map((c) => (
               <option key={c.id} value={c.id}>
@@ -130,7 +159,17 @@ export function ShoppingListView({ items, crops }: { items: Item[]; crops: CropO
               </option>
             ))}
           </select>
-        ) : (
+        )}
+        {mode === "equipment" && (
+          <select name="equipmentTypeId" required className="rounded-md border border-black/15 px-3 py-2 text-sm">
+            {equipmentTypes.map((t) => (
+              <option key={t.id} value={t.id}>
+                {t.name}
+              </option>
+            ))}
+          </select>
+        )}
+        {mode === "custom" && (
           <input
             name="freeText"
             type="text"
@@ -139,8 +178,10 @@ export function ShoppingListView({ items, crops }: { items: Item[]; crops: CropO
             className="rounded-md border border-black/15 px-3 py-2 text-sm"
           />
         )}
-        {mode === "crop" && <input type="hidden" name="freeText" value="" readOnly />}
-        {mode === "custom" && <input type="hidden" name="cropId" value="" readOnly />}
+        {/* Each mode must zero out both sibling fields, not just the one other mode. */}
+        {mode !== "crop" && <input type="hidden" name="cropId" value="" readOnly />}
+        {mode !== "equipment" && <input type="hidden" name="equipmentTypeId" value="" readOnly />}
+        {mode !== "custom" && <input type="hidden" name="freeText" value="" readOnly />}
 
         <div className="flex gap-2">
           <input
@@ -152,7 +193,7 @@ export function ShoppingListView({ items, crops }: { items: Item[]; crops: CropO
           />
           <button
             type="submit"
-            className="rounded-full bg-(--brand-primary) px-4 py-2 text-sm text-white hover:opacity-90"
+            className="rounded-full bg-(--brand-primary) px-6 py-2 text-sm text-white hover:opacity-90"
           >
             Add
           </button>

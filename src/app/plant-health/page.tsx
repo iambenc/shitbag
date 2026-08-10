@@ -9,23 +9,9 @@ import { getUserProfile } from "@/lib/onboarding/profile";
 import { getSubscription, isPaidTier } from "@/lib/billing/subscription";
 import { JobInterstitial } from "@/components/JobInterstitial";
 import { UploadAndDiagnoseForm } from "./UploadAndDiagnoseForm";
-
-const severityLabels: Record<string, string> = {
-  none: "No issue",
-  low: "Low severity",
-  medium: "Medium severity",
-  high: "High severity",
-};
-
-// Differentiated by severity so a gardener can tell urgency at a glance,
-// not just read it — terracotta only ever pairs with white text (fails
-// WCAG AA with dark text), the reverse of the brand-primary tint below.
-const severityBadgeClasses: Record<string, string> = {
-  none: "bg-(--brand-primary)/15 text-[#1f2a1f]",
-  low: "bg-(--brand-primary)/15 text-[#1f2a1f]",
-  medium: "bg-(--color-terracotta) text-white",
-  high: "bg-red-200 text-red-800",
-};
+import { severityLabels, severityBadgeClasses } from "@/lib/plantHealth/labels";
+import { getPlantDiagnosesToday } from "@/lib/actions/plantHealth";
+import { MAX_DAILY_PLANT_DIAGNOSES } from "@/lib/ai/limits";
 
 type RawOutput = {
   likelyCauses?: string[];
@@ -47,9 +33,9 @@ export default async function PlantHealthPage() {
   if (!paid) {
     return (
       <div className="mx-auto max-w-xl px-6 py-16">
-        <h1 className="text-2xl font-semibold text-(--brand-primary)">Plant Health</h1>
+        <h1 className="font-display text-3xl font-semibold text-(--brand-primary)">Plant Health</h1>
         <div className="mt-8 rounded-lg border border-black/10 bg-white p-6">
-          <p className="font-medium">This is a membership feature.</p>
+          <p className="font-display text-lg font-semibold">This is a membership feature.</p>
           <p className="mt-2 text-sm text-(--text-muted)">
             Subscribers can upload a photo of a struggling plant and get an AI diagnosis — likely
             causes, severity, and care instructions.
@@ -75,9 +61,12 @@ export default async function PlantHealthPage() {
 
   const pending = diagnoses.find((d) => d.status === "pending");
 
+  const diagnosesToday = await getPlantDiagnosesToday(tenant.id, session.user.id);
+  const diagnosesRemainingToday = Math.max(0, MAX_DAILY_PLANT_DIAGNOSES - diagnosesToday);
+
   return (
     <div className="mx-auto max-w-4xl px-6 py-16">
-      <h1 className="text-2xl font-semibold text-(--brand-primary)">Plant Health</h1>
+      <h1 className="font-display text-3xl font-semibold text-(--brand-primary)">Plant Health</h1>
       <p className="mt-2 text-sm text-(--text-muted)">
         Upload a photo of a plant you&rsquo;re worried about for an AI diagnosis.
       </p>
@@ -89,15 +78,24 @@ export default async function PlantHealthPage() {
             message="Your plant is being diagnosed…"
           />
         </div>
-      ) : (
+      ) : diagnosesRemainingToday > 0 ? (
         <div className="mt-8">
           <UploadAndDiagnoseForm />
+          <p className="mt-2 text-xs text-(--text-muted)">
+            {diagnosesRemainingToday} of {MAX_DAILY_PLANT_DIAGNOSES} plant checks left today
+          </p>
+        </div>
+      ) : (
+        <div className="mt-8 rounded-lg border border-black/10 bg-white p-6">
+          <p className="text-sm text-(--text-muted)">
+            You&rsquo;ve used all {MAX_DAILY_PLANT_DIAGNOSES} plant checks for today — come back tomorrow.
+          </p>
         </div>
       )}
 
       {diagnoses.length > 0 && (
         <div className="mt-8 flex flex-col gap-4">
-          <p className="font-medium">History</p>
+          <p className="font-display text-lg font-semibold">History</p>
           <div className="grid gap-4 lg:grid-cols-2">
           {diagnoses
             .filter((d) => d.status !== "pending")
@@ -106,7 +104,7 @@ export default async function PlantHealthPage() {
                 return (
                   <div key={d.id} className="rounded-lg border border-red-200 bg-red-50 p-6">
                     <p className="font-medium text-red-800">Diagnosis failed.</p>
-                    {d.errorMessage && <p className="mt-1 text-sm text-red-700">{d.errorMessage}</p>}
+                    <p className="mt-1 text-sm text-red-700">Please come back later and try again.</p>
                   </div>
                 );
               }
@@ -114,11 +112,11 @@ export default async function PlantHealthPage() {
               const raw = d.rawOutput as RawOutput | null;
               return (
                 <div key={d.id} className="rounded-lg border border-black/10 bg-white p-6">
-                  <p className="font-medium">
+                  <p className="font-display text-lg font-semibold">
                     {d.issue}
                     {d.severity && (
                       <span
-                        className={`ml-2 rounded-full px-2 py-0.5 text-xs ${severityBadgeClasses[d.severity] ?? "bg-(--brand-secondary)/40 text-[#1f2a1f]"}`}
+                        className={`ml-2 rounded-full px-2 py-0.5 text-xs ${severityBadgeClasses[d.severity] ?? "bg-(--brand-secondary)/40 text-(--text-heading)"}`}
                       >
                         {severityLabels[d.severity] ?? d.severity}
                       </span>

@@ -1,5 +1,5 @@
 import type { Metadata } from "next";
-import { Geist, Geist_Mono } from "next/font/google";
+import { Geist, Geist_Mono, Fraunces } from "next/font/google";
 import "./globals.css";
 import { getCurrentTenant } from "@/lib/tenant/resolve";
 import { auth, signOut } from "@/lib/auth";
@@ -21,6 +21,15 @@ const geistMono = Geist_Mono({
   subsets: ["latin"],
 });
 
+// Warm, organic display serif for headings/card-titles only — body copy
+// stays on Geist Sans (clean, neutral, already tuned for this app's
+// data-dense screens). See globals.css's @theme for the font-display
+// utility this produces.
+const fraunces = Fraunces({
+  variable: "--font-fraunces",
+  subsets: ["latin"],
+});
+
 export async function generateMetadata(): Promise<Metadata> {
   const tenant = await getCurrentTenant();
   return {
@@ -39,7 +48,7 @@ export default async function RootLayout({ children }: LayoutProps<"/">) {
   return (
     <html
       lang="en"
-      className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}
+      className={`${geistSans.variable} ${geistMono.variable} ${fraunces.variable} h-full antialiased`}
       style={
         {
           "--brand-primary": tenant.primaryColor,
@@ -48,7 +57,7 @@ export default async function RootLayout({ children }: LayoutProps<"/">) {
       }
     >
       <body
-        className="min-h-full flex flex-col bg-[#faf8f2] text-[#1f2a1f]"
+        className="min-h-full flex flex-col bg-(--background) text-(--text-heading)"
         suppressHydrationWarning
       >
         <SiteHeader tenant={tenant} session={session} isPaid={isPaid} signOutAction={signOutAction} />

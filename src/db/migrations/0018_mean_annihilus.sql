@@ -1,0 +1,1 @@
+ALTER TABLE "plan_recommendations" ADD COLUMN "regeneration_count" integer DEFAULT 0 NOT NULL;

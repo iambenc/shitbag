@@ -10,7 +10,7 @@ export default async function Home() {
       <span className="text-4xl" aria-hidden>
         🌿
       </span>
-      <h1 className="text-3xl font-semibold leading-tight text-(--brand-primary)">
+      <h1 className="font-display text-3xl font-semibold leading-tight text-(--brand-primary)">
         Grow more from the space you&apos;ve got.
       </h1>
       <p className="text-lg text-(--text-muted)">

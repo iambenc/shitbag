@@ -866,3 +866,1028 @@ actually looks good, and a byproduct of my own testing on a persistent demo acco
 user data — cleaned it up (deleted all grow_plans/plan_recommendations/tasks for the demo user,
 regenerated one fresh grow plan through the real UI) rather than leaving it for a future session to
 trip over.
+
+---
+
+## Feature — shopping list auto-adds seed & equipment purchases from grow plans
+
+Requested, then scoped via a clarifying question (3 options offered; user picked the broadest):
+seed purchases implied by a grow plan previously only reached the shopping list via a Monday-06:00
+cron job with a 14-day lookahead (`weeklyShoppingList.ts`), and the "Add to shopping list" badge on
+`/grow-plan` recommendation cards was purely decorative — confirmed via grep, it was a `<span>`,
+never wired to any action. Equipment never touched the shopping list at all.
+
+**Honest scoping call, made explicit rather than silently guessed**: crops have no equipment
+relationship anywhere in this schema — no crop→equipment-type mapping exists, and inventing one
+(e.g. "carrots need a raised bed") would mean hand-authoring domain knowledge not backed by any
+real data. So "equipment relevant to the grow plan" is deliberately *not* per-crop; it's "growing-
+space equipment you don't yet own, surfaced the moment a plan gives you a reason to think about
+it" — narrowed to `SLUG_TO_GROWING_AREA_TYPE`'s 5 types (seed trays/pots/planters/raised beds/
+garden beds), explicitly excluding the watering can even though it's in the same tenant equipment
+catalog, since that mapping's own existing comment already draws the right distinction: "a tool,
+not growing space."
+
+**Schema**: `shopping_list_items` gained `equipmentTypeId` (nullable, FK `equipmentTypes`), and its
+two-column XOR check constraint became a real three-way `num_nonnulls(crop_id, free_text,
+equipment_type_id) = 1`, renamed (not reused) so the migration diff was unambiguous — confirmed
+Postgres's `num_nonnulls` accepts the mixed uuid/text columns via its `"any"`-pseudo-type variadic
+with no cast needed. Generated migration was exactly the predicted clean `DROP CONSTRAINT` +
+`ADD COLUMN` + `ADD CONSTRAINT` triple, no manual SQL. RLS + constraint spot-checked directly
+against Postgres (both invalid-combination rejections and the cross-tenant negative test).
+
+**Immediate insert**, added to `generateGrowPlan.ts`'s existing `persist-results` transaction
+(same one that writes `planRecommendations`/`tasks`) rather than a new step: seed items for every
+`requiresPurchase` recommendation, and equipment items for every un-owned growing-space type — both
+deduped by "already exists for this user+item, regardless of status" (mirrors
+`weeklyShoppingList.ts`'s own convention exactly, so a purchased-and-since-forgotten item never gets
+re-suggested). `weeklyShoppingList.ts` itself was deliberately left unchanged — not dead code, a
+real backstop for plans generated before this shipped, confirmed empirically (not just reasoned
+about): triggered it directly against a demo account that already had immediate items and confirmed
+it added nothing new. The "no race against the weekly cron" claim is stronger than "probably fine"
+— both writers' recommendation-read and shopping-item-write happen inside the *same* transaction,
+so under Postgres's READ COMMITTED isolation the weekly job can never observe a recommendation
+without also observing its already-committed shopping-list item.
+
+**UI**: since the schema now supports equipment items, the manual "Add" form on `/shopping-list`
+gained a real third mode ("Equipment," alongside "From catalog"/"Custom item") rather than leaving
+equipment items addable only by the system — a schema capability with no matching UI would've been
+a half-finished feature. Equipment items render with a generic 🧰 icon (equipment types have no
+per-type emoji in the schema, unlike crops).
+
+Verified against the demo account, including a real mixed-ownership scenario (some stray leftover
+equipment rows from earlier sessions' testing meant the account already owned pots/raised-beds/
+seed-trays but not planters/garden-beds — a better test than a clean-slate account, since it
+actually exercises the "owns some, not others" filtering rather than an all-or-nothing case):
+generated a plan, confirmed exactly the un-owned types got added and the watering can didn't;
+regenerated the plan and confirmed zero duplicates; manually added a watering can via the new
+Equipment mode and confirmed it renders, persists, and toggles correctly. `tsc --noEmit` and
+`eslint` clean. Demo account's shopping list, grow plans, tasks, and equipment were reset to a
+clean baseline afterward and one fresh grow plan regenerated through the real UI, same restoration
+pattern as the two other fixes this session that touched the persistent demo account.
+
+---
+
+## Fix — shopping list suggested garden beds (not purchasable) and re-nagged for owned equipment
+
+Two corrections from the user, both real, both about the shopping-list auto-add feature above:
+
+1. **Garden beds aren't a product.** Unlike pots/planters/raised beds/seed trays, a "garden bed" in
+   this app is just ground in the user's own garden they've designated for growing — nothing to buy.
+   The equipment-suggestion logic had been reusing `SLUG_TO_GROWING_AREA_TYPE` wholesale (all 5
+   growing-space types), which conflated "can be placed as a growing area" with "can be purchased."
+   New `PURCHASABLE_GROWING_SPACE_SLUGS` in `src/lib/garden/equipmentMapping.ts` — the same 5-type
+   set minus `garden-beds` — used only by the shopping-list suggestion logic in
+   `generateGrowPlan.ts`. `SLUG_TO_GROWING_AREA_TYPE` itself is untouched, since garden beds are
+   still a completely valid *placeable* growing area on `/garden` — only the "should we suggest
+   buying this" question changed.
+2. **Owning equipment should stop the shopping-list nagging, not just prevent new nags.** The
+   original design already excluded currently-owned types from *new* suggestions at grow-plan-
+   generation time, but that's a one-time check — nothing reconciled *existing* pending shopping
+   items against equipment recorded *afterward* via `/garden`'s editor (the two data models are
+   otherwise fully independent, by design, since the earlier `/garden` fix this session went to real
+   trouble to keep `userEquipment` row identity stable rather than churning it). Fixed in
+   `updateEquipmentAction` (`src/lib/actions/garden/equipment.ts`): after saving equipment, any
+   *pending* shopping-list item for a type just confirmed as owned gets marked `purchased` — not
+   deleted, so it still shows in the "already got" section as a record, rather than silently
+   vanishing. Scoped to one direction only (owning something clears the ask to buy it); removing
+   equipment from inventory does *not* re-add a shopping-list suggestion — a more aggressive,
+   unrequested behavior that risks re-nagging someone for a reason they can't see (e.g. they just
+   corrected a data-entry mistake).
+
+Verified against the demo account from a clean slate: generated a plan, confirmed the shopping list
+got the 4 genuinely-purchasable equipment types but never "Garden Beds"; then recorded "Pots" as
+owned via `/garden`, confirmed via direct Postgres query that specifically the Pots shopping item
+flipped to `purchased` while every other pending item (seed trays, planters, raised beds) was left
+untouched — proving the reconciliation is scoped to what was actually just saved, not a blanket
+"clear everything" pass. `tsc --noEmit` and `eslint` clean. Demo account reset and one fresh grow
+plan regenerated afterward, same restoration pattern as every other fix this session touching it.
+
+---
+
+## Feature — self-extending crop knowledge base
+
+Requested by the user: today `crops` (spacing, soil depth, sow windows, harvest days, feeding
+notes) is a hand-curated, 25-row global catalog, and the grow-planner AI was hard-constrained to
+only ever recommend crops already in it. The ask was to make the catalog grow itself — when the AI
+would recommend a crop that isn't cataloged yet, look it up once via a dedicated AI call, persist
+the result, and never ask again, for any tenant, since `crops` is deliberately global/non-tenant-
+scoped. Explicitly accepted risk: a newly-added crop is usable in a live recommendation immediately,
+marked `verified: false`, with no admin-review gate before use for v1 — the flag exists so a review
+workflow can be added later without a further migration, but building that workflow itself was
+out of scope this round.
+
+**Schema** (`src/db/schema/crop.ts`, migration `0011_yielding_christian_walker.sql`): `crops` gained
+`verified` (boolean, default `true` — every curated row stays `true`; only the new AI-backfill path
+sets `false`), plus nullable `sourceProvider`/`sourceModel`. The latter two exist specifically so a
+mock-fallback-created row (`"mock"` / `"mock-crop-facts-v1"`) stays distinguishable from a row a real
+model genuinely attempted but left unreviewed — without them the two would look identical once
+persisted, unlike every other mock path in this app, whose output is shown once and discarded rather
+than written into a shared table forever.
+
+**Third AI agent slot**: `tenantAIConfigAgentEnum` (`src/db/schema/tenant.ts`) gained `"crop_facts"`
+— confirmed a zero-migration change, since that column is a plain `text` field with no DB-level enum
+constraint (the Drizzle `{ enum: [...] }` option is TypeScript-only). Kept as its own slot rather than
+reusing `grow_planner`: matches the existing one-capability-per-slot granularity (planning and
+diagnosis are already separate despite both being "gardening AI"), lets a tenant point it at a
+cheaper/faster model, and stops a misconfigured planning key from also breaking catalog backfill.
+`/admin/ai`'s `AGENT_LABELS` gained one entry; its form section rendered automatically since that
+page already iterates the enum.
+
+**New agent** `src/lib/ai/agents/cropFacts.ts` (`getCropFacts(tenantId, cropName)`) mirrors
+`growPlanner.ts`'s shape: a Zod `CropFactsOutputSchema` covering every insertable `crops` column
+*except* `name`, which is an input parameter, not something the agent invents and then has discarded
+in favour of the caller's own value. Resolves via `getModelForTenant(tenantId, "crop_facts")`; the
+dev-mode mock fallback returns a generic, clearly-labelled guess.
+
+**`growPlanner.ts`**: `recommendations[]` gained `newCropName: string | null`, set only when
+`cropSlug` isn't in the supplied catalog, with the same `cropSlug` string reused across that crop's
+`tasks[]` (tasks already tolerated an unresolved slug by falling back to `cropId: null`, so nothing
+new breaks if the AI is ever inconsistent). The prompt's catalog line changed from "only recommend
+crops from this list" to "prefer this catalog, but you may propose a well-established, common
+home-garden crop not listed if you're confident about it." `buildMockPlan` gained one hardcoded
+new-crop recommendation + task ("Swiss Chard") so the mock path exercises the *entire* pipeline,
+including `cropFacts.ts`'s own mock fallback, not just the catalog-only case.
+
+**`generateGrowPlan.ts`** gained a `resolve-new-crops` step between `call-agent` and
+`persist-results`, inside the existing `try` block so a failure there still routes to `mark-failed`.
+Per candidate, in this order: live `SELECT` by slug against `crops` *before* ever calling the facts
+agent (a crop another tenant already backfilled must never trigger a second AI call) → only on a
+genuine miss, call `getCropFacts` → `INSERT ... ON CONFLICT (slug) DO NOTHING` with `sortOrder` set
+past the current max (computed once per step run) so new crops append after the curated list rather
+than sorting first → re-`SELECT` for the definitive winning row. Processed sequentially (`for...of`,
+not `Promise.all`) so a duplicate proposal within one output self-dedupes on its second pass. Returns
+a map merging the original catalog snapshot with every newly-resolved id, so `persist-results`'
+existing `cropIdBySlug[...]` lookups (recommendations, tasks, and the shopping-list auto-add block
+from the previous feature) pick up new crops with zero further code changes. Accepted, documented
+sub-risk: dedup is exact-slug-match only — a near-duplicate (different casing, a synonym, a
+different slugification of "the same" crop) isn't caught and creates a second `verified: false` row,
+a nuisance for a future admin-review pass to merge, not a correctness bug.
+
+`/grow-plan`'s recommendation cards show a small "New, unverified" badge when the joined
+`crop.verified === false`.
+
+Verified two ways, since the demo tenant has a real Gemini key configured (so the deterministic mock
+path doesn't run against it): (1) triggered a real grow-plan generation end to end against the demo
+account — confirmed the modified schema/prompt didn't break the live `generateObject` call, and the
+existing recommendation/task/shopping-list pipeline still worked correctly afterward (0 new shopping
+items, since everything needed was already listed from a prior plan — the existing dedup logic held
+up unchanged); (2) isolated the `resolve-new-crops` dedup/insert logic itself (the genuinely novel,
+race-sensitive part) against the real dev DB with a hardcoded facts object, confirming a first call
+inserts a `verified: false` row stamped `sourceProvider: "mock"` with `sortOrder` correctly past the
+curated max, and a second call for the same crop hits the live-check path and reuses the same row
+rather than creating a duplicate. `tsc --noEmit` and `eslint` clean across the full project. All test
+grow-plan/task/recommendation rows and the test crop were deleted afterward; the demo account's
+`crops` table and grow-plan history are back to their pre-test baseline.
+
+---
+
+## Feature — grow planner fills existing growing areas
+
+Requested by the user: "The grow planner needs to take into account and make use of the growing
+areas and the equipment the user has in their inventory. The user should be able to add growing
+spaces which can then be filled by the grow planner, not the other way around." Until now the
+planner only ever saw aggregate counts (`"3x raised_bed"`) and never assigned a recommendation
+anywhere specific — its own prompt comment admitted as much: `GROWING SPACE (totals, not assigned
+to specific recommendations yet)`. `growingAreas.status` (`available`/`in_use`) already existed in
+the schema, unused, with a comment explicitly anticipating this exact feature ("nothing can be
+`in_use` yet in this phase, but the ordering is already correct for when Planting exists").
+
+**Schema**: `planRecommendations` gained a nullable `growingAreaId` FK to `growingAreas` (`onDelete:
+"set null"`, same orphan-not-cascade pattern as `tasks.cropId`) — migration
+`0012_short_carmella_unuscione.sql`.
+
+**`generateGrowPlan.ts`** gained a new first step, `free-previous-growing-areas`, run before
+`gather-context`: resets all of the user's `in_use` areas back to `available` and nulls any
+`planRecommendations.growingAreaId` still pointing at them. Without this, regenerating a plan would
+find zero available areas (all still claimed by the *previous* run) and produce nothing — every
+generation is a full re-plan of the whole plot, matching how the app already treats only the latest
+plan as authoritative. `gather-context` now passes the real, individual available areas
+(`id`/`type`/dimensions) instead of collapsing them into counts, plus a new `unplacedEquipment`
+figure (owned equipment quantity minus how much of it is actually placed as growing space,
+regardless of that space's status) so the AI can nudge the user toward placing spare capacity
+rather than the planner ever inventing space itself. `persist-results`' recommendation filter
+(previously only checking the crop slug resolved) now also requires `growingAreaId` to be a real,
+not-yet-claimed area from this run — same silent-drop-on-invalid-reference pattern already used for
+hallucinated crop slugs, and the dedup (first claim wins) doubles as the real capacity cap, since an
+area can never be assigned twice. Matched areas get `status = 'in_use'` immediately after the
+recommendations insert, in the same transaction.
+
+**`growPlanner.ts`**: `GrowPlannerInput` swaps `growingAreaCounts` for the real `growingAreas` list
+plus `unplacedEquipment`; `GrowPlanOutputSchema.recommendations[]` gained a required
+`growingAreaId`. Prompt now lists each available area by id and instructs the AI to assign every
+recommendation to exactly one, preferring a dimension fit (crop spacing/soil depth vs. area
+width/length/depth) where both are known but never leaving an area empty over an imperfect fit.
+`buildMockPlan` reworked to cap its picks at the number of available areas and zip them 1:1 (the
+existing synthetic "Swiss Chard" new-crop demo now only appears if there's a spare area left after
+the capped real picks, so the mock path can never claim more areas than exist either).
+
+**Generation gate**: a user with zero `growingAreas` rows at all (any status — regenerating frees
+`in_use` ones automatically, so only true zero should block) can't generate a plan. `/grow-plan`
+checks this once and swaps the Generate/regenerate button for a card pointing at `/garden` in every
+state (empty, failed, complete) rather than just the empty one, since the same underlying gap
+applies throughout. `generateGrowPlanAction` got the identical check server-side as a defensive
+backstop — a server action must never trust that the UI already prevented reaching it.
+
+**Display**: `/grow-plan` recommendation cards now show which area they're filling (type, emoji,
+size) via a left join (nullable FK, so older or since-removed area references degrade gracefully by
+just not showing a location). `/garden`'s `GrowingAreaManager` visualization cards now distinguish
+occupied from empty slots — occupied ones show the actual crop (emoji, name, a "Growing" label,
+tinted border) via a new left-join query in `page.tsx` (`growingAreas` status `in_use` → 
+`planRecommendations` → `crops`, grouped by `sourceUserEquipmentId`) — so the effect of generating a
+plan is visible in the same place the user manages space, not just invisible plumbing behind a
+stepper that quietly refuses to go below the occupied count.
+
+**Explicitly out of scope** (documented, not silently dropped): multiple crops sharing one growing
+area — each area holds exactly one recommendation at a time, matching the schema's existing binary
+`status` column exactly as already scaffolded, not a new capacity/percentage model; linking `tasks`
+to a growing area (calendar/task management doesn't need it, only the recommendation view does);
+hard server-side dimension-fit validation (prompt guidance only, same as `spacingCm` was already
+handled everywhere else in this codebase); any change to the watering can, the only non-growing-
+space equipment type, confirmed via `src/db/seed-data/equipment.ts` — it has no bearing on what can
+be grown.
+
+Verified against the demo account with a live Gemini key (no Playwright/browser tool available this
+session, so verification was direct-Postgres-plus-real-Inngest-trigger, consistent with how every
+prior feature this session was checked at the data layer): seeded 3 real growing areas (a pre-
+existing orphan raised bed with no equipment link, plus 2 pots newly placed from 3 owned, leaving 1
+genuinely unplaced), triggered a real generation, and confirmed all 3 recommendations landed on
+distinct areas, all flipped to `in_use`, dimensions correctly referenced in the AI's own reasoning
+text ("50cm deep bed", "20cm pot"), and the summary proactively suggested placing the spare pot for
+a specific crop — the `unplacedEquipment` nudge working exactly as designed, unprompted, from the
+live model. Regenerated and confirmed the free/reassign cycle: the previous run's 3 recommendations
+had `growingAreaId` nulled, the same 3 areas got reused by the new run with zero duplicate claims
+and zero areas left orphaned in `in_use`. Verified the `/garden` occupancy join directly against
+Postgres, confirming it returns exactly the current plan's crop per occupied area with no stale
+rows leaking in from the freed prior plan. `tsc --noEmit` and `eslint` clean across the full project.
+All test grow-plan/task rows and temporary equipment/growing-area rows were removed afterward, and
+one final real plan was regenerated so the demo account is left with a genuine, presentable
+in-use raised bed rather than test debris.
+
+---
+
+## Feature — multi-stage grow planner (seed tray → pot → final space)
+
+Requested by the user: "ensure that the grow planner considers the full cycle of seed trays (where
+applicable), transplantation to pots, transplantation to the plant's final growing space. When
+tasks for transplantation are completed the previous piece of equipment should be released from
+the inventory and the next marked as in use in the inventory." Until now a recommendation was
+assigned to exactly one growing area for its whole life. Real gardening often isn't one-stage — a
+crop with an indoor sow window is commonly started in a seed tray, potted on, then planted out into
+its final bed. "Where applicable" means the AI decides per crop (using the catalog's
+`sowIndoorFromMonth/ToMonth` fields already in the prompt) how many stages it needs; most stay
+single-stage exactly as before.
+
+Design validated in a review pass against the actual code before implementation — it caught a real
+staleness bug in the first draft (freeing an area without also clearing the *old* stage row's
+pointer to it would let a reassigned pot's occupancy join show the previous plan's crop once
+reassigned), corrected the ownership-check approach for the new task-completion logic (no extra
+join needed — scoping the task fetch by `userId` already suffices), and flagged a required step
+easy to miss (`db:harden` must re-run after the migration so the new table's RLS is actually
+enforced against the app role, not just defined in the schema).
+
+**Schema**: `growingAreaStatusEnum` widened to `available | reserved | in_use` — `reserved` means
+earmarked for a later stage of a specific recommendation, claimed so nothing else can take it but
+not physically holding anything yet. New table `planRecommendationStages` (`src/db/schema/grow-
+plan.ts`): one row per stage of a recommendation's lifecycle (`stageIndex`, `growingAreaId`,
+`status: upcoming|active|done`), every recommendation gets at least one (even today's single-stage
+crops, `stageIndex: 0`). `planRecommendations.growingAreaId` is **removed** entirely, replaced by
+always going through the stages table — rejected keeping it as a denormalized "current stage"
+convenience column since four separate write paths (persist, task-completion forward/reverse, plan
+regeneration) would each need to remember to keep it in sync, for an immaterial query-cost saving.
+No backfill migration — dev/demo data only, a plan is one click to regenerate. `tasks` gains
+`activatesStageId` (nullable FK to the new table) — set only on the task representing a transplant
+into a given stage; the human-readable title stays free text as before.
+
+**AI schema/prompt** (`src/lib/ai/agents/growPlanner.ts`): `recommendations[].growingAreaId`
+became `recommendations[].stages: {growingAreaId}[]` (1-3, ordered first-to-final).
+`tasks[].activatesGrowingAreaId: string | null` lets the AI mark which task performs a given
+transition, resolved server-side to a real `activatesStageId` via a map built from the just-
+inserted stage rows — no synthetic ids needed since each stage's `growingAreaId` is already unique
+per plan by construction. Prompt gains guidance: most crops need one stage; an indoor sow window is
+the natural signal for starting in a seed tray or pot first; never invent a stage without real,
+distinct space for it. `buildMockPlan` reworked from "one area per recommendation" to a type-aware
+pool (seed tray / pot / final-space types tracked separately) so it can build one genuine
+multi-stage demo (with a matching transplant task) whenever a seed tray and a final-space area are
+both available, falling back to single-stage otherwise — every mock path in this app should be
+fully exercisable without a live key, not just the common case.
+
+**`generateGrowPlan.ts`**: `free-previous-growing-areas` widened to free `reserved` areas too (not
+just `in_use`), and — the bug the review caught — now also nulls `planRecommendationStages
+.growingAreaId` for old stage rows still pointing at a freed area (previously this nulling happened
+on `planRecommendations` directly; retargeted at the new table since that column no longer exists).
+Without this, a freed-and-reassigned pot would carry two stage rows pointing at it, one stale-
+`active` from the superseded plan and one real-`active` from the new one, and the `/garden`
+occupancy join would show the wrong crop. `persist-results` insert order: recommendations →
+stages (via `.returning()`, building a `growingAreaId → stageId` map) → two `UPDATE growing_areas`
+calls (stage-0 ids to `in_use`, stage 1+ ids to `reserved`) → tasks (resolving
+`activatesGrowingAreaId` through the map) → existing shopping-list/equipment logic, unchanged.
+Stage validation extends the existing dedup-by-first-claim check (previously one id per
+recommendation) to walk every stage of every recommendation against the same available/not-yet-
+claimed set, truncating at the first invalid/duplicate stage rather than dropping the whole
+recommendation — stage 0 alone is still a fully valid, if downgraded, plan.
+
+**`toggleTaskCompleteAction`** (`src/lib/actions/tasks.ts`) — the single choke point every task
+checkbox in the app already called — gained the release/claim mechanics: completing a task with
+`activatesStageId` set marks the preceding stage `done` + releases its area, and the target stage
+`active` + claims its area. Un-completing mirrors this in reverse (current stage back to `upcoming`
+/ reserved, preceding stage back to `active`/`in_use`), guarded so an area that's since been deleted
+or reassigned elsewhere just gets skipped rather than erroring — the whole point of the feature is
+the release/claim symmetry, so leaving state stuck forward on an accidental un-check would undermine
+it. A lightweight idempotency guard (only apply the transition if the task's freshly-read DB status
+is actually changing) covers a double-click firing two overlapping toggles, matching this
+codebase's existing risk tolerance (no row locking used here or elsewhere in this pipeline).
+
+**UI**: `/garden`'s occupancy join relocated from `growingAreas → planRecommendations.growingAreaId`
+to `growingAreas → planRecommendationStages(status='active') → planRecommendations → crops`, plus a
+parallel query for `reserved`-status areas so those tiles can show *which* crop they're earmarked
+for (not just a bare "reserved" label) — `GrowingAreaManager`'s visualization cards now render three
+distinct states (growing / reserved / empty) instead of two, closing a gap the feature would
+otherwise leave confusing (a seemingly-empty pot silently refusing to let the stepper go below its
+placed count, with no visible reason why). `/grow-plan`'s recommendation grouping (built one task
+ago — identical crop+area-type+size recommendations collapse into one "3 x 20cm pots of Spring
+Onions" card) now groups by a recommendation's *current* stage rather than a fixed area, so two
+sibling instances that have progressed to different stages correctly end up in different groups;
+cards also surface a "next: pot, once transplanted" hint from the immediate next `upcoming` stage.
+
+**Explicitly not validated**: stage-type ordering (that stage 0 is actually a seed-tray/pot type and
+the last stage a final-space type) — prompt guidance only, consistent with how crop-to-area
+dimension fit was already never server-validated either.
+
+Verified via direct Postgres + a real end-to-end Inngest trigger against the demo account (no
+browser tool available this session): a real generation against the live Gemini key completed
+successfully and produced five single-stage recommendations, correctly exercising the unchanged
+common path post-refactor (the AI judged these particular late-summer crops didn't need seed-tray
+starting — a legitimate model decision, not a bug). Since the live model didn't choose to
+demonstrate the multi-stage path in that run, hand-built a 3-stage recommendation (seed tray → pot
+→ raised bed) directly in Postgres matching exactly what `persist-results` would produce, then
+replicated `toggleTaskCompleteAction`'s exact SQL logic in a script (the real action itself needs an
+authenticated Next.js request context via `auth()`, unavailable to a plain script) to drive it
+through: potting-on correctly released the seed tray to `available` and claimed the pot to `in_use`
+(leaving the still-reserved raised bed untouched); planting-out correctly released the pot and
+claimed the raised bed; un-completing the planting-out task correctly reversed it back to the
+post-potting-on state exactly. `tsc --noEmit` and `eslint` clean across the full project. All
+hand-built test rows removed and the three borrowed areas reset to `available` afterward; the
+demo account's real AI-generated plan (five recommendations, five correctly `in_use` areas, no
+orphaned or duplicate claims) was left in place as its clean, presentable latest state.
+
+---
+
+## Feature — label indoor planting tasks
+
+Requested by the user: "Let's label indoor planting tasks." Tasks had no structured signal for
+whether a sowing task happens indoors (e.g. into a seed tray) versus directly outdoors — that
+distinction only ever existed as free text in the AI's task title/explanation, with no way for the
+UI to render a badge for it. Considered deriving this from the multi-stage data built one task ago
+(a task's `activatesStageId` linking to a stage whose growing area is a `seed_tray`), but that
+mechanism only covers *transplant* tasks (stage 1+) — the *initial* sow task (stage 0) has no
+equivalent structural link today, and adding one risked a real bug: reusing `activatesStageId` for
+the initial sow task would make un-completing it incorrectly release/reserve the crop's current
+growing area, even though the plant is still physically there. Simpler and safer: let the AI say so
+directly, the same way it already authors every other task detail (title, explanation, timing) —
+add a plain `isIndoor` boolean the AI sets per task, independent of the stage-linking machinery
+entirely.
+
+**Schema**: `tasks` gains `isIndoor: boolean` (not null, default `false`). Manual and weather-
+sourced tasks stay `false` (a user didn't say indoor; weather tasks are about protecting outdoor
+plants) — only AI-generated grow-plan tasks ever set it `true`.
+
+**AI schema/prompt** (`src/lib/ai/agents/growPlanner.ts`): `tasks[].isIndoor: z.boolean()` (required,
+matching the existing style of other per-task fields — not nullable/optional). Prompt instruction 5
+(already covering indoor-sowing preference) extended: mark `isIndoor` true on the sowing task
+whenever it starts the crop indoors ahead of its outdoor season, false on every other task including
+every later transplant. `buildMockPlan`'s one seed-tray-starting demo task gets `isIndoor: true`;
+every other task (single-stage sows, feeding, succession, transplants, the new-crop demo) gets
+`false` explicitly, keeping the mock's every-field-exercised guarantee intact.
+
+**`generateGrowPlan.ts`**: one line — the `tasks` insert in `persist-results` now carries
+`isIndoor: t.isIndoor` straight through from the AI's output alongside the existing fields.
+
+**Display**: both places a task checkbox already renders — `src/app/calendar/CalendarView.tsx` and
+`src/app/dashboard/ThisWeekTasks.tsx` — gained an "Indoor" badge next to the title when
+`task.isIndoor`, styled consistently with the existing `source`/`missed` badges in each. Both
+server components feeding them (`calendar/page.tsx`, `dashboard/page.tsx`, in both its "This week"
+and embedded-calendar sections) now pass `isIndoor` through their existing per-field `.map()`
+projections. `createTaskAction`'s `CreatedTask` type/return also carries `isIndoor` (always `false`
+for manually-created tasks) purely for type consistency with the `Task` shape both client components
+share.
+
+Verified via a real end-to-end Inngest trigger against the demo account (live Gemini key): the AI
+correctly used the new field — batch-indoor-start tasks like "Sow Lamb's Lettuce (Batch 1)" and "Sow
+Spinach seeds (Batch 1)" came back `isIndoor: true`, each paired with a later "Transplant ... (Batch
+1) to Planter/Raised Bed" task carrying a real `activatesStageId` (confirming these were genuine
+multi-stage sequences, not mislabeled), while every "Direct Sow X in Raised Bed/Planter/Pot" task
+came back `isIndoor: false` — exactly the intended distinction, unprompted beyond the prompt
+instruction itself. `tsc --noEmit` and `eslint` clean across the full project. No test data required
+cleanup this time (the verification run's plan was left in place as the demo account's genuine,
+presentable latest state, consistent with how every generation this session either demonstrates the
+feature cleanly or gets removed).
+
+---
+
+## Feature — pot sizing in cm or litres
+
+Requested by the user: "In the user's inventory, pots should be able to have sizing in cm or
+litres, update this and the growing agent to reflect this." `userEquipment`/`growingAreas` both
+carried a `sizeLabel: text` column for the `"sized"` equipment category (today, only pots) — pure
+free text with no unit concept at all (a placeholder just hinted "e.g. 20cm"); nothing parsed it
+anywhere it was read. The ask was to make cm-vs-litres a real, structured choice end to end: the
+inventory entry form, and what the grow-planner AI is told.
+
+Design validated in a review pass before implementation — it found 2 raw `sizeLabel` accesses in
+`/grow-plan/page.tsx` that bypass that file's own formatting helper entirely (the single-instance
+recommendation card's size line and the "next stage" hint), which a less careful pass would have
+missed since only one of the file's four touch points visibly goes through the helper. It also
+caught that defaulting the new unit selector to "cm" needs to apply to *existing* rows too (every
+one of which has `sizeUnit: null` after a no-backfill migration), not just freshly-added ones, and
+confirmed dropping the old column with no backfill was safe and already precedented once this
+session — free text can't be reliably reverse-parsed into a `(value, unit)` pair regardless.
+
+**Schema**: new `sizeUnitEnum = ["cm", "litres"]` in `src/db/schema/equipment.ts`.
+`userEquipment.sizeLabel` and `growingAreas.sizeLabel` both replaced with `sizeValue: real` +
+`sizeUnit: text({enum: sizeUnitEnum})`, both nullable — matching this schema's existing
+`widthCm`/`lengthCm`/`depthCm` convention of never DB-enforcing per-category requiredness, only
+implying it through which UI fields render. No both-or-neither check constraint added either:
+`widthCm`/`lengthCm` on these same tables have the identical two-columns-one-measurement
+relationship with no such enforcement today, so adding one only for the new pair would be
+inconsistent, unrequested strictness. Migration generated in two steps rather than one — a single
+combined "drop one column, add two" diff on the same table sent `drizzle-kit generate` into an
+interactive rename-vs-drop+add prompt with no TTY available in this environment to answer it; adding
+the new columns first, then dropping `sizeLabel` in a separate follow-up migration, produced the
+same end state with each step unambiguous.
+
+**Shared formatter**: `formatSizeValue(value, unit)` added to `src/lib/garden/labels.ts` (already
+home to `growingAreaTypeLabels`/`growingAreaTypeEmoji`) — takes two primitives rather than a shared
+type, since the three call sites that use it (`GrowingAreaManager.tsx`, `grow-plan/page.tsx`,
+`growPlanner.ts`) have genuinely different surrounding shapes and different "nothing to show"
+fallback text (`null` vs `"size unknown"`); only the value-or-cm-or-litres formatting sliver is
+shared, each site keeps its own outer fallback-to-width×length-string wrapper.
+
+**Entry UI** (`src/components/EquipmentPicker.tsx`, shared by `/garden` and
+`/onboarding/equipment`): the free-text "Size" field for `category === "sized"` became a number
+input plus a cm/L `<select>`. New rows default to "cm"; the component's `useState` initializer
+defaults *existing* rows the same way (`sizeUnit: r.sizeUnit ?? "cm"`) rather than only handling
+newly-added ones, per the review's catch above. Both pages that feed this component
+(`garden/page.tsx`'s two projections, `onboarding/equipment/page.tsx`'s one) updated to pass
+`sizeValue`/`sizeUnit` through instead of `sizeLabel`, as did `syncGrowingAreasAction`'s copy from
+owned equipment into a newly-placed growing area.
+
+**Growing agent** (`src/lib/ai/agents/growPlanner.ts`): `GrowPlannerInput.growingAreas[]` carries
+`sizeValue`/`sizeUnit`; the existing spacing/dimension-fit prompt instruction gained one clause —
+a pot's size may be a cm diameter or a litres volume, and a litres figure should be judged with
+general horticultural knowledge (rough bands: ~1-2L small herbs, ~5-10L most vegetables, 15L+
+larger plants) rather than compared arithmetically against `spacingCm`/`soilDepthCm`, which only
+makes sense for a diameter. `buildMockPlan` needed no change — confirmed it never reads area size
+at all, only groups by `.type`; its type alias picked up the new fields automatically.
+
+Verified via a real end-to-end Inngest trigger against the demo account: set one pot's growing area
+to 10 litres and another to 20cm directly in Postgres, regenerated, and confirmed the full pipeline
+(persisted correctly, `tsc`/`eslint` clean across all 13 touched files) completed without error —
+the live AI didn't happen to choose those two specific pots out of the ~30 available ones for its
+5 recommendations that run (pots are interchangeable to the picker, so this is expected, not a
+bug), and forcing a specific choice by temporarily marking the other pots `reserved` turned out to
+be unreliable — `free-previous-growing-areas` resets *all* of a user's `reserved`/`in_use` areas at
+the start of every generation regardless of how they got that way, so a manual reservation outside
+a real plan claim gets silently undone before `gather-context` ever runs. Relied instead on the
+already-strong evidence: full-project `tsc`/`eslint` catching every remaining raw `sizeLabel`
+reference as a compile error, direct Postgres confirmation that `sizeValue`/`sizeUnit` round-trip
+correctly through the real pipeline unchanged, and a close read of `formatSizeValue`'s simple,
+pure, three-line logic. Test size values on the two unclaimed pots reverted to null afterward
+(they were raw-SQL test artifacts, not real user input); the demo account's real generated plan
+from this run was left in place as its clean, presentable latest state.
+
+---
+
+## Feature — accept/reject grow-plan recommendations individually
+
+Requested by the user: "For the garden planner allow the user to accept or reject the growing
+planner's recommendations individually, if a user rejects a recommendation a new one should be
+generated." Until now a recommendation was fully live the instant a plan was generated — no review
+step existed at all. Two product decisions confirmed directly with the user before designing:
+rejecting a *grouped* card (identical crop+area-type+size collapsed into one, e.g. "3 x 20cm pots
+of Spring Onion") replaces the whole group, not one instance within it; and "accept" is a real
+persisted status, not just a cosmetic UI acknowledgment.
+
+Design validated in a review pass before implementation — it caught a real transaction-atomicity
+bug in the first draft (the replacement persist step must be one atomic transaction covering all N
+instances *and* the old rows' retirement together, or a failure partway through could leave
+duplicate live recommendations), a genuine race between a per-recommendation reject and a full-plan
+regeneration both claiming the same growing area, and a grouping-key gap that could silently merge
+rows of different statuses into one card.
+
+**Schema**: `planRecommendations` gains `status: pending|accepted|regenerating|rejected` (default
+`pending`) — new recommendations start awaiting review; `regenerating` is set the instant a reject
+is requested, before any AI call, so the UI can show a placeholder immediately; `rejected` rows are
+kept, never deleted. Migration backfills every *existing* row to `accepted` rather than leaving the
+column default (`pending`) apply to them — they already have committed real-world effects (tasks
+scheduled, areas claimed), so from the user's perspective they were implicitly already accepted;
+otherwise the whole demo account would suddenly show everything as "unreviewed." `tasks` gains
+`planRecommendationId` (nullable FK) — the only existing recommendation→task link was `cropId`,
+ambiguous whenever two recommendations in one plan share a crop (exactly the scenario the grouping
+feature exists for), so rejecting one of three identical "pot of Spring Onion" recommendations
+couldn't otherwise reliably clean up only its own tasks. No new column on `shoppingListItems` — the
+existing shopping-list dedup-add is already crop-level, not recommendation-level, and this codebase
+never deletes shopping items anywhere, so a rejected recommendation's possibly-still-needed pending
+item staying put is consistent with existing behavior, not a new gap.
+
+**New agent** `src/lib/ai/agents/recommendationReplacement.ts` (small dedicated file, matching the
+`cropFacts.ts` precedent), resolved via the same `grow_planner` tenant-AI-config slot as the main
+planner — same underlying capability, narrower scope, not worth a new configurable slot. Because a
+rejected group of N identical-shape recommendations should regenerate as one consistent replacement
+(same new crop across all N, so they plausibly re-group afterward), the agent makes one decision
+given one representative stage shape plus an `instanceCount`, returning a task *template* keyed by
+`activatesStageIndex` (1-based, relative) rather than concrete area ids — the Inngest job replicates
+that template across each instance's own real, already-known area ids. One shared reasoning/
+harvest-window/task-set applied identically across all N instances is an accepted simplification:
+the group already displayed one merged reasoning and widened harvest window *before* rejection, and
+the main planner's own harvest-staggering instruction only ever applies across a whole plan, not
+within one grouped instance. `buildMockReplacement()` fallback included, matching every other agent.
+
+**New Inngest function** `src/inngest/functions/regenerateRecommendation.ts` (registered in
+`/api/inngest/route.ts`), triggered by `recommendation/rejected`. Gathers shared context (profile/
+seeds/favorites/dislikes/harvest/catalog, duplicated from `generateGrowPlan.ts` rather than
+extracted — the two call sites differ enough that sharing wasn't worth risking proven code for one
+reuse) plus each rejected instance's own stage sequence and the plan's other active crops (for
+exclusion); calls the agent once; resolves a new-crop backfill if needed (a duplicated single-crop
+version of `generateGrowPlan.ts`'s `resolve-new-crops`, same "don't refactor proven code for a
+second caller" reasoning); then **one** transaction doing everything: insert all N replacement
+instances (recommendations, stages reusing each instance's own already-claimed area ids — no
+`growingAreas.status` update needed, they're already correctly `in_use`/`reserved` — and tasks) plus
+retire all N old ones (delete their tasks via the new FK, null their stages' `growingAreaId`
+mirroring `free-previous-growing-areas`'s exact staleness-prevention pattern, mark them `rejected`).
+Single transaction deliberately, not split across steps — a failure partway through a multi-step
+version could leave some instances swapped and others not; Postgres rollback makes "all N or none"
+free. Failure reverts all N old rows to `pending` with one unconditional update, mirroring
+`mark-failed`'s existing shape.
+
+**Race fix**: `free-previous-growing-areas` in the main planner unconditionally frees every claimed
+area with no awareness of an in-flight per-recommendation regeneration — a full regenerate racing a
+reject could hand the same area to two different new recommendations. Fixed by guarding
+`generateGrowPlanAction` (same style as its existing `hasGrowingArea` check) to block if any of the
+user's current-plan recommendations is `regenerating`; the UI hides "Generate a new plan" under the
+same condition.
+
+**Actions & polling**: `src/lib/actions/recommendations.ts`'s `acceptRecommendationAction`/
+`rejectRecommendationAction` do ownership + idempotency + the status flip in one atomic guarded
+`UPDATE ... RETURNING` (not a read-then-write, which would race with itself) — `planRecommendations`
+has no `userId` column, so ownership is verified via a `growPlanId` subquery against `growPlans`.
+New status route `/api/plan-recommendations/[id]/status` mirrors the two existing status routes
+exactly; singular, not plural, because the atomic guarded update plus the single-transaction persist
+together guarantee every id in a rejected group is always in lockstep, so polling just
+`group.recommendationIds[0]` is sufficient.
+
+**UI** (`src/app/grow-plan/page.tsx`): query excludes `rejected`; `groupRecommendations()`'s key
+gains `status` (without it, a fresh `pending` replacement from rejecting a *different* group could
+silently merge into an already-`accepted` group's card); each card gets Accept/Reject buttons
+(`RecommendationActionButtons.tsx`, new); a `regenerating` group renders `RegeneratingCard.tsx`
+(new) — a small polling placeholder, deliberately not `JobInterstitial` (now full-screen/page-
+blocking by design, disproportionate for one scoped card).
+
+Verified end-to-end against the demo account: generated a real plan, accepted one recommendation
+(status flip only, no side effects), rejected two together in one call (simulating a grouped reject
+— replicating the actions' exact atomic-update logic in a script, since the real "use server"
+actions need an authenticated request context unavailable to a plain script) and confirmed via
+Postgres: both replacements landed as the *same* crop (confirming the one-decision-per-group design
+worked), each correctly claimed its own original area, each got its own correctly-linked tasks (via
+`planRecommendationId`, not accidentally shared), the old recommendations' tasks were fully deleted,
+their stages' `growingAreaId` nulled, status `rejected` — and the growing-area status counts stayed
+exactly consistent throughout (no orphaned or double-claimed areas). `tsc --noEmit` and `eslint`
+clean across the full project. The demo account's resulting state is a fully valid, correctly-
+generated outcome (matching exactly what the real UI actions would produce) and was left in place
+rather than reverted.
+
+---
+
+## Feature — AI rate limiting (3 grow-plan generations/day, 5 retries per recommendation)
+
+Requested by the user: "Allow the user 3 total growing plan generations per day and a maximum of 5
+retries on each grow planner recommendation. Show the user how many attempts they have left." Two
+independent budgets against AI spend, layered on top of the full-plan-generation flow and the
+reject/regenerate flow (both already built): a daily cap on `generateGrowPlanAction`, and a
+per-recommendation cap on how many times the reject → AI-replacement cycle can repeat for one
+recommendation "lineage" — a lineage isn't one stable row, it's a chain of rows each superseding the
+last (rejecting doesn't mutate a row, it retires it and inserts a fresh replacement).
+
+Design validated in a review pass before implementation. It confirmed the core mechanics (an atomic
+`lt(regenerationCount, 5)` guard on the reject path, counting all `growPlans` rows regardless of
+status, local-server-time day boundary matching this codebase's one existing "what is today"
+convention) and surfaced three gaps, all fixed before shipping: the generate/try-again buttons had
+no submit-guard at all — unlike every other action button in this feature — so a double-click or two
+open tabs could exceed the daily cap; the recommendation-grouping key didn't include
+`regenerationCount`, so two rows that happened to share crop+area+size+status but had diverged retry
+counts could in principle land on one card and silently half-fail a reject; and the day-boundary
+computation needed to live in one shared place, not be inlined twice.
+
+**Schema**: `planRecommendations` (`src/db/schema/grow-plan.ts`) gains `regenerationCount: integer,
+default 0` — depth of the replacement chain that produced a row, not how many times that row itself
+was rejected (a row is rejected at most once before being replaced). A fresh recommendation from a
+full generation starts at 0; a reject's replacement gets `oldRow.regenerationCount + 1`. Plain
+additive migration, no rename ambiguity this time.
+
+**Shared limits/helpers**: `MAX_DAILY_GROW_PLAN_GENERATIONS` (3) and
+`MAX_RECOMMENDATION_REGENERATIONS` (5) live in a new `src/lib/ai/limits.ts` — not inline in the
+action files, because `"use server"` files may only export async functions (a plain `const` export
+there 500s the whole route at runtime, caught during verification, not by `tsc`/`eslint`). New
+`startOfTodayLocal()` in `src/lib/dates.ts`, alongside the existing `todayIso()`/`addDaysIso()`.
+
+**Daily cap**: `generateGrowPlanAction` (`src/lib/actions/growPlan.ts`) gets a new exported
+`getGrowPlanGenerationsToday(tenantId, userId)` — counts `growPlans` rows for the user with
+`createdAt >= startOfTodayLocal()`, all statuses included (the row is inserted, and the Inngest job
+dispatched, before success/failure is known, so a retry after a failure still consumes a slot).
+Blocks with the same defensive-redirect style as the two existing backstops once the count hits 3;
+shared by the page for the displayed remaining count, so the two can't drift. The generate/try-again/
+generate-a-new-plan buttons became a client component (`GeneratePlanButton.tsx`, mirroring
+`RecommendationActionButtons`'s disable-while-pending shape) — closes the double-submit gap the
+review caught; doesn't add server-side locking for the two-open-tabs case, an accepted v1 gap for a
+soft usage cap rather than a correctness invariant.
+
+**Retry cap**: `updateOwnedRecommendations` (`src/lib/actions/recommendations.ts`) takes an
+`enforceRetryCap` flag; the reject path passes `true`, adding `lt(regenerationCount, 5)` to the same
+atomic guarded `UPDATE ... RETURNING` already used for ownership/idempotency — a row already at the
+cap is just excluded from `.returning()`, same silent-drop convention as everywhere else in that
+function. Accept passes `false`, staying uncapped.
+`src/inngest/functions/regenerateRecommendation.ts`'s `Instance` type gained `regenerationCount`
+(free — `rejectedRecs` was already a full-row select); the persist step's replacement insert changed
+from N identical rows to `instances.map((inst) => ({..., regenerationCount: inst.regenerationCount +
+1}))`, using the same `instances[i]` ↔ `newRecs[i]` positional correspondence the step already relied
+on for `stageIdByRecAndIndex`.
+
+**UI**: `groupRecommendations()`'s key (`src/app/grow-plan/page.tsx`) gained `regenerationCount`,
+same rationale as the existing `status` addition — every row in a displayed group must share one
+retry count, since the displayed "N retries left" and the reject guard both depend on it.
+`RecommendationActionButtons` gained a `retriesRemaining` prop: shows "N retries left" next to
+Reject, replaces the button with "No retries left" at zero. The page shows "N of 3 plan generations
+left today" near each generate/try-again button and swaps the button for an informational message
+once exhausted.
+
+Verified end-to-end with real Inngest-triggered runs against the demo account (same script-based
+testing workaround as other features — server actions need an authenticated request context). Ran
+one recommendation through 5 full reject→replace cycles: `regenerationCount` climbed 0→1→2→3→4→5
+across five different replacement crops, each old row correctly retired (tasks deleted, stage area
+released) before the next replacement landed; the 6th reject attempt returned zero rows from the
+atomic guard and left the row untouched at `pending`, exactly as designed. Confirmed the daily-cap
+query directly against the account's real history (9 real generations already run today during this
+session's testing) — correctly computes 0 remaining and would block a 10th, matching intended
+behavior; note this means the demo account is capped for the rest of today as a direct, correct
+consequence of dev-testing volume, not a bug. `tsc --noEmit` and `eslint` clean across the full
+project; caught and fixed the `"use server"`-export runtime 500 (undetectable by either) during this
+pass. Test scripts removed; the demo account's resulting recommendation chain (a real, valid outcome
+matching exactly what the UI actions would produce) left in place.
+
+---
+
+## Feature — bias the grow planner toward high-value-to-buy crops
+
+Requested by the user: "let's get the grow planning agent to focus on higher cost to buy fruits and
+vegetables that a user could grow as part of the planning, maximise the user's value return." The
+global `crops` catalog had no price/cost data anywhere, so neither the main planner nor the reject→
+replace agent had any signal to weigh "worth growing yourself" against "cheap to buy anyway." A
+clarifying question confirmed the estimate should also show as a visible badge on each
+recommendation card, not just live inside the AI's freeform reasoning.
+
+Design validated in a review pass before implementation. It confirmed the full site inventory (2
+agents, 2 Inngest jobs, seed data, the UI — no missed third site) and caught: the hand-edited
+migration needs `--> statement-breakpoint` between each backfill statement (the migrator splits
+files on that literal string — matches the `0017` precedent); the new UI badge shouldn't reuse the
+existing "Add to shopping list" pill's styling, since the two very often co-occur on the same card
+and would read as a duplicated badge; and £/kg-normalized prices for bunch/packet-sold crops (herbs,
+garlic) produce large, odd-looking numbers (e.g. basil ~£35/kg) — mathematically correct as a
+ranking signal, flagged with a comment rather than treated as obviously fine.
+
+**Schema**: `crops` (`src/db/schema/crop.ts`) gains `estimatedRetailPricePerKgGbp: real, notNull,
+default 0` — the default exists only so the `ADD COLUMN` migration runs non-interactively (no TTY);
+every real write path always supplies a real estimate, same pattern as this session's
+`regenerationCount`. Migration `0019_abnormal_harry_osborn.sql`: generated `ADD COLUMN` plus 29
+hand-added backfill `UPDATE`s (25 curated crops + 4 already-existing unverified AI-added ones —
+`seed.ts` only inserts missing slugs, so it wouldn't have retroactively backfilled these), each
+separated by `--> statement-breakpoint`. Same 29 values also added to `src/db/seed-data/crops.ts`'s
+`CropSeed` entries (own general-knowledge UK-supermarket £/kg estimates, same "approximation, not an
+authoritative dataset" spirit as that file's existing figures) so a fresh database seeds correctly.
+
+**Agents**: `cropFacts.ts` (used to backfill any brand-new AI-proposed crop) gained the field in its
+output schema, prompt, and mock fallback. `growPlanner.ts`'s shared `AvailableCrop` type gained the
+field (picked up automatically by `recommendationReplacement.ts` via its type import); both prompts'
+crop-catalog lines now show `est. retail £X.XX/kg`; both got a new INSTRUCTIONS item framing value as
+a secondary tie-breaker — prefer the pricier-to-buy crop only when candidates would otherwise suit
+the space/season roughly equally well, never overriding genuine fit/season/owned-seeds/favourites/
+dislikes. Both mock fallbacks (`buildMockPlan`, `buildMockReplacement`) now sort their non-favorite
+candidate pool by price descending, so the deterministic no-API-key path also demonstrates
+value-preferring selection, not just favorites-first as before.
+
+**Threading**: both Inngest jobs' (`generateGrowPlan.ts`, `regenerateRecommendation.ts`)
+`availableCrops` projections and their resolve-new-crop(s) insert call sites now read/write the new
+field — four call sites total, all previously-established duplication (not new).
+
+**UI** (`src/app/grow-plan/page.tsx`): a third pill badge per card — plain text, no emoji, neutral
+outline style (`border border-black/15 text-(--text-muted)`, matching `RecommendationActionButtons`'
+Reject button rather than reusing the brand-secondary "Add to shopping list" pill, which would
+visually collide when both appear on the same card) — `~£X.XX/kg to buy`, shown unconditionally with
+a tooltip.
+
+Verified: migration backfill confirmed via Postgres — all 29 existing rows carry real, non-zero
+prices (basil highest at £35/kg, carrot lowest at £0.90/kg), matching `seed-data/crops.ts` exactly.
+`tsc --noEmit` and `eslint` clean across the full project. A real end-to-end Inngest-triggered
+generation was attempted against the demo account to confirm the live model actually responds to the
+new tie-breaker instruction (not just the mock path) — both attempts failed on
+`generativelanguage.googleapis.com` free-tier quota exhaustion (`limit: 20, model: gemini-3.5-flash`),
+a direct consequence of this session's own heavy real-API usage earlier today (9+ full generations,
+5 reject cycles, several crop-facts lookups). Forcing the mock path instead wasn't practical either —
+this tenant has no `tenant_ai_configs` override row, so the live key comes from the platform-level
+`GOOGLE_GENERATIVE_AI_API_KEY` env var, which would need a dev-server restart to unset, too
+disruptive for a test. Live-model behavioral confirmation is therefore an open item — recommend a
+spot-check (generate a real plan, confirm higher-`estimatedRetailPricePerKgGbp` crops are favoured
+among similarly-fitting candidates) once the daily quota resets. Every statically-verifiable piece
+(schema, backfill data, prompt wiring, mock sort logic, type-checking) is confirmed correct. No test
+artifacts left behind — the two failed test `grow_plans` rows and the throwaway script were removed;
+the demo account's latest real (pre-existing) complete plan is unchanged.
+
+---
+
+## Feature — plant-health diagnosis rate limiting (5 checks/day)
+
+Requested by the user: "let's rate the limit the plant health, allow a max of 5 checks per day and
+show the remaining usage." Direct continuation of the earlier grow-plan rate-limiting feature — this
+closes the other half of the original architecture doc's open question ("simple rate limit on plan
+regeneration/diagnosis requests per user per week"), which only got the plan-regeneration half built
+at the time. Small enough (no schema change needed — `plantDiagnoses.createdAt` already existed, so
+this is purely a counting query, same shape as the grow-plan daily cap) to implement directly rather
+than a full planning round.
+
+**Shared limit**: `MAX_DAILY_PLANT_DIAGNOSES = 5` added to `src/lib/ai/limits.ts` alongside the two
+existing grow-plan constants. New `getPlantDiagnosesToday(tenantId, userId)` in
+`src/lib/actions/plantHealth.ts`, counting `plantDiagnoses` rows with `createdAt >=
+startOfTodayLocal()` (reusing the helper built for the grow-plan cap) — all statuses count, same
+"the row/job is created before success or failure is known" reasoning as the grow-plan version.
+
+**Two entry points, one shared budget** — both draw against the same daily count: `uploadAndDiagnoseAction`
+(upload a new photo + diagnose, on `/plant-health`) checks the cap right after file validation but
+*before* the actual storage upload (no point writing a photo for a diagnosis that's about to be
+blocked); being a `useActionState`-based action already, going over the cap returns `{error: "..."}`
+through its existing inline-error mechanism — no redirect-based workaround needed here, unlike the
+grow-plan buttons which didn't have that mechanism. `diagnoseExistingPhotoAction` (re-diagnose an
+existing journal photo, on `/journal`) gets the same defensive-backstop-redirect style as the
+grow-plan action's checks, redirecting to `/plant-health` (the same target it already redirects to
+on success) when over the cap.
+
+**Found and fixed in passing**: `/journal`'s "Diagnose" button had no pending-state guard at all —
+a plain `onClick` with no `disabled`, the same double-submit gap the grow-plan buttons had before
+last time's fix, just never caught because nothing needed a hard budget behind that button before
+now. Added a `diagnosingId` state (mirrors `RecommendationActionButtons`' shape) so the button
+disables itself while a diagnosis request is in flight.
+
+**UI**: `/plant-health/page.tsx` shows "N of 5 plant checks left today" under the upload form, and
+swaps the whole form out for an informational message once exhausted (matching the grow-plan page's
+hide-and-replace pattern). `/journal/page.tsx` computes the same count and passes
+`diagnosesRemainingToday` down to `JournalView`; the Diagnose button on each owned photo becomes
+"No plant checks left today" (plain text, non-interactive) at zero, instead of just disappearing.
+
+Verified without needing Gemini at all — the cap check runs entirely before any AI call, so a
+throwaway script replicated `diagnoseExistingPhotoAction`'s exact count-then-insert logic against
+the demo account (0 real diagnoses today going in): 5 inserts allowed, the 6th correctly blocked
+with `diagnosesToday() === 5`, matching the cap precisely. `tsc --noEmit` and `eslint` clean across
+the full project. Fixture rows (one throwaway `photo_journal_entries` row, five `plant_diagnoses`
+rows) and the test script were cleaned up; demo account left with zero plant-diagnosis rows, exactly
+as it started.
+
+---
+
+## Feature — week-ahead weather on the dashboard
+
+Requested by the user: "let's show the weather for the week ahead on the dashboard." Weather was
+already integrated (`src/lib/weather/index.ts`, Open-Meteo — free, no key, per the original
+architecture doc) but only as a single-day fetch feeding the daily 06:00 Inngest job's deterministic
+watering-task rules; nothing surfaced weather visually anywhere, and nothing fetched more than one
+day out. No schema change needed — `userProfiles.latitude`/`longitude` already existed (resolved
+once at onboarding via postcodes.io) and Open-Meteo has no rate/cost concerns worth persisting a
+forecast for, so this fetches live on each dashboard load rather than caching anything.
+
+**`getWeeklyForecast(lat, lon, forceScenario?)`** — a new, separate function in the same file
+(deliberately not a shared/parameterized version of the existing single-day `getForecast`, matching
+this codebase's standing "don't risk a proven code path for reuse" precedent — that one backs a real
+task-mutating job, this is purely informational display). Requests `forecast_days=7` with
+`weathercode`/`temperature_2m_max`/`temperature_2m_min`/`precipitation_sum`, returns a
+`DailyForecast[]`. Reuses the existing `WEATHER_FORCE_SCENARIO` dev-testing override, repeating the
+forced single day's numbers across all 7 days (with a representative WMO code per scenario) so local
+testing doesn't need live network calls either.
+
+**`src/lib/weather/labels.ts`** (new) — `weatherCodeEmoji`/`weatherCodeLabel`, a direct lookup over
+the fixed WMO weather-code enumeration (not a range/bucket helper, since Open-Meteo's codes are a
+small fixed set), matching this codebase's existing per-domain `labels.ts` convention
+(`plantHealth/labels.ts`, `garden/labels.ts`).
+
+**Shown to every user, not gated to paid** — unlike the AI-powered features, there's no compute cost
+to a free API, so this doesn't follow the existing "weather-driven watering-task automation is a
+paid-only feature" restriction; that one's gated because it mutates the task list, not because
+weather itself is a premium concept.
+
+**UI** (`src/app/dashboard/page.tsx`): new "Weather this week" card, first in the main column (above
+"This week" tasks, since forecast context naturally precedes task planning) — 7-day emoji/max-min-
+temp/rain-if-any grid, "Today" label on day 0. Fetched via `Promise.all` alongside the existing
+`withTenant` data fetch (independent network call, no reason to serialize it after the DB round
+trip). Falls back to "Add your postcode to see a forecast" when `latitude`/`longitude` are null
+(theoretically rare post-onboarding, since `saveLocationAction` only ever completes onboarding after
+a successful geocode) or "Weather is unavailable right now" if the live fetch itself fails.
+
+Verified: fetched the real Open-Meteo response directly for the demo account's postcode (SW1A 1AA →
+51.501, -0.1416) and hand-confirmed the JSON shape matches this code's parsing exactly (`daily.time`/
+`weathercode`/`temperature_2m_max`/`temperature_2m_min`/`precipitation_sum`, all length-7 arrays);
+the returned codes (0, 1, 3) are all covered by the new label map. Found — and fixed as data, not
+code — that the demo user's `latitude`/`longitude` were unexpectedly `null` despite having a stored
+postcode (leftover from before location resolution existed, or a raw seed insert bypassing
+`saveLocationAction`'s atomic postcode+geocode write); backfilled them via postcodes.io's own
+resolution for that exact postcode, both correcting stale demo data and exercising the fallback path
+for real before fixing it. `tsc --noEmit` and `eslint` clean project-wide; `/dashboard` confirmed to
+compile and respond (307 to `/login` unauthenticated, not a 500) via the running dev server.
+`getWeeklyForecast` itself couldn't be executed directly in a script — `import "server-only"` throws
+unconditionally outside Next's server runtime, not just under webpack bundling as assumed for earlier
+features — so this stopped short of a full authenticated browser render (no browser/Playwright tool
+available this session); the API-shape verification plus clean typecheck is the practical substitute.
+No test artifacts left behind.
+
+---
+
+## Feature — real succession-sowing batches with cancellable series
+
+Requested by the user: "let's work on the succession sowing." Investigation found it was thinner
+than it sounded: the grow planner generated at most one extra "re-sow" task per succession-capable
+crop, title-only distinguishable from any other task, with no follow-up ever generated beyond that
+one — the "continuous harvest" promise in the AI's own task explanation wasn't backed by any real
+mechanism. The reject/replace flow's mock fallback didn't even generate that one task. The original
+architecture doc planned a real `recurs_every_days`/`series_id` recurring-task concept but it was
+never built, and the gap was never documented as a deliberate cut. Presented three scope options
+directly to the user (fix the two existing bugs only; generate a real batch of several staggered
+re-sows tied by a series id with UI to cancel the remainder as a group; or a full self-perpetuating
+chain where completing one task spawns the next) — picked the middle option, fitting this codebase's
+existing "AI decides everything at plan-generation time" architecture with no new runtime
+task-spawning machinery.
+
+Design was validated in a review pass before implementation. It confirmed the core mechanics
+(schema shape, Inngest-replay safety of generating ids inside a `step.run()`, deletion being the
+right resolution for "cancel remaining") and surfaced the sharpest gap: grouping succession tasks by
+`cropSlug` alone in `generateGrowPlan.ts` could wrongly merge two *separate* recommendations of the
+same crop (two different beds) into one series, because tasks in that file carried no link back to
+which specific recommendation they belonged to. Fixing that surfaced a real **pre-existing bug**:
+`generateGrowPlan.ts` never set `tasks.planRecommendationId` at all (unlike the sibling reject/
+replace job) — meaning rejecting an *original*, first-generation recommendation silently left its
+tasks behind uncleaned in the calendar, since the cleanup step matches on that column and it was
+always null. Both were fixed together, since the same schema addition needed for correct succession
+grouping is exactly what closes that bug too.
+
+**Schema**: `tasks` (`src/db/schema/tasks.ts`) gains `successionSeriesId: uuid` — nullable, no FK (a
+pure app-generated grouping key via `randomUUID()`), no default, no backfill needed. Plain additive
+migration.
+
+**AI schemas**: both agents' `tasks[]` gain `isSuccessionResow: z.boolean()` (required — true only
+for a repeat/re-sow occurrence, false for the crop's own first sowing too). `growPlanner.ts` also
+gains `recommendationIndex: z.number().int().min(0)` — the 0-based position of a task's owning
+recommendation in the array the model is producing in the same response, the fix for the
+cross-recommendation merging risk (this flow's tasks are a flat array matched to crops only by
+slug; `recommendationReplacement.ts` didn't need this — it only ever proposes one crop/decision per
+call, already unambiguous, and its persist step already set `planRecommendationId` correctly per
+instance). Task-array caps raised for headroom: `growPlanner.ts` 40→90 (12 recommendations × up to
+~7 tasks each worst case), `recommendationReplacement.ts` 10→14.
+
+**Prompts**: replaced "a re-sow task" (singular) with an explicit **hard floor** — always at least 2
+re-sow tasks, never just one, up to 5 for a crop with a long outdoor sowing window (4+ months, e.g.
+radish/carrot), spaced ~2-3 weeks apart within the season. The first wording tried ("typically 2-5")
+was verified against the live model and under-delivered — most succession crops (including radish,
+which has a 5-month window) still only got 1 re-sow, essentially the old behavior. Strengthened to
+an unconditional floor with an explicit "never just one — defeats the point" framing, re-tested, and
+confirmed working (see verification below). Same category of soft-instruction risk flagged for an
+earlier feature this session, and this time actually caught it rather than assuming success.
+
+**Mocks**: `buildMockPlan` (growPlanner.ts) — single-task push replaced with a loop generating 3
+tasks spaced 14 days apart; every other task literal (7 sites total) got `isSuccessionResow`/
+`recommendationIndex`. `buildMockReplacement` (recommendationReplacement.ts) — gained the same loop
+where it previously had *no* succession handling at all, closing that inconsistency as a side effect;
+every other task literal (6 sites) got `isSuccessionResow: false`. All required zod fields, so `tsc`
+caught every missed push site at compile time — confirmed clean on first pass.
+
+**Persist logic** (`generateGrowPlan.ts`): preserved each recommendation's original array index
+through the filter/map chain (previously dropped once a recommendation survived or failed
+validation), built `Map<originalIndex, planRecommendationId>` from the real inserted rows, and now
+resolves both `planRecommendationId` (closing the pre-existing bug) and — for `isSuccessionResow`
+tasks — a `Map<planRecommendationId, seriesId>` generating one `randomUUID()` (via `node:crypto`,
+matching `src/lib/storage/local.ts`'s import style) the first time a real recommendation is seen,
+reused for every later resow sharing it. A task whose `recommendationIndex` points at a
+recommendation that didn't survive validation still gets inserted (matches existing tolerance —
+tasks were never gated on their recommendation surviving), just with both fields left null.
+(`regenerateRecommendation.ts`) — simpler: tasks are already duplicated per instance, so one fresh id
+per instance, keeping e.g. "3 pots of Spring Onion" tracking independent succession campaigns rather
+than one shared series.
+
+**New action** `cancelSuccessionSeriesAction` (`src/lib/actions/tasks.ts`) — ownership-scoped bulk
+delete of `status = 'pending'` tasks sharing a `successionSeriesId`, mirroring `deleteTaskAction`'s
+shape, returning removed ids for precise local-state updates. Deletes rather than soft-cancels,
+matching the existing precedent (`deleteTaskAction`, and the reject flow's own hard-delete of a
+rejected group's tasks) — already-`completed` history is untouched since only `pending` rows match.
+
+**UI**: `CalendarView.tsx` (shared by `/calendar` and the dashboard's "Calendar" card) gained a
+"Succession" badge (same style as the existing "Indoor" one) and a "Cancel remaining" button guarded
+by `window.confirm` (unlike single-task Delete, this can remove several at once) with an optimistic
+local filter. `ThisWeekTasks.tsx` got the badge only — stays a lightweight glance widget, the fuller
+Calendar surface is where cancelling lives. Both page-level `.map()` projections threaded the new
+field through trivially (both already did untyped `tx.select()`).
+
+**Deliberately not touched**: `weeklyShoppingList.ts` — on reflection its existing one-item-per-crop,
+deduped, add-once behavior is already correct here. Succession sowing works from a single seed
+packet across every batch (that's the technique's whole point), so multiple resow tasks for the same
+crop shouldn't trigger fresh shopping-list entries. What looked like a gap in isolation was already
+right once the real feature (several batches from one upfront plan) was considered.
+
+Verified end-to-end against the demo account with the live model (Gemini quota had recovered by this
+point in the session): first real run exposed the soft-instruction under-delivery described above
+(radish got only 1 resow despite its long window) — caught it rather than assuming the prompt worked,
+strengthened the wording, re-ran, and confirmed every succession-capable crop got ≥2 staggered
+resows with correct due-date spacing, `plan_recommendation_id` set on all 12/13 tasks in both runs
+(0 missing — the pre-existing bug fix confirmed live), and one `succession_series_id` per crop
+correctly grouping only that crop's own resows. Directly exercised `cancelSuccessionSeriesAction`'s
+logic against real rows: marked one resow completed, cancelled the series, confirmed only the
+pending sibling was removed and the completed one was untouched. Replicated the exact
+`generateGrowPlan.ts` persist algorithm in an isolated script against a synthetic AI output
+containing two separate radish recommendations (two beds) plus one deliberately-invalid recommendation
+sandwiched between them (to exercise index-preservation across a drop): confirmed the two beds got
+completely independent `succession_series_id`s (never merged), and the dropped recommendation's
+tasks still inserted correctly with both `plan_recommendation_id` and `succession_series_id` left
+null rather than corrupting either bed's grouping. `tsc --noEmit` and `eslint` clean throughout. All
+test scripts and their data removed; the demo account's real successful test generation was left in
+place (matching this session's standing precedent) as a valid, presentable outcome.
+
+---
+
+## Feature — extend the Botanical palette, typography, and layout rhythm
+
+Requested: "the UI needs to be more visually appealing whilst being WCAG A+ compliant. Let's use a
+colour palette that reflects nature." "WCAG A+" isn't a real conformance level — clarified directly
+with the user, who confirmed keeping AA (the existing target) rather than AAA. Also surfaced before
+starting: this project already has a documented, WCAG-AA-verified "Botanical" palette pass (Fern/
+Marigold/Terracotta/Soil/Linen — see this doc's own "UI/UX & Accessibility Pass" section above) — not
+a from-scratch redesign. A second clarifying question narrowed scope to extending the palette further
+plus typography/layout rhythm specifically, not the also-offered (not chosen) option of finishing the
+previously-deferred button-hover-darkening bug, which remains untouched.
+
+A grep-based audit (every heading, body-text size, card/button/spacing pattern app-wide, not a
+stylistic guess) found the existing system already ~95%+ self-consistent once actually measured, so
+this was about formalizing what's there and filling real, identified gaps rather than inventing a new
+scale: the dominant "heading" pattern app-wide (24 instances) was `<p className="font-medium">` with
+no defined size at all; `text-base` was never used anywhere; two competing "heading→content" spacing
+conventions existed (`mt-8` on 19 pages vs `mt-6` on 7); primary-button padding alternated `px-6 py-2`
+/`px-4 py-2` for equivalent actions; `#1f2a1f`/`#faf8f2` were duplicated as raw hex outside their one
+canonical definition; and no SVG icon system existed anywhere (100% of visual interest beyond color/
+type came from emoji).
+
+**No browser/screenshot tool was available this session** (unlike the original pass, which used
+Playwright) — flagged upfront rather than implying a visual check happened. Verification here is
+computed contrast ratios, grep-based completeness checks, and `tsc`/`eslint`; actual visual judgment
+is left to the user checking their own running dev server.
+
+**1. Typography**: added **Fraunces** (Google Font, warm/organic serif — a common choice for craft/
+farm/wellness brand identities) via `next/font/google` in `src/app/layout.tsx`, alongside the
+existing Geist Sans/Mono (kept for body copy — zero migration cost, and Geist reads cleanly on this
+app's many data-dense screens). Wired into `globals.css`'s `@theme inline` as `--font-display`, which
+automatically produces a `font-display` Tailwind utility the same way `--font-sans` already does.
+
+**2. Heading system**: **h1** (22 real occurrences, not 23 as the earlier audit estimated — corrected
+via direct recount, 100% now unified) became `font-display text-3xl font-semibold
+text-(--brand-primary)` everywhere (was `text-2xl`, one page already independently at `text-3xl`).
+The **24 `font-medium`-only pseudo-headings** were individually reviewed, not blanket-converted — 18
+were genuine card/section titles (dashboard cards, grow-plan/plant-health card headlines, admin nav
+cards, membership-gate headlines) and became `font-display text-lg font-semibold`, filling the
+missing 18px scale step in the same move; 3 were deliberately left untouched because they aren't
+headings despite matching the string — a data value (`{Math.round(day.maxTempC)}°`), a dense
+list-row label (`EquipmentTypeRow.tsx`), and a compact calendar-widget toolbar label (month/year
+between the prev/next buttons). The 5 admin sub-page `<h2>`s gained `font-display` for consistency
+with the same size.
+
+**3. Color tokens**: added `--background: #faf8f2` and `--text-heading: #1f2a1f` (closing the raw-hex
+duplication in `layout.tsx` + 3 other files — `SiteHeader.tsx`, `UpgradeBanner.tsx`,
+`plant-health/page.tsx`'s badge fallback), plus a new `--surface-tint: color-mix(in srgb,
+var(--brand-primary) 6%, white)` for empty-state surfaces. Contrast computed before writing any code,
+not assumed: `--text-heading` vs `--background` **14.03:1**, vs white **14.9:1**; `--text-muted` on
+`--surface-tint` **6.71:1**, `--text-heading` on it **13.66:1** — all comfortably clear of AA (most
+near AAA already).
+
+**4. Layout rhythm**: unified the "h1 → content" gap to `mt-8` everywhere (migrated 7 `mt-6` outliers
+— 4 admin pages, dashboard ×2, onboarding/crops); unified primary-button padding to `px-6 py-2` (8
+outliers found and fixed — turned out `px-6 py-2` was already the majority convention, 15 vs 8, even
+among identical `self-start` form-submit buttons, confirming the inconsistency was real rather than
+an intentional compact/standalone distinction); fixed the one identified card-padding contradiction
+(`plant-health/page.tsx`'s two structurally-identical notice boxes, one `p-6` one `p-4`, aligned to
+`p-6`). Left deliberately out of scope: micro-gaps between individual form fields (`gap-2`/`gap-3`/
+`gap-4` for similar stacks) — real but low-value, high-diff churn, same "scoped out" precedent the
+original accessibility pass used for the hover-state issue.
+
+**5. Nature motif**: new `src/components/LeafAccent.tsx` — a small `currentColor` inline SVG leaf
+(no icon-library dependency, matching this codebase's minimal-deps philosophy), applied to 5
+representative empty/gate states (dashboard's empty week, calendar's empty day, journal's empty photo
+grid, shopping-list's empty list, grow-plan's membership-gate headline) each paired with the new
+`--surface-tint` background where structurally appropriate. Deliberately not exhaustive — a bounded,
+easily-reviewed set rather than hunting every empty state in the app.
+
+Verified: `tsc --noEmit` and `eslint` clean. Grep-based completeness checks confirmed zero remaining
+raw `#1f2a1f`/`#faf8f2` outside their token definitions, zero remaining inconsistent `mt-6`/`px-4
+py-2` in the targeted files, and — checked directly rather than trusted from the earlier audit's
+estimate — literally 100% of the app's real `<h1>` elements (22/22) now share one definition. Actual
+visual review is explicitly handed to the user: no browser tool this session, so "does this look
+good" was never claimed as verified, only "is this internally consistent and AA-compliant by the
+numbers" — worth a look at `/dashboard`, `/grow-plan`, `/journal`, `/calendar`, and one admin page on
+the running dev server before considering this done.

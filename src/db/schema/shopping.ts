@@ -3,6 +3,7 @@ import { sql } from "drizzle-orm";
 import { tenants } from "./tenant";
 import { users } from "./user";
 import { crops } from "./crop";
+import { equipmentTypes } from "./equipment";
 import { tenantIsolationPolicy } from "./_rls";
 
 export const shoppingItemStatusEnum = ["pending", "purchased"] as const;
@@ -21,8 +22,10 @@ export const shoppingListItems = pgTable(
     userId: uuid("user_id")
       .notNull()
       .references(() => users.id, { onDelete: "cascade" }),
-    // Exactly one of these is set — a catalog crop, or a free-text manual item.
+    // Exactly one of these is set — a catalog crop, an equipment type, or a
+    // free-text manual item.
     cropId: uuid("crop_id").references(() => crops.id, { onDelete: "cascade" }),
+    equipmentTypeId: uuid("equipment_type_id").references(() => equipmentTypes.id, { onDelete: "cascade" }),
     freeText: text("free_text"),
     quantityLabel: text("quantity_label").notNull(),
     status: text("status", { enum: shoppingItemStatusEnum }).notNull().default("pending"),
@@ -32,8 +35,8 @@ export const shoppingListItems = pgTable(
   (table) => [
     tenantIsolationPolicy("shopping_list_items", table.tenantId),
     check(
-      "shopping_list_items_crop_xor_free_text",
-      sql`(${table.cropId} is not null) <> (${table.freeText} is not null)`,
+      "shopping_list_items_exactly_one_of",
+      sql`num_nonnulls(${table.cropId}, ${table.freeText}, ${table.equipmentTypeId}) = 1`,
     ),
   ],
 ).enableRLS();

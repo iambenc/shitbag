@@ -21,12 +21,12 @@ export default async function AdminEquipmentPage() {
 
   return (
     <div className="mx-auto max-w-4xl">
-      <h2 className="text-lg font-semibold">Equipment &amp; partner links</h2>
+      <h2 className="font-display text-lg font-semibold">Equipment &amp; partner links</h2>
       <p className="mt-1 text-sm text-(--text-muted)">
         Equipment types gardeners can record in their inventory, and where to buy what they don&rsquo;t
         have.
       </p>
-      <div className="mt-6">
+      <div className="mt-8">
         <EquipmentView
           types={types.map((t) => ({ ...t, usageCount: usageByType.get(t.id) ?? 0 }))}
           links={links}

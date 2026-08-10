@@ -23,7 +23,7 @@ export default async function EquipmentStepPage() {
 
   return (
     <div className="flex flex-col gap-2">
-      <h1 className="text-2xl font-semibold text-(--brand-primary)">What equipment do you have?</h1>
+      <h1 className="font-display text-3xl font-semibold text-(--brand-primary)">What equipment do you have?</h1>
       <p className="text-sm text-(--text-muted)">Step 4 of 6</p>
       <div className="mt-4">
         <EquipmentPicker
@@ -40,7 +40,8 @@ export default async function EquipmentStepPage() {
             id: o.id,
             equipmentTypeId: o.equipmentTypeId,
             quantity: o.quantity,
-            sizeLabel: o.sizeLabel,
+            sizeValue: o.sizeValue,
+            sizeUnit: o.sizeUnit,
             widthCm: o.widthCm,
             lengthCm: o.lengthCm,
             depthCm: o.depthCm,

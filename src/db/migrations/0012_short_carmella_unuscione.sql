@@ -1,0 +1,2 @@
+ALTER TABLE "plan_recommendations" ADD COLUMN "growing_area_id" uuid;--> statement-breakpoint
+ALTER TABLE "plan_recommendations" ADD CONSTRAINT "plan_recommendations_growing_area_id_growing_areas_id_fk" FOREIGN KEY ("growing_area_id") REFERENCES "public"."growing_areas"("id") ON DELETE set null ON UPDATE no action;

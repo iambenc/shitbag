@@ -2,15 +2,33 @@
 
 import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
-import { eq, and } from "drizzle-orm";
+import { eq, and, gte, count } from "drizzle-orm";
 import { withTenant } from "@/lib/tenant/withTenant";
 import { plantDiagnoses, photoJournalEntries, photoReports } from "@/db/schema";
 import { requireSessionAndTenant } from "@/lib/actions/shared";
 import { getSubscription, isPaidTier } from "@/lib/billing/subscription";
 import { getPhotoStorage, ALLOWED_IMAGE_TYPES, MAX_PHOTO_BYTES } from "@/lib/storage";
 import { inngest } from "@/inngest/client";
+import { startOfTodayLocal } from "@/lib/dates";
+import { MAX_DAILY_PLANT_DIAGNOSES } from "@/lib/ai/limits";
 
 export type UploadAndDiagnoseState = { error?: string };
+
+// Counts all plantDiagnoses rows regardless of status (pending/complete/
+// failed) — the row is inserted, and the Inngest job dispatched, before
+// success/failure is known, so a retry after a failure still consumes a
+// slot. Shared between both diagnosis-creating actions' guards and the
+// two pages that display "N left today", same pattern as
+// getGrowPlanGenerationsToday.
+export async function getPlantDiagnosesToday(tenantId: string, userId: string): Promise<number> {
+  return withTenant(tenantId, async (tx) => {
+    const [row] = await tx
+      .select({ count: count() })
+      .from(plantDiagnoses)
+      .where(and(eq(plantDiagnoses.userId, userId), gte(plantDiagnoses.createdAt, startOfTodayLocal())));
+    return row.count;
+  });
+}
 
 export async function uploadAndDiagnoseAction(
   _prevState: UploadAndDiagnoseState,
@@ -33,6 +51,13 @@ export async function uploadAndDiagnoseAction(
   const extension = ALLOWED_IMAGE_TYPES[file.type];
   if (!extension) {
     return { error: "Please upload a JPEG, PNG, WebP, or GIF image." };
+  }
+
+  // Checked before the (expensive) storage upload — no point writing a photo
+  // for a diagnosis that's about to be blocked anyway.
+  const diagnosesToday = await getPlantDiagnosesToday(tenantId, userId);
+  if (diagnosesToday >= MAX_DAILY_PLANT_DIAGNOSES) {
+    return { error: `You've used all ${MAX_DAILY_PLANT_DIAGNOSES} plant checks for today — come back tomorrow.` };
   }
 
   const buffer = Buffer.from(await file.arrayBuffer());
@@ -72,6 +97,13 @@ export async function diagnoseExistingPhotoAction(photoJournalEntryId: string): 
   const subscription = await getSubscription(userId, tenantId);
   if (!isPaidTier(subscription)) {
     redirect("/upgrade");
+  }
+
+  // Defensive backstop — /journal hides the Diagnose button once the daily
+  // count is exhausted, but a server action must never trust the UI alone.
+  const diagnosesToday = await getPlantDiagnosesToday(tenantId, userId);
+  if (diagnosesToday >= MAX_DAILY_PLANT_DIAGNOSES) {
+    redirect("/plant-health");
   }
 
   const diagnosis = await withTenant(tenantId, async (tx) => {

@@ -1,0 +1,1 @@
+ALTER TABLE "tasks" ADD COLUMN "succession_series_id" uuid;

@@ -5,8 +5,10 @@ import {
   createTaskAction,
   toggleTaskCompleteAction,
   deleteTaskAction,
+  cancelSuccessionSeriesAction,
   type CreateTaskState,
 } from "@/lib/actions/tasks";
+import { LeafAccent } from "@/components/LeafAccent";
 import type { TaskStatus, TaskSource } from "@/db/schema";
 
 type Task = {
@@ -17,6 +19,8 @@ type Task = {
   hardDeadlineDate: string | null;
   status: TaskStatus;
   source: TaskSource;
+  isIndoor: boolean;
+  successionSeriesId: string | null;
 };
 
 const WEEKDAY_LABELS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
@@ -101,6 +105,16 @@ export function CalendarView({ initialTasks }: { initialTasks: Task[] }) {
     await deleteTaskAction(taskId);
   }
 
+  async function handleCancelSeries(successionSeriesId: string) {
+    if (!window.confirm("Cancel the remaining re-sows for this crop? Already-completed ones are unaffected.")) {
+      return;
+    }
+    setTaskList((ts) =>
+      ts.filter((t) => !(t.successionSeriesId === successionSeriesId && t.status === "pending")),
+    );
+    await cancelSuccessionSeriesAction(successionSeriesId);
+  }
+
   const selectedTasks = (tasksByDate.get(selectedDate) ?? []).slice().sort((a, b) =>
     a.title.localeCompare(b.title),
   );
@@ -169,7 +183,10 @@ export function CalendarView({ initialTasks }: { initialTasks: Task[] }) {
       <section>
         <h2 className="text-sm font-medium text-(--text-muted)">Tasks for {selectedDate}</h2>
         {selectedTasks.length === 0 ? (
-          <p className="mt-2 text-sm text-(--text-muted)">Nothing due this day.</p>
+          <div className="mt-2 flex items-center gap-2 rounded-lg bg-(--surface-tint) p-3">
+            <LeafAccent className="h-5 w-5 shrink-0 text-(--brand-primary)" />
+            <p className="text-sm text-(--text-muted)">Nothing due this day.</p>
+          </div>
         ) : (
           <ul className="mt-2 flex flex-col gap-2">
             {selectedTasks.map((task) => (
@@ -209,6 +226,22 @@ export function CalendarView({ initialTasks }: { initialTasks: Task[] }) {
                         {task.source}
                       </span>
                     )}
+                    {task.isIndoor && (
+                      <span
+                        className="ml-2 rounded-full bg-(--brand-primary)/15 px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide text-(--brand-primary)"
+                        title="Sow or start this one indoors"
+                      >
+                        Indoor
+                      </span>
+                    )}
+                    {task.successionSeriesId && (
+                      <span
+                        className="ml-2 rounded-full bg-(--brand-primary)/15 px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide text-(--brand-primary)"
+                        title="One of several staggered sowings of this crop, for a continuous harvest"
+                      >
+                        Succession
+                      </span>
+                    )}
                     {task.status === "missed" && (
                       <span className="ml-2 rounded-full bg-red-200 px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide text-red-800">
                         Missed
@@ -220,14 +253,25 @@ export function CalendarView({ initialTasks }: { initialTasks: Task[] }) {
                     )}
                   </span>
                 </label>
-                <button
-                  type="button"
-                  onClick={() => handleDelete(task.id)}
-                  className="text-xs text-(--text-muted) hover:text-red-700"
-                  aria-label={`Delete ${task.title}`}
-                >
-                  Delete
-                </button>
+                <div className="flex flex-col items-end gap-1">
+                  {task.successionSeriesId && task.status === "pending" && (
+                    <button
+                      type="button"
+                      onClick={() => handleCancelSeries(task.successionSeriesId!)}
+                      className="text-xs text-(--text-muted) hover:text-red-700"
+                    >
+                      Cancel remaining
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    onClick={() => handleDelete(task.id)}
+                    className="text-xs text-(--text-muted) hover:text-red-700"
+                    aria-label={`Delete ${task.title}`}
+                  >
+                    Delete
+                  </button>
+                </div>
               </li>
             ))}
           </ul>

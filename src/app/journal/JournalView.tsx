@@ -8,6 +8,7 @@ import {
   type UploadPhotoState,
 } from "@/lib/actions/photos";
 import { diagnoseExistingPhotoAction, reportPhotoAction } from "@/lib/actions/plantHealth";
+import { LeafAccent } from "@/components/LeafAccent";
 
 type Photo = {
   id: string;
@@ -62,7 +63,7 @@ function UploadForm({ onUploaded }: { onUploaded: (photo: NonNullable<UploadPhot
       <button
         type="submit"
         disabled={pending}
-        className="self-start rounded-full bg-(--brand-primary) px-4 py-2 text-sm text-white disabled:opacity-60"
+        className="self-start rounded-full bg-(--brand-primary) px-6 py-2 text-sm text-white disabled:opacity-60"
       >
         {pending ? "Uploading…" : "Upload photo"}
       </button>
@@ -76,17 +77,20 @@ export function JournalView({
   tenantName,
   currentUserEmail,
   paid,
+  diagnosesRemainingToday,
 }: {
   myPhotos: Photo[];
   sharedPhotos: Photo[];
   tenantName: string;
   currentUserEmail: string;
   paid: boolean;
+  diagnosesRemainingToday: number;
 }) {
   const [tab, setTab] = useState<"mine" | "shared">("mine");
   const [mine, setMine] = useState(myPhotos);
   const [shared, setShared] = useState(sharedPhotos);
   const [reportedIds, setReportedIds] = useState<Set<string>>(new Set());
+  const [diagnosingId, setDiagnosingId] = useState<string | null>(null);
 
   function handleUploaded(photo: NonNullable<UploadPhotoState["photo"]>) {
     const asPhoto: Photo = { ...photo, ownerEmail: currentUserEmail, isOwn: true };
@@ -114,7 +118,9 @@ export function JournalView({
   }
 
   async function handleDiagnose(photoId: string) {
+    setDiagnosingId(photoId);
     await diagnoseExistingPhotoAction(photoId);
+    setDiagnosingId(null);
   }
 
   async function handleReport(photoId: string) {
@@ -147,7 +153,10 @@ export function JournalView({
 
       {tab === "mine" ? (
         mine.length === 0 ? (
-          <p className="text-sm text-(--text-muted)">No photos yet.</p>
+          <div className="flex items-center gap-2 rounded-lg bg-(--surface-tint) p-3">
+            <LeafAccent className="h-5 w-5 shrink-0 text-(--brand-primary)" />
+            <p className="text-sm text-(--text-muted)">No photos yet.</p>
+          </div>
         ) : (
           <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-4">
             {mine.map((photo) => (
@@ -159,11 +168,19 @@ export function JournalView({
                   <button type="button" onClick={() => handleToggleVisibility(photo)} className="text-left text-(--brand-primary) underline">
                     {photo.visibility === "private" ? "Private — share it" : "Shared — make private"}
                   </button>
-                  {paid && (
-                    <button type="button" onClick={() => handleDiagnose(photo.id)} className="text-left text-(--brand-primary) underline">
-                      Diagnose
-                    </button>
-                  )}
+                  {paid &&
+                    (diagnosesRemainingToday > 0 ? (
+                      <button
+                        type="button"
+                        onClick={() => handleDiagnose(photo.id)}
+                        disabled={diagnosingId !== null}
+                        className="text-left text-(--brand-primary) underline disabled:opacity-50"
+                      >
+                        {diagnosingId === photo.id ? "Diagnosing…" : "Diagnose"}
+                      </button>
+                    ) : (
+                      <p className="text-(--text-muted)">No plant checks left today</p>
+                    ))}
                   <button type="button" onClick={() => handleDelete(photo.id)} className="text-left text-(--text-muted) hover:text-red-700">
                     Delete
                   </button>

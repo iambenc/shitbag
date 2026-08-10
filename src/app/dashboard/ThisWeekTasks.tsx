@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { toggleTaskCompleteAction } from "@/lib/actions/tasks";
+import { LeafAccent } from "@/components/LeafAccent";
 import type { TaskStatus, TaskSource } from "@/db/schema";
 
 type Task = {
@@ -10,6 +11,8 @@ type Task = {
   dueDate: string;
   status: TaskStatus;
   source: TaskSource;
+  isIndoor: boolean;
+  successionSeriesId: string | null;
 };
 
 function pad(n: number) {
@@ -41,7 +44,12 @@ export function ThisWeekTasks({ tasks }: { tasks: Task[] }) {
   }
 
   if (taskList.length === 0) {
-    return <p className="text-sm text-(--text-muted)">Nothing due in the next week.</p>;
+    return (
+      <div className="flex items-center gap-2 rounded-lg bg-(--surface-tint) p-3">
+        <LeafAccent className="h-5 w-5 shrink-0 text-(--brand-primary)" />
+        <p className="text-sm text-(--text-muted)">Nothing due in the next week.</p>
+      </div>
+    );
   }
 
   const today = new Date();
@@ -95,6 +103,22 @@ export function ThisWeekTasks({ tasks }: { tasks: Task[] }) {
                 {task.source === "weather" && (
                   <span className="rounded-full bg-(--brand-secondary)/40 px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide">
                     weather
+                  </span>
+                )}
+                {task.isIndoor && (
+                  <span
+                    className="rounded-full bg-(--brand-primary)/15 px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide text-(--brand-primary)"
+                    title="Sow or start this one indoors"
+                  >
+                    Indoor
+                  </span>
+                )}
+                {task.successionSeriesId && (
+                  <span
+                    className="rounded-full bg-(--brand-primary)/15 px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide text-(--brand-primary)"
+                    title="One of several staggered sowings of this crop, for a continuous harvest"
+                  >
+                    Succession
                   </span>
                 )}
               </li>

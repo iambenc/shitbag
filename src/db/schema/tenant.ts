@@ -34,7 +34,7 @@ export const tenantPlans = pgTable(
   ],
 ).enableRLS();
 
-export const tenantAIConfigAgentEnum = ["grow_planner", "plant_health"] as const;
+export const tenantAIConfigAgentEnum = ["grow_planner", "plant_health", "crop_facts"] as const;
 export type TenantAIConfigAgent = (typeof tenantAIConfigAgentEnum)[number];
 
 export const tenantAIConfigs = pgTable(

@@ -3,6 +3,9 @@
 @theme inline {
   --font-sans: var(--font-geist-sans);
   --font-mono: var(--font-geist-mono);
+  /* Headings/card-titles only — see layout.tsx's Fraunces load. Produces the
+     font-display utility class the same way --font-sans produces font-sans. */
+  --font-display: var(--font-fraunces);
 }
 
 :root {
@@ -13,9 +16,32 @@
      on a light background — it only passes AA paired with white). */
   --text-muted: #4b5a4d;
   --color-terracotta: #a8512f;
+  /* Linen background / heading-weight text — previously raw hex duplicated
+     across layout.tsx + 3 other files. Verified WCAG AA (well above, in
+     fact): --text-heading 14.03:1 on --background, 14.9:1 on white. */
+  --background: #faf8f2;
+  --text-heading: #1f2a1f;
+  /* Very light Fern wash for empty-state surfaces — subtler than a full card,
+     still reads as "part of the plot" rather than a blank box. Verified:
+     --text-muted 6.71:1 on this, --text-heading 13.66:1 — both comfortably
+     AA even at this low a tint. */
+  --surface-tint: color-mix(in srgb, var(--brand-primary) 6%, white);
 }
 
 :focus-visible {
   outline: 2px solid color-mix(in srgb, var(--brand-primary) 70%, black);
   outline-offset: 2px;
+}
+
+/* Gentle "still growing" pulse for the job interstitial (JobInterstitial.tsx)
+   — a slow scale breathe, not a spin, to read as organic growth rather than
+   a generic loading spinner. */
+@keyframes grow-pulse {
+  0%,
+  100% {
+    transform: scale(1);
+  }
+  50% {
+    transform: scale(1.18);
+  }
 }

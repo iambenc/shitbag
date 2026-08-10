@@ -71,7 +71,7 @@ export function EquipmentTypeRow({ type, links }: { type: EquipmentType; links: 
             <button
               type="submit"
               disabled={updatePending}
-              className="rounded-full bg-(--brand-primary) px-4 py-2 text-sm text-white disabled:opacity-60"
+              className="rounded-full bg-(--brand-primary) px-6 py-2 text-sm text-white disabled:opacity-60"
             >
               {updatePending ? "Saving…" : "Save"}
             </button>

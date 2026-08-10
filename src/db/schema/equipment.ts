@@ -10,6 +10,12 @@ import { tenantIsolationPolicy } from "./_rls";
 export const equipmentCategoryEnum = ["count", "sized", "dimensions"] as const;
 export type EquipmentCategory = (typeof equipmentCategoryEnum)[number];
 
+// A "sized" quantity (today, a pot) can be given as a diameter in cm or a
+// volume in litres — two different physical measurements, so both a value
+// and which unit it's in need storing, not just one opaque label.
+export const sizeUnitEnum = ["cm", "litres"] as const;
+export type SizeUnit = (typeof sizeUnitEnum)[number];
+
 export const equipmentTypes = pgTable(
   "equipment_types",
   {
@@ -60,7 +66,8 @@ export const userEquipment = pgTable(
       .references(() => equipmentTypes.id, { onDelete: "cascade" }),
     quantity: integer("quantity").notNull().default(1),
     // Only one of these is populated, depending on the equipment type's category.
-    sizeLabel: text("size_label"),
+    sizeValue: real("size_value"),
+    sizeUnit: text("size_unit", { enum: sizeUnitEnum }),
     widthCm: real("width_cm"),
     lengthCm: real("length_cm"),
     depthCm: real("depth_cm"),

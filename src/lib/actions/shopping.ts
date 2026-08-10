@@ -9,16 +9,19 @@ import { requireSessionAndTenant } from "@/lib/actions/shared";
 const addItemSchema = z
   .object({
     cropId: z.string().uuid().optional().or(z.literal("")),
+    equipmentTypeId: z.string().uuid().optional().or(z.literal("")),
     freeText: z.string().trim().max(200).optional().or(z.literal("")),
     quantityLabel: z.string().trim().min(1, "Enter a quantity").max(100),
   })
-  .refine((v) => Boolean(v.cropId) !== Boolean(v.freeText), {
-    message: "Pick a crop or enter a custom item, not both",
-  });
+  .refine(
+    (v) => [v.cropId, v.equipmentTypeId, v.freeText].filter(Boolean).length === 1,
+    { message: "Pick a crop, equipment, or enter a custom item — exactly one" },
+  );
 
 export type CreatedShoppingItem = {
   id: string;
   cropId: string | null;
+  equipmentTypeId: string | null;
   freeText: string | null;
   quantityLabel: string;
   status: "pending";
@@ -32,6 +35,7 @@ export async function addShoppingItemAction(
 ): Promise<AddShoppingItemState> {
   const parsed = addItemSchema.safeParse({
     cropId: formData.get("cropId") ?? "",
+    equipmentTypeId: formData.get("equipmentTypeId") ?? "",
     freeText: formData.get("freeText") ?? "",
     quantityLabel: formData.get("quantityLabel"),
   });
@@ -47,6 +51,7 @@ export async function addShoppingItemAction(
         tenantId,
         userId,
         cropId: parsed.data.cropId || null,
+        equipmentTypeId: parsed.data.equipmentTypeId || null,
         freeText: parsed.data.freeText || null,
         quantityLabel: parsed.data.quantityLabel,
       })
@@ -58,6 +63,7 @@ export async function addShoppingItemAction(
     item: {
       id: item.id,
       cropId: item.cropId,
+      equipmentTypeId: item.equipmentTypeId,
       freeText: item.freeText,
       quantityLabel: item.quantityLabel,
       status: "pending",

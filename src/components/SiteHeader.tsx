@@ -42,10 +42,13 @@ function NavItems({
       <Link href="/garden" className="hover:underline" onClick={onNavigate}>
         My Garden
       </Link>
+      <Link href="/journal" className="hover:underline" onClick={onNavigate}>
+        Photo Journal
+      </Link>
       {!isPaid && (
         <Link
           href="/upgrade"
-          className="rounded-full bg-(--brand-secondary) px-3 py-1 font-medium text-[#1f2a1f] hover:opacity-90"
+          className="rounded-full bg-(--brand-secondary) px-3 py-1 font-medium text-(--text-heading) hover:opacity-90"
           onClick={onNavigate}
         >
           Upgrade

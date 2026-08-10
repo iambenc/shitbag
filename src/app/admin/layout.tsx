@@ -16,7 +16,7 @@ export default async function AdminLayout({ children }: { children: React.ReactN
   return (
     <div className="px-6 py-16">
       <div className="mx-auto max-w-3xl">
-        <h1 className="text-2xl font-semibold text-(--brand-primary)">Tenant admin</h1>
+        <h1 className="font-display text-3xl font-semibold text-(--brand-primary)">Tenant admin</h1>
         <nav className="mt-4 flex flex-wrap gap-2 text-sm">
           {ADMIN_NAV.map((item) => (
             <Link

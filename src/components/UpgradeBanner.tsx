@@ -46,7 +46,7 @@ export function UpgradeBanner() {
         type="button"
         onClick={dismiss}
         aria-label="Dismiss"
-        className="text-(--text-muted) hover:text-[#1f2a1f]"
+        className="text-(--text-muted) hover:text-(--text-heading)"
       >
         ✕
       </button>

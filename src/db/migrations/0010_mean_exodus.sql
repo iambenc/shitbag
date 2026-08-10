@@ -1,0 +1,4 @@
+ALTER TABLE "shopping_list_items" DROP CONSTRAINT "shopping_list_items_crop_xor_free_text";--> statement-breakpoint
+ALTER TABLE "shopping_list_items" ADD COLUMN "equipment_type_id" uuid;--> statement-breakpoint
+ALTER TABLE "shopping_list_items" ADD CONSTRAINT "shopping_list_items_equipment_type_id_equipment_types_id_fk" FOREIGN KEY ("equipment_type_id") REFERENCES "public"."equipment_types"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "shopping_list_items" ADD CONSTRAINT "shopping_list_items_exactly_one_of" CHECK (num_nonnulls("shopping_list_items"."crop_id", "shopping_list_items"."free_text", "shopping_list_items"."equipment_type_id") = 1);

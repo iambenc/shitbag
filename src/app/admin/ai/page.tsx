@@ -6,6 +6,7 @@ import { AIConfigForm } from "./AIConfigForm";
 const AGENT_LABELS: Record<string, string> = {
   grow_planner: "Grow planner",
   plant_health: "Plant health diagnosis",
+  crop_facts: "Crop facts lookup",
 };
 
 export default async function AdminAIPage() {
@@ -17,7 +18,7 @@ export default async function AdminAIPage() {
   return (
     <div className="mx-auto flex max-w-3xl flex-col gap-8">
       <div>
-        <h2 className="text-lg font-semibold">AI providers</h2>
+        <h2 className="font-display text-lg font-semibold">AI providers</h2>
         <p className="mt-1 text-sm text-(--text-muted)">
           Configure a per-tenant API key for each AI agent. Leaving this unset falls back to the
           platform&rsquo;s own key.

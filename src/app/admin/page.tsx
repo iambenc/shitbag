@@ -35,7 +35,7 @@ export default async function AdminOverviewPage() {
           className="flex items-center justify-between rounded-lg border border-black/10 bg-white p-6 hover:border-(--brand-primary)/40"
         >
           <div>
-            <p className="font-medium">{s.title}</p>
+            <p className="font-display text-lg font-semibold">{s.title}</p>
             <p className="mt-1 text-sm text-(--text-muted)">{s.description}</p>
           </div>
           <span aria-hidden className="text-xl text-(--brand-primary)">
@@ -48,7 +48,7 @@ export default async function AdminOverviewPage() {
         className="flex items-center justify-between rounded-lg border border-black/10 bg-white p-6 hover:border-(--brand-primary)/40"
       >
         <div>
-          <p className="font-medium">Reports</p>
+          <p className="font-display text-lg font-semibold">Reports</p>
           <p className="mt-1 text-sm text-(--text-muted)">Review photos reported by gardeners.</p>
         </div>
         {pendingCount > 0 ? (

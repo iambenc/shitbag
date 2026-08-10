@@ -30,7 +30,7 @@ export default async function HarvestsPage() {
 
   return (
     <div className="mx-auto max-w-2xl px-6 py-16">
-      <h1 className="text-2xl font-semibold text-(--brand-primary)">Harvests</h1>
+      <h1 className="font-display text-3xl font-semibold text-(--brand-primary)">Harvests</h1>
       <p className="mt-2 text-sm text-(--text-muted)">
         Log what you&apos;ve picked — this builds up history for next year&apos;s planning.
       </p>

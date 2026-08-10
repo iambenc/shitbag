@@ -95,7 +95,7 @@ export function HarvestsView({ harvests, crops }: { harvests: Harvest[]; crops: 
         />
         <button
           type="submit"
-          className="self-start rounded-full bg-(--brand-primary) px-4 py-2 text-sm text-white hover:opacity-90"
+          className="self-start rounded-full bg-(--brand-primary) px-6 py-2 text-sm text-white hover:opacity-90"
         >
           Log harvest
         </button>
