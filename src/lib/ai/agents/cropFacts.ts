@@ -5,6 +5,11 @@ import { getModelForTenant } from "@/lib/ai/provider";
 import { cropCategoryEnum } from "@/db/schema";
 
 export const CropFactsOutputSchema = z.object({
+  name: z
+    .string()
+    .describe(
+      "The crop's correct, standard common name — proper capitalization and spelling, singular, e.g. \"Tomato\" or \"Swiss Chard\" — even if the requested name had a typo, unusual casing, or was plural. This is what gets stored in the shared crop catalog other users will see and search, so it must be the genuinely correct name, not just an echo of whatever was asked for.",
+    ),
   category: z.enum(cropCategoryEnum),
   emoji: z.string(),
   spacingCm: z.number().int().positive(),
@@ -31,6 +36,7 @@ function buildPrompt(cropName: string): string {
   return `You are an expert UK fruit-and-vegetable gardening advisor. A gardener wants to grow "${cropName}", a crop that isn't in our reference catalog yet. Provide accurate, practical planting facts for growing it in a home garden in the UK.
 
 Respond with:
+- name: the crop's correct common name, properly capitalized and spelled, singular (e.g. "Tomato", "Swiss Chard") — correct any typo, casing, or pluralization in "${cropName}" rather than repeating it verbatim; this is what gets saved to a shared catalog other gardeners will see
 - category: fruit, vegetable, or herb
 - emoji: a single emoji that best represents this crop
 - spacingCm: recommended spacing between plants, in cm
@@ -67,10 +73,17 @@ export async function getCropFacts(tenantId: string, cropName: string): Promise<
  * No AI key configured — same dev-mode fallback pattern as every other
  * agent. Unlike those, this output gets persisted permanently into the
  * shared crops catalog, so the caller also stamps provider/model "mock" on
- * the row, not just this text label.
+ * the row, not just this text label. Can't actually correct spelling
+ * without a real model — this only title-cases whatever was typed, a
+ * best-effort stand-in for the real "name" field's spelling-correction job.
  */
 function buildMockCropFacts(cropName: string): CropFactsOutput {
+  const name = cropName
+    .trim()
+    .toLowerCase()
+    .replace(/\b\w/g, (c) => c.toUpperCase());
   return {
+    name,
     category: "vegetable",
     emoji: "🌱",
     spacingCm: 30,

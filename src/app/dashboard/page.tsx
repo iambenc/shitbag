@@ -25,6 +25,11 @@ const RESOURCE_LINKS = [
     description: "A plan tailored to your plot, seeds, and experience — membership feature.",
   },
   {
+    href: "/seeds",
+    title: "Seed inventory",
+    description: "Add seeds you've bought — prioritised in your AI grow plan.",
+  },
+  {
     href: "/shopping-list",
     title: "Shopping list",
     description: "See everything you need to pick up.",

@@ -1,4 +1,4 @@
-import { pgTable, uuid, text, boolean, date, timestamp } from "drizzle-orm/pg-core";
+import { pgTable, uuid, text, boolean, integer, date, timestamp } from "drizzle-orm/pg-core";
 import { tenants } from "./tenant";
 import { users } from "./user";
 import { crops } from "./crop";
@@ -58,6 +58,14 @@ export const tasks = pgTable(
     // Lets "cancel remaining re-sows" target exactly this crop's batch
     // without touching an unrelated recommendation of the same crop.
     successionSeriesId: uuid("succession_series_id"),
+    // Set only on a task that sows/plants seeds (the original sow, and any
+    // succession re-sow) — the AI's estimate of how many seeds that specific
+    // sowing needs, based on the growing area's size and the crop's
+    // spacingCm. Null for every other task (feeding, transplanting). Read
+    // by toggleTaskCompleteAction to deduct from the user's seedInventory
+    // once this task is actually completed, not at generation time — a
+    // generated-but-never-done task shouldn't consume anything.
+    estimatedSeedsUsed: integer("estimated_seeds_used"),
     status: text("status", { enum: taskStatusEnum }).notNull().default("pending"),
     source: text("source", { enum: taskSourceEnum }).notNull().default("manual"),
     completedAt: timestamp("completed_at", { withTimezone: true }),

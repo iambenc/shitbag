@@ -1,6 +1,7 @@
 import { withTenant } from "@/lib/tenant/withTenant";
 import { tenantAIConfigs, tenantAIConfigAgentEnum } from "@/db/schema";
 import { requireTenantAdmin } from "@/lib/actions/shared";
+import { DEFAULT_MODEL_BY_AGENT } from "@/lib/ai/provider";
 import { AIConfigForm } from "./AIConfigForm";
 
 const AGENT_LABELS: Record<string, string> = {
@@ -36,7 +37,7 @@ export default async function AdminAIPage() {
                 agent={agent}
                 config={{
                   provider: config?.provider ?? "google",
-                  model: config?.model ?? "gemini-3.5-flash",
+                  model: config?.model ?? DEFAULT_MODEL_BY_AGENT[agent],
                   isActive: config?.isActive ?? true,
                   configured: Boolean(config?.apiKeyEncrypted),
                 }}

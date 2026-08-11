@@ -42,6 +42,14 @@ export const RecommendationReplacementOutputSchema = z.object({
           .describe(
             "True only for a repeat/re-sow occurrence of a succession-sowing crop (one of several batches sown a few weeks apart to keep a continuous harvest). False for every other task, including this crop's own first/original sowing.",
           ),
+        estimatedSeedsUsed: z
+          .number()
+          .int()
+          .positive()
+          .nullable()
+          .describe(
+            "Set only on a task that sows/plants seeds — the crop's first sowing, and any succession re-sow task. Your best estimate of how many seeds that specific sowing needs, based on stage 1's size (from STAGE SHAPE) divided by the crop's spacingCm, plus roughly a 20-30% margin for germination failure. Null for every other task (feeding, transplanting).",
+          ),
       }),
     )
     .min(1)
@@ -151,7 +159,8 @@ INSTRUCTIONS
 4. Generate tasks (sowing, feeding where feeding notes exist, and transplanting where relevant) each with an explanation of why/when and an absolute last date (hardDeadlineDate) after which it's too late. If STAGE SHAPE has more than one stage, add a transplant task for each stage after the first, with activatesStageIndex set to that stage's 1-based index (e.g. 1 for the second stage). Leave activatesStageIndex null on every other task. Mark isIndoor true on the sowing task if it starts the crop in a seed tray (or otherwise indoors) ahead of its outdoor season.
 5. If this crop supports succession sowing, ALWAYS generate at least 2 re-sow tasks — never just one, a single re-sow defeats the point of succession sowing. Use up to 5 for a crop with a long outdoor sowing window (4+ months, e.g. radish, carrot), and at least 2-3 even for a shorter window (~2 months). Space them roughly 2-3 weeks apart, each still falling within that crop's outdoor sowing window and before the growing season realistically ends. Mark isSuccessionResow: true on every one of these re-sow tasks, and false on every other task (including this crop's own first/original sowing).
 6. Use prior harvest history to judge whether a crop is worth recommending again.
-7. If a crop you'd genuinely recommend isn't in the catalog above, you may propose it: set newCropName to its common name and give it a lowercase-hyphenated cropSlug, used identically in this recommendation and its tasks. Only propose well-established, common home-garden crops you're confident about. Leave newCropName null for every crop already in the catalog.`;
+7. On every task that sows or plants seeds (the crop's first sowing and any succession re-sow), set estimatedSeedsUsed to your best-guess seed count for that specific sowing — stage 1's size divided by the crop's spacingCm, plus a 20-30% margin for germination failure. Leave it null on every other task (feeding, transplanting).
+8. If a crop you'd genuinely recommend isn't in the catalog above, you may propose it: set newCropName to its common name and give it a lowercase-hyphenated cropSlug, used identically in this recommendation and its tasks. Only propose well-established, common home-garden crops you're confident about. Leave newCropName null for every crop already in the catalog.`;
 }
 
 export async function generateRecommendationReplacement(
@@ -201,6 +210,19 @@ function buildMockReplacement(input: RecommendationReplacementInput): Recommenda
     return d.toISOString().slice(0, 10);
   }
   const expertise = input.profile.expertiseLevel ?? "beginner";
+  // Same deterministic stand-in as growPlanner.ts's own mock — most stage
+  // shapes carry no widthCm/lengthCm (pots/trays given as a diameter or
+  // litres), so this falls back to a plausible small-batch count scaled
+  // loosely by spacing rather than pretending to do real geometry.
+  function estimateSeeds(crop: AvailableCrop): number {
+    const stage = input.stageShape[0];
+    if (stage?.widthCm && stage?.lengthCm) {
+      const cols = Math.max(1, Math.floor(stage.widthCm / crop.spacingCm));
+      const rows = Math.max(1, Math.floor(stage.lengthCm / crop.spacingCm));
+      return Math.ceil(cols * rows * 1.25);
+    }
+    return Math.max(3, Math.round(300 / crop.spacingCm));
+  }
 
   if (!crop) {
     // No candidate left to recommend (every catalog crop is somehow
@@ -217,6 +239,9 @@ function buildMockReplacement(input: RecommendationReplacementInput): Recommenda
         activatesStageIndex: null,
         isIndoor: false,
         isSuccessionResow: false,
+        // Swiss Chard isn't a real catalog crop here (no spacingCm to divide
+        // by) — a plausible fixed count for this synthetic mock-only demo.
+        estimatedSeedsUsed: 8,
       },
     ];
     for (let i = 1; i < stages.length; i++) {
@@ -228,6 +253,7 @@ function buildMockReplacement(input: RecommendationReplacementInput): Recommenda
         activatesStageIndex: i,
         isIndoor: false,
         isSuccessionResow: false,
+        estimatedSeedsUsed: null,
       });
     }
     return {
@@ -252,6 +278,7 @@ function buildMockReplacement(input: RecommendationReplacementInput): Recommenda
       activatesStageIndex: null,
       isIndoor: false,
       isSuccessionResow: false,
+      estimatedSeedsUsed: estimateSeeds(crop),
     },
   ];
   for (let i = 1; i < stages.length; i++) {
@@ -263,6 +290,7 @@ function buildMockReplacement(input: RecommendationReplacementInput): Recommenda
       activatesStageIndex: i,
       isIndoor: false,
       isSuccessionResow: false,
+      estimatedSeedsUsed: null,
     });
   }
   if (crop.feedingNotes) {
@@ -274,6 +302,7 @@ function buildMockReplacement(input: RecommendationReplacementInput): Recommenda
       activatesStageIndex: null,
       isIndoor: false,
       isSuccessionResow: false,
+      estimatedSeedsUsed: null,
     });
   }
   if (crop.supportsSuccessionSowing) {
@@ -288,6 +317,7 @@ function buildMockReplacement(input: RecommendationReplacementInput): Recommenda
         activatesStageIndex: null,
         isIndoor: false,
         isSuccessionResow: true,
+        estimatedSeedsUsed: estimateSeeds(crop),
       });
     }
   }

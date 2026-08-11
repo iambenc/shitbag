@@ -86,6 +86,13 @@ export const seedInventory = pgTable(
       .notNull()
       .references(() => crops.id, { onDelete: "cascade" }),
     quantityLabel: text("quantity_label").notNull(),
+    // Nullable: onboarding's seeds step only ever sets quantityLabel (free
+    // text, e.g. "1 packet") — this numeric count is only ever populated by
+    // the /seeds page's add flow, which asks for it directly. A crop whose
+    // only owned rows are onboarding-sourced (null here) reads as "unknown
+    // quantity," not "zero" — see toggleTaskCompleteAction's depletion
+    // check, which must never conflate the two.
+    seedCount: integer("seed_count"),
     source: text("source", { enum: seedSourceEnum }).notNull().default("onboarding"),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },

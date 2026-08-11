@@ -3081,3 +3081,443 @@ case left, so the display text no longer depends on the raw enum spelling stayin
 Verified: `tsc --noEmit`/`eslint` clean, both `/dashboard` and `/calendar` confirmed compiling.
 Purely presentational — `taskSourceEnum`/task data untouched, only which badge renders for which
 source.
+
+## Feature — "try something new" toggle on the Grow Planner
+
+Requested directly: "the user can toggle whether they want to try something new and the Grow Planner
+agent will suggest one unusual plant that can grow in the UK but is not commonly done. This plant
+should take up one growing area at most." Checked first whether a persistent per-user settings
+surface existed to host a sticky "always suggest something unusual" preference (the more natural
+home for a toggle, matching how `hasIndoorSeedlingSpace` etc. already live on `userProfiles`) —
+confirmed none does: every `userProfiles` field is set once during onboarding with no edit-later
+page anywhere in the app. Building one would have been a much bigger, unrequested scope increase, so
+this is a per-generation checkbox on the existing "Generate my grow plan" flow instead — a real UX
+trade-off, not an oversight; sticky forever-on-until-toggled-off didn't fit an app with no settings
+page to toggle it back off from later.
+
+**Schema**: `planRecommendations` gains `isUnusualSuggestion: boolean().notNull().default(false)` —
+default `false` is correct for every existing row (none of them were), so no backfill needed.
+Migration `0025_first_inertia.sql`, plain `ADD COLUMN`.
+
+**`growPlanner.ts`**: `GrowPlanOutputSchema.recommendations[]` gains `isUnusualSuggestion: z.boolean()`
+(required, own `.describe()`, exactly the same shape as the existing `isIndoor`/`isSuccessionResow`
+per-task booleans this file already has proven precedent for). `GrowPlannerInput` gains
+`wantsUnusualCrop: boolean`. Refactored `buildPrompt`'s previously-hardcoded numbered INSTRUCTIONS
+block into a new `buildInstructions()` returning an array, specifically so the new "try something
+new" instruction could be conditionally appended only when `wantsUnusualCrop` is true without hand-
+renumbering ten existing instructions around it (or leaving a confusing always-present instruction
+about a feature that wasn't requested this run). The new instruction: exactly one recommendation,
+explicitly listing example unusual-but-genuinely-UK-growable crops (oca, achocha, yacon, cape
+gooseberries, tomatillos, cucamelons, salsify, kohlrabi) while excluding common staples, required to
+use exactly one growing area (a single-entry `stages` array, explicitly forbidding starting it in a
+seed tray/pot first "even if it would otherwise benefit from that"), and explicitly permitted to be
+skipped entirely if there's no genuine space/season fit — never forcing a bad pick just to satisfy
+the toggle. `buildMockPlan` updated: every existing recommendation literal (3 push sites) gained
+`isUnusualSuggestion: false`; the area-reservation math (`reservedForDemos`) now reserves a second
+spare growing area when `wantsUnusualCrop` is set, and a new deterministic mock block adds one Oca
+recommendation with `isUnusualSuggestion: true` when both the toggle is on and a spare area exists —
+matching this file's established "every mock path should be fully testable, not just the common
+case" principle, same as the existing Swiss Chard new-crop demo block right above it.
+
+**Pipeline threading**: `generateGrowPlanAction` gains a `wantsUnusualCrop: boolean = false` parameter,
+passed into the `grow-plan/requested` Inngest event's data; `generateGrowPlanFn`'s `EventData` type
+gains an optional `wantsUnusualCrop?: boolean` (optional so an older/dev-triggered event without it
+doesn't crash, defaulted to `false` when building `GrowPlannerInput`); the persist step's
+`planRecommendations` insert now carries `isUnusualSuggestion: r.isUnusualSuggestion` through from
+the AI's output. `regenerateRecommendation.ts` (the reject→replace flow) needed no changes at all —
+its own `planRecommendations` insert simply omits the column, so it correctly falls through to the
+schema's `default(false)`, which is exactly right: a rejected recommendation's replacement is a
+generic single-crop substitute, never itself "the one unusual pick" for that generation run.
+
+**UI**: `GeneratePlanButton.tsx` (shared by all three call sites — initial generate, try-again-after-
+failure, generate-a-new-plan — so this one change covers all of them uniformly) gained a checkbox
+above the button, local `useState`, passed as the action's argument on click. `grow-plan/page.tsx`:
+`RecommendationGroup` and `groupRecommendations`'s row type both gained `isUnusualSuggestion`, added
+to the grouping key alongside `status`/`regenerationCount` for the same silent-merge-prevention
+reason those are already there (an unusual pick should never share a crop with anything else in the
+plan in practice, so this should never actually fire — defensive consistency with established
+precedent, not a fix for an observed bug). New "Try something new" pill rendered first among the
+existing badges on a matching card, styled with the brand-tinted (not terracotta/secondary) treatment
+to read as a positive highlight rather than a warning.
+
+Verified: `tsc --noEmit`/`eslint` clean across every touched file — `tsc` specifically caught the one
+genuinely missed wiring spot (`generateGrowPlan.ts`'s `GrowPlannerInput` construction) before I found
+it by inspection, confirming every mock recommendation literal was correctly updated. Then verified
+against a **real live end-to-end trigger**, not just the mock path: inserted a `grow_plans` row for
+the freshly-upgraded `ben.crumpton+testingedurnity@gmail.com` test account (confirmed paid, onboarded,
+35 available growing areas, zero generations used today) and sent the real `grow-plan/requested`
+event with `wantsUnusualCrop: true` directly via `inngest.send()`. The live Gemini call completed
+successfully and produced exactly one `isUnusualSuggestion: true` recommendation — **Kohlrabi**,
+genuinely unusual for UK home gardens, genuinely realistic to grow, with on-brief reasoning ("rare to
+find in supermarkets... crisp, sweet stem") — confirmed via Postgres it has exactly one
+`plan_recommendation_stages` row (the "at most one growing area" constraint held on the very first
+live test), and every other recommendation in that same plan correctly has `isUnusualSuggestion:
+false`. Left this real, valid plan in place on the test account rather than deleting it — same
+"don't destroy genuinely good real output" judgment call made earlier this session for other features
+— only the throwaway trigger script was removed. `/grow-plan` reconfirmed compiling.
+
+## Change — grow-plan page: link-styled buttons became real buttons, toggle made prominent
+
+Requested directly: "let's turn the 'View tasks on calendar', 'Generate a new plan' links into
+buttons rather than links and turn the 'Try something new' into a toggle and make it more
+prominent." Both "links" were restyled visually, not converted to a different HTML element:
+"View tasks on calendar" is genuine cross-page navigation, so it stays a real `<Link>` — changing it
+to a `<button>` would break standard link behavior (ctrl/cmd-click to open in a new tab, right-click
+"open in new tab", correct semantics for a navigation target) for a purely cosmetic ask, matching how
+this codebase already treats several other nav destinations as `<Link>`s styled to look exactly like
+buttons (e.g. the "View membership" upgrade link). "Generate a new plan" was already a real
+`<button>` inside `GeneratePlanButton` — it just looked like an underlined text link, so this one was
+pure restyling.
+
+**`grow-plan/page.tsx`**: both elements now share one soft-fill secondary pill style (`rounded-full
+bg-black/5 px-4 py-2 text-sm ... hover:bg-black/10 active:scale-95 transition`), the same treatment
+already established this session for the Reject button and toggle/chip inactive states — visually
+consistent with each other since they sit side by side in the same row, and consistent with the rest
+of the app's secondary-action language rather than inventing a new button style. The wrapping row
+also changed from `items-center` to `items-start` (plus `flex-wrap` for narrow viewports): the toggle
+below makes `GeneratePlanButton` a taller, two-part block now, and center-aligning a tall block
+against a single-line button would look visually off-balance.
+
+**`GeneratePlanButton.tsx`**: the plain checkbox + tiny muted label became a proper toggle switch —
+a real `<input type="checkbox">` kept for correct semantics/keyboard support but visually hidden
+(`sr-only`, not `hidden`/`display:none`, so it stays focusable and in the tab order), paired with
+sibling `<span>`s styled as a track and thumb using Tailwind's `peer`/`peer-checked:` variants (the
+thumb slides via `peer-checked:translate-x-5`, the track recolors via `peer-checked:bg-(--brand-
+primary)`) — a standard, accessible way to build a custom-styled switch without losing native
+checkbox behavior or adding a new dependency. Wrapped the whole thing in its own bordered/shadow-card
+box with a bold label line and a description line beneath, rather than a single small inline
+checkbox — genuinely more prominent, not just restyled, matching what was asked.
+
+Verified: `tsc --noEmit`/`eslint` clean, `/grow-plan` reconfirmed compiling. Presentational only — no
+behavior change to any of the three buttons' underlying actions, the toggle's state/wiring to
+`generateGrowPlanAction` untouched from the feature built earlier this session.
+
+**Follow-up**: the previous pass's `flex flex-wrap items-start gap-4` row let "View tasks on
+calendar" sit beside the toggle card whenever there was horizontal room, with "Generate a new plan"
+wrapping onto its own line below only because it's nested inside `GeneratePlanButton`'s own internal
+`flex-col` — an inconsistent, viewport-width-dependent layout, not the clean one-per-line stack
+asked for. Changed the outer container from `flex-wrap` to `flex-col`; since `GeneratePlanButton`'s
+own wrapper was already `flex-col` (toggle above its button), this now reliably stacks all three as
+separate lines regardless of viewport width: the calendar link, the toggle card, then the generate
+button. `tsc --noEmit`/`eslint` clean, `/grow-plan` reconfirmed compiling.
+
+## Fix — recommendation card badges wrapping mid-pill
+
+Reported with a screenshot showing "Add to shopping list" split across two lines, the rounded pill
+background visibly clipped at the break. Root cause: the crop heading and all four badges ("Try
+something new", "Add to shopping list", "New, unverified", the price pill) were plain inline `<span>`s
+packed inside one `<p>`, each separated by `ml-2` margins. Plain inline elements let the browser break
+*inside* a span's own text at any space, not just between spans — so a narrow card could wrap "Add to
+shopping" onto one line and "list" onto the next, even though both words belong to the same pill.
+
+Restructured `grow-plan/page.tsx`'s recommendation card heading: the outer element changed from a
+single `<p>` to a `flex flex-wrap items-center gap-2` `<div>`, with the crop name/emoji as its own
+inner `<p>` and each badge as a sibling `<span>` (margins replaced by the container's `gap-2`). Every
+badge span also gained `whitespace-nowrap`, so its own text can never break internally — if a badge
+doesn't fit on the current line, the *whole pill* wraps to the next line as one atomic unit via
+flex-wrap, instead of splitting mid-word.
+
+Verified: `tsc --noEmit`/`eslint` clean, `/grow-plan` reconfirmed compiling. Purely structural/CSS —
+no change to which badges appear or their underlying conditions (`isUnusualSuggestion`,
+`requiresPurchase`, `crop.verified`, price), only how they lay out under space pressure.
+
+## Feature — seed inventory page for seeds bought from a shop
+
+Requested directly: "add a new section accessible from the sidebar for the user to add a new seed
+type for anything they may have bought from a shop, this should be added to their seed inventory
+when added and should be passed to the Grow Plan." Investigation found `seedInventory` already
+existed as a table (with a `source` enum already including `"purchased"`, apparently anticipating
+exactly this) and was already fully read by `generateGrowPlan.ts`'s gather-context step into
+`ownedSeedCropSlugs` — but the *only* way to add to it was the one-time onboarding seeds step, gone
+once onboarding completes, and even that only let you pick from the existing crop catalog via a
+`<select>`, with no way to add a genuinely new/unusual seed type at all. So "passed to the Grow
+Plan" turned out to already be true by construction — the real gap was that there was no page to add
+to the table after onboarding, and no way to add anything not already in the catalog.
+
+**Crop resolution, not a rigid catalog dropdown**: "a new seed type... anything they may have
+bought" reads as needing to accept an unusual/uncommon crop name, not just the existing catalog —
+mirrors the `newCropName`/backfill pathway `generateGrowPlan.ts` already uses for AI-proposed crops
+outside the catalog (`resolve-new-crops` → `cropFacts.ts`). `addSeedAction` (new,
+`src/lib/actions/seeds.ts`) takes a single free-text "what did you buy" field: slugifies it, checks
+if that crop already exists (most real adds — "Tomato", "Lettuce" — resolve here for free, no AI
+call), and only if it genuinely doesn't calls `getCropFacts` to backfill a new `crops` row (same
+`verified: false`/`sourceProvider`/`sourceModel` stamping as the existing pathway) before inserting
+the `seedInventory` row. This one free-text field handles both "I bought more of something we
+already know" and "I bought something unusual" without needing separate UI modes. Deliberately not
+shared/extracted into a common helper with `generateGrowPlan.ts`'s own near-identical resolve-new-
+crops logic — that step is Inngest-wrapped, batches multiple AI-proposed crops per call, and is
+already proven/Plan-reviewed; this is a single-crop version behind a plain server action, and risking
+that working code to avoid duplicating a few dozen lines isn't worth it, same reasoning this codebase
+already applies to not sharing Inngest gather-context steps across functions.
+
+**Rate limit**: new `MAX_DAILY_SEED_ADDITIONS = 10` in `limits.ts` — higher than the other AI-cost
+caps (3-5/day) since most real adds resolve to an existing crop for free (no AI call at all) and this
+is meant to support a genuine "catch up my whole seed box in one sitting" session, not a per-
+generation action; still bounds the worst case where every add is a genuinely new, AI-backfilled crop.
+Counts only `source: "purchased"` rows created today — deliberately excludes the separate, already-
+bounded onboarding seeds step, since the cap exists to bound *this* action's own AI-cost exposure,
+not to limit onboarding.
+
+**Page**: `/seeds` (new, linked from the dashboard's `RESOURCE_LINKS` sidebar as requested, placed
+right after "AI Grow Plan" to make the relationship explicit) — a simple list-plus-add-form page
+mirroring the existing `/harvests` page's shape closely (list of owned items with delete, an add
+form below, optimistic client-side insert on submit). Not paid-gated: seed inventory management is a
+free/core feature in this app already (the onboarding seeds step itself is available to every user
+regardless of subscription tier), so gating it here would be inconsistent with that existing
+precedent — the daily cap is what bounds AI cost exposure regardless of tier, the same role it plays
+elsewhere.
+
+Verified: `tsc --noEmit`/`eslint` clean, `/seeds` and `/dashboard` both confirmed compiling. Tested
+the actual DB-side mechanics directly against real demo data (not assumed): resolved "Tomato" against
+the real existing catalog row (confirmed no duplicate crop created), simulated the new-crop-backfill
+insert shape for a genuinely novel crop ("Purple Dragon Carrot" — chosen specifically to not collide
+with anything in the seeded catalog) and confirmed it lands with `verified: false` and the same
+provenance stamping as the proven `generateGrowPlan.ts` pathway; confirmed both resulting
+`seedInventory` rows are exactly what `generateGrowPlan.ts`'s existing gather-context query would read
+as `ownedSeedCropSlugs`; confirmed the daily-cap counting query and the ownership-scoped delete both
+behave correctly. All test rows (`seed_inventory` and the synthetic `crops` row) removed afterward,
+confirmed zero leftover state. The real `getCropFacts` AI call itself wasn't re-exercised in this
+test (can't invoke a `"server-only"`-guarded module from a plain script) — relied on it already being
+proven live earlier this session via `generateGrowPlan.ts`'s identical resolve-new-crops pathway,
+disclosed rather than re-claimed as freshly tested.
+
+## Feature — seed count tracking, AI seed-consumption estimates, and a cheaper research model
+
+Requested directly: "Let's build out this feature, when a new seed is added that is not recognised
+we should ask an AI agent for its planting season (including indoor sowing), potential harvest time
+etc and build a database. We can then use this dataset when other users add the same seed in the
+future. The input field should also autocomplete using the titles from the dataset. When adding
+seeds the user should be asked for the quantity, this can also be used by the Grow Plan agent - when
+a task is generated it should estimate the amount of seeds that are required and subtract them from
+the user's seed inventory and prompt them to buy new ones when necessary. We should use a cheaper
+LLM to do the research on the unknown seed types." Most of the "ask an AI agent... build a database"
+half was already built by the previous `/seeds` feature (`getCropFacts` backfill into the shared
+`crops` catalog, reused by every future add of the same crop) — this pass closes the four genuinely
+new pieces: numeric seed quantities, AI-estimated per-task seed consumption, automatic deduction (and
+restoration) tied to task completion with a low-stock shopping-list prompt, and a cheaper model tier
+for the crop-facts research call specifically.
+
+Design was validated in a Plan-agent review before implementation, which caught four real issues, all
+incorporated: (1) `toggleTaskCompleteAction` was a read-then-conditional-write, not atomic — two
+concurrent completion requests for the same task could both pass the guard and both apply the seed
+deduction, a genuine double-subtraction race (harmless before this feature, since the only existing
+side effect was idempotent; not harmless once seed counts are at stake). (2)
+`recommendationReplacement.ts`/`regenerateRecommendation.ts` (the reject→replace flow) has its own
+entirely separate task schema and persist step — easy to miss since the new column is nullable and
+TypeScript wouldn't force updating it, which would have silently made seed deduction never fire for
+regenerated recommendations' tasks. (3) A depletion check that summed only numeric-`seedCount` rows
+and treated a sum of 0 as "buy more" would have misfired for any crop whose only owned rows are
+onboarding-sourced (free-text `quantityLabel`, no `seedCount`) — that sum is vacuously 0 for a crop
+never numerically tracked at all, indistinguishable from "genuinely used it all up" unless "zero
+numeric rows" and "numeric rows summing to zero" are treated as different cases. (4) The admin AI
+config page pre-fills its model field with a real, submittable value
+(`config?.model ?? "gemini-3.5-flash"`), and `upsertAIConfigAction` has its own independent hardcoded
+`"gemini-3.5-flash"` fallback — any tenant admin saving that form for `crop_facts` for any reason
+(e.g. just setting an API key) without manually editing the model would have silently pinned it to
+the expensive tier, permanently defeating the new cheaper default.
+
+**Cheaper model for crop research** (`src/lib/ai/provider.ts`): replaced the single hardcoded
+`"gemini-3.5-flash"` fallback with `DEFAULT_MODEL_BY_AGENT: Record<AgentName, string>` — every agent
+keeps `"gemini-3.5-flash"` except `crop_facts`, which defaults to `"gemini-3.5-flash-lite"` (a
+handful of planting facts for one crop name needs no vision/complex reasoning, unlike
+`growing_area_estimator`, which deliberately stays on the full tier for its multimodal needs). A
+tenant's explicit `tenantAIConfigs.model` override still always wins — this is only the fallback.
+`src/app/admin/ai/page.tsx` and `src/lib/actions/admin.ts`'s `upsertAIConfigAction` both now compute
+their default from this same map instead of their own independent hardcoded strings, closing finding
+(4) above.
+
+**Numeric seed quantities** (`src/db/schema/crop.ts`, `src/db/schema/tasks.ts`, migration
+`0026_wooden_mister_sinister.sql`): `seedInventory` gains a nullable `seedCount: integer` alongside
+the existing free-text `quantityLabel` — nullable because onboarding's seeds step only ever sets
+`quantityLabel`, so a crop whose only owned rows are onboarding-sourced reads as "unknown quantity,"
+never "zero" (finding (3)). `tasks` gains a nullable `estimatedSeedsUsed: integer`, set only on a
+task that sows/plants seeds (the original sow, and any succession re-sow), null for every other task
+(feeding, transplanting). `/seeds`'s add form (`SeedsView.tsx`) now asks "how many seeds?" (a
+required numeric input, `min=1 max=100000`) instead of a free-text quantity field, storing it as
+`seedCount` and deriving `quantityLabel` server-side as `` `${seedCount} seeds` `` — the two fields
+stay in sync without a separate UI mode. The crop-name input also gained a native `<datalist>`
+populated from every existing `crops.name` (fetched once in `page.tsx`, deduped/sorted) — the
+"autocomplete using the titles from the dataset" ask, no new dependency.
+
+**AI-estimated seed consumption**: both `growPlanner.ts` (main plan generation) and
+`recommendationReplacement.ts` (reject→replace) gained a required `estimatedSeedsUsed: number | null`
+field on their task schemas, with a `.describe()` and matching prompt instruction asking for the
+growing area's size divided by the crop's `spacingCm`, plus a 20-30% germination-safety margin — null
+on every non-sowing task. Their mock fallbacks (`buildMockPlan`, `buildMockReplacement`) gained a
+matching `estimateSeeds()` helper (area dimensions ÷ spacingCm × 1.25 when width/length are known,
+else a spacing-scaled small-batch fallback for pots/trays given as a diameter or litres) applied
+across all task-literal push sites, so the mock path exercises the field with no live key needed.
+`regenerateRecommendation.ts` (persist step) and `generateGrowPlan.ts` (persist-results step) both
+now carry `estimatedSeedsUsed` through into the `tasks` insert — closing finding (2), the missed
+parallel call site.
+
+**Deduction, restoration, and low-stock prompt** (`src/lib/actions/tasks.ts`,
+`toggleTaskCompleteAction`): rewritten from a read-then-conditional-write into a single atomic guarded
+`UPDATE ... WHERE ... RETURNING` — completing only fires from a not-already-`"completed"` status
+(`pending` or `missed`), un-completing only fires from `"completed"` specifically (so the restoration
+side effect below can never fire for a task that was never actually completed). This closes finding
+(1) and also retroactively fixes the same pre-existing (previously harmless) race on the
+`activatesStageId` transplant side effect. On completing a task with both `cropId` and
+`estimatedSeedsUsed` set: fetch that crop's `seedInventory` rows with a non-null `seedCount`
+(explicitly excluding onboarding's null rows — finding (3)), oldest first, and deduct sequentially
+with floor-clamping across rows; if at least one such numeric row existed and the total across them
+is now 0, insert a shopping-list item using `generateGrowPlan.ts`'s existing dedupe check reused
+verbatim (a plain per-crop existence query, no status/source filter — inheriting its known
+limitation that any pre-existing shopping-list row for that crop, even a since-used-up one, suppresses
+the new prompt). On un-completing, the nominal amount is added back to a single row (the oldest
+numeric one) rather than reversing the exact per-row split, since the split itself was never meant to
+be precise, just oldest-stock-first. `deleteTaskAction`'s pre-existing lack of any side-effect
+reversal is an accepted, disclosed, deliberately out-of-scope gap, inherited by seed deduction the
+same way it already applied to the transplant side effect.
+
+**Verification**: `tsc --noEmit` and `eslint` clean across every touched file. Confirmed
+`cropFacts.ts` already resolves its model via `getModelForTenant(tenantId, "crop_facts")`, so the new
+cheaper default applies with no further change needed there. Wrote a direct-SQL replication script
+(mirroring `toggleTaskCompleteAction`'s exact atomic-update and deduction logic — server actions can't
+be invoked from a plain script) against the real demo account and ran 18 assertions, all passing:
+deduction leaves an onboarding (null-`seedCount`) row untouched while correctly deducting from a
+numeric row; a **true concurrency test** (two separate Postgres connections/transactions racing the
+identical atomic `UPDATE` at once, not just a simulated sequential check) confirmed exactly one side
+effect applies, never a double-deduction; un-completing restores the nominal amount to the oldest row;
+double-toggling in either direction is a correct no-op; depleting a crop's stock to exactly 0 inserts
+one shopping-list item, and completing a second already-depleted task for the same crop correctly
+does not insert a duplicate (dedupe check working); a crop with only a null-`seedCount` onboarding row
+correctly never triggers the depletion check or a shopping-list insert. Also ran a **real, live
+Inngest-triggered grow-plan generation** against the demo account (Gemini, not the mock path):
+confirmed the model populated plausible `estimatedSeedsUsed` values on every sow/re-sow task (e.g.
+100 for a 20cm-spacing Mizuna sow, 250 for a 10cm-spacing Lamb's Lettuce sow) and correctly left it
+null on the transplant and feed tasks. Because a real generation's `free-previous-growing-areas` step
+unconditionally frees whatever the account's *previous* plan had claimed before claiming its own
+areas, deleting the first test-triggered plan afterward (rather than leaving it in place) left the
+account's prior real plan with its growing-area claims detached; caught this and corrected it by
+running one further real generation and — per this session's established practice — leaving that
+result in place rather than deleting it, restoring the demo account to a clean, fully-claimed,
+presentable state. All scratch test scripts removed afterward.
+
+## Fix — the /seeds autocomplete dropdown, and the catalog now stores the AI's corrected spelling
+
+Two follow-up requests on the feature above. First: "This dropdown is horrible, have it autocomplete
+against the seed inventory within the text input" — the native `<datalist>` used for autocomplete
+renders, in at least the browser tested, as a full-width unstyled list of every single catalog crop
+regardless of what's typed, rather than narrowing. Replaced it with a small custom controlled
+combobox (`CropNameField`, inside `SeedsView.tsx`): filters `cropNames` by substring match against
+the typed text, shows up to 8 results in a compact dropdown styled to match the rest of the app,
+supports arrow-key/Enter navigation and click-outside-to-close. Because the input is now controlled
+(needed to drive the filtered list), it no longer benefits from React 19's automatic reset of
+uncontrolled form fields after a successful submit — fixed by remounting the component via a `key`
+that increments on every successful add, resetting its internal state alongside the rest of the form.
+
+Second: "for the dataset, give the correct spelling of the fruit/vegetable from the AI agent response
+rather than the user's input." Previously, when `addSeedAction` backfilled an unrecognized crop, it
+called `getCropFacts` for the growing facts but still stored the user's raw typed text as the
+catalog's `crops.name` — a typo or odd casing typed once would sit in the shared dataset every future
+user sees and searches. `CropFactsOutputSchema` (`cropFacts.ts`) gained a required `name` field —
+"the crop's correct, standard common name... even if the requested name had a typo, unusual casing,
+or was plural" — with a matching prompt instruction; the mock fallback (no live key) does a best-
+effort title-case of the input as a stand-in, since it can't actually correct spelling without a real
+model.
+
+`addSeedAction` now re-slugifies from `facts.output.name` (not the raw user input) before inserting,
+and — importantly — checks for an existing crop under *that* corrected slug too, not just the
+originally-typed one: two different users mistyping the same crop two different ways (e.g. "tomatoe"
+and "Tomatoes") now converge on one canonical row instead of creating near-duplicate catalog entries.
+`cropIsNew` (drives the "wasn't in our catalog — added using an AI-estimated best guess" UI message)
+is now only set true on the actual insert path, not whenever the AI call ran — a corrected-name
+dedupe hit means nothing new was added, so the message would have been misleading.
+
+**Verification**: `tsc --noEmit`/`eslint` clean. Wrote a direct-SQL replication test (real `cropFacts`
+calls can't be invoked from a plain script — `"server-only"`) simulating two differently-misspelled
+inputs against one fake AI-corrected name, run inside a transaction that's rolled back rather than
+committed: confirmed the first typo triggers a real insert with the corrected name/slug (not the raw
+input), the second differently-misspelled input resolves to the exact same row with no duplicate
+insert, and exactly one crop row exists afterward for the corrected name. Zero leftover state in the
+real database (rollback, not manual cleanup). The autocomplete UI itself wasn't re-tested in a real
+browser this pass (no browser tool available) — reviewed by reading the component logic and confirmed
+compiling/linting cleanly; flagged rather than claimed as visually verified.
+
+## Fix — corrected spelling wasn't applied to the other two crop-backfill pathways
+
+Follow-up: asked to see the live LLM response for "Cucamleon" (a misspelling), which confirmed
+`cropFacts.ts` does correctly return `name: "Cucamelon"`. Then: "The misspelling should NOT be
+included in the autocompletion, just the correct names derived from the LLM response." Investigating
+turned up that the previous fix only closed this gap for `/seeds`'s own `addSeedAction` —
+`generateGrowPlan.ts`'s `resolve-new-crops` step and `regenerateRecommendation.ts`'s
+`resolve-new-crop` step both still stored the *calling agent's own* proposed `newCropName` (from the
+grow planner or the reject→replace agent) as `crops.name`, never consulting `cropFacts`'s corrected
+`name` field even though they call `cropFacts` for the rest of that row's data. Since the seeds
+autocomplete reads every `crops.name` from the one shared catalog regardless of which pathway
+inserted it, a misspelling proposed by either of those other two agents could leak into it. Confirmed
+this wasn't hypothetical: the catalog already contained a real orphaned row, `slug: "cucamleon"`,
+`name: "Cucamleon"` — sourced from a real (non-mock) Gemini call through the grow-planner's own
+backfill path, with zero dependent rows anywhere (safe to delete outright, which was done). A second,
+correctly-spelled `"Cucamelon"` row (added earlier via `/seeds` by a real user, `iambenc@icloud.com`)
+had already been removed in the prior turn per an explicit request to strip both from the dataset.
+
+Fixed both pathways to mirror `addSeedAction`'s pattern exactly: call `getCropFacts` as before, but
+derive the row's stored `name`/`slug` from `facts.output.name` (the corrected spelling) rather than
+the calling agent's own suggested name, and check for an existing crop under *that* corrected slug
+too (not just the agent's original one) before inserting, so a differently-misspelled proposal from
+an earlier run still converges on one canonical row. The in-memory id map used to resolve tasks back
+to their recommendation (`merged[r.cropSlug]` / `cropIdBySlug[result.output.cropSlug]`) still keys off
+the *original* AI-proposed slug string, unchanged — only the persisted catalog row's own `name`/`slug`
+columns are corrected, so this doesn't disturb how tasks/recommendations reference their crop.
+
+Also confirmed, in response to "the dataset should be available to ALL users to lookup from not just
+the one that adds the data": `crops` has no `tenant_id` column and no RLS by design (a deliberately
+global, un-tenanted reference catalog — see its own schema comment) and every read/write against it
+across all three backfill pathways plus the `/seeds` autocomplete query already uses the plain
+unscoped `db` client, never `withTenant` — grepped every call site to confirm none of this session's
+changes accidentally introduced tenant scoping. Nothing further needed there; already correct by
+construction.
+
+**Verification**: `tsc --noEmit`/`eslint` clean. Audited the live catalog directly (`select * from
+crops where verified = false`) rather than assuming the fix's effect — this is what surfaced the
+orphaned `"cucamleon"` row a name-only `ILIKE '%cucamel%'` search had missed earlier (the transposed
+letters don't form that substring), a useful reminder that a substring search isn't a reliable way to
+audit for misspellings. Checked for dependent rows (tasks, plan_recommendations, seed_inventory,
+harvest_log, shopping_list_items, user_favorite_crops) before deleting it — none existed. Did not
+re-run a live end-to-end trigger of either fixed pathway this pass (the underlying `getCropFacts`
+call and the corrected-name/dedupe logic were already proven live/via replication test in the prior
+two turns); this pass's own verification is direct code review, compile/lint, and the live catalog
+audit above.
+
+## Confirmation + fix — "try something new" already added unrecognized crops to the dataset; found and fixed a real bug in the cheaper-model wiring along the way
+
+Two related items. First, confirmed by design/investigation (no code change needed): "on the grow
+plan, if the user selects the 'Try something new' option AND the suggested seed type is NOT in the
+seed dataset then it should be added." `growPlanner.ts`'s `isUnusualSuggestion` recommendation is
+just another entry in the same `recommendations` array — `newCropName`/`cropSlug` resolution in
+`generateGrowPlan.ts`'s `resolve-new-crops` step applies uniformly to every recommendation regardless
+of `isUnusualSuggestion`, with no special-casing that would exclude it. This was already true before
+today; the only relevant recent change was the corrected-spelling fix two turns ago, which now also
+applies to whatever crop the unusual-suggestion path proposes. Verified live rather than assumed
+correct from reading the code: triggered a real, live Inngest generation with `wantsUnusualCrop: true`
+against the demo account. The model proposed **Winter Purslane** (Miner's Lettuce) — genuinely not in
+the catalog — and it was correctly backfilled via a real `getCropFacts` call, landing with
+`verified: false`, a real (non-mock) provider stamp, and its correct name/spelling, exactly like any
+other new-crop resolution.
+
+Second — a genuine, previously-undetected bug surfaced by that same live trigger. Checking Winter
+Purslane's stamped `sourceModel` to confirm it used the cheaper `crop_facts` tier (`provider.ts`'s
+`DEFAULT_MODEL_BY_AGENT`, added when the seed-research feature was first built) showed
+`"gemini-3.5-flash"` — the full-price model, not `"gemini-3.5-flash-lite"`. Investigating found the
+root cause: `DEFAULT_MODEL_BY_AGENT` was correctly defined and correctly wired into the two admin-UI
+default displays (`admin/ai/page.tsx`, `upsertAIConfigAction`), but `getModelForTenant` itself —
+the actual function every real AI call resolves its model through — still had its original line,
+`const modelId = config?.model || "gemini-3.5-flash";`, never updated to read from the new map. The
+map was added but never actually connected to the one place that mattered; every single `crop_facts`
+call since that feature shipped (including the earlier Cucamelon/Cucamleon backfills, and every
+`/seeds` addition) had silently continued using the expensive tier. Fixed with the one-line change
+`config?.model || DEFAULT_MODEL_BY_AGENT[agent]` — `agent` was already an in-scope parameter of the
+same function, used correctly elsewhere in it for the `tenantAIConfigs` lookup. Every other agent's
+default is unaffected (their old hardcoded value and their `DEFAULT_MODEL_BY_AGENT` entry are both
+`"gemini-3.5-flash"`), so `crop_facts` was the only agent actually affected by this bug in practice.
+
+**Verification**: `tsc --noEmit`/`eslint` clean. Did not re-trigger another live generation to
+re-prove this specific one-line fix — the demo account had only 1 of its 3 daily plan-generation slots
+left at the time, and burning it purely to re-confirm a trivially-correct, type-checked change (same
+pattern already proven correct in the two admin-UI call sites) wasn't judged worth spending that
+budget; disclosing this rather than claiming a live re-verification that didn't happen. Left Winter
+Purslane's `sourceModel` stamp as `"gemini-3.5-flash"` rather than editing it after the fact — it
+accurately reflects what model actually generated that row, and rewriting history there would be
+misleading in the other direction. Confirmed no leftover test scripts.

@@ -1,9 +1,16 @@
 "use server";
 
 import { z } from "zod";
-import { eq, and } from "drizzle-orm";
+import { eq, and, ne, isNotNull, asc } from "drizzle-orm";
 import { withTenant } from "@/lib/tenant/withTenant";
-import { tasks, planRecommendationStages, growingAreas, type TaskSource } from "@/db/schema";
+import {
+  tasks,
+  planRecommendationStages,
+  growingAreas,
+  seedInventory,
+  shoppingListItems,
+  type TaskSource,
+} from "@/db/schema";
 import { requireSessionAndTenant } from "@/lib/actions/shared";
 
 const createTaskSchema = z.object({
@@ -72,22 +79,98 @@ export async function createTaskAction(
 export async function toggleTaskCompleteAction(taskId: string, completed: boolean): Promise<void> {
   const { userId, tenantId } = await requireSessionAndTenant();
   await withTenant(tenantId, async (tx) => {
-    const [task] = await tx
-      .select({ status: tasks.status, activatesStageId: tasks.activatesStageId })
-      .from(tasks)
-      .where(and(eq(tasks.id, taskId), eq(tasks.userId, userId)));
-    if (!task) return;
-
     const newStatus = completed ? "completed" : "pending";
-    // Idempotency guard: a double-click firing two overlapping toggles for
-    // the same target status should only apply the transplant side-effect
-    // (below) once, not twice.
-    if (task.status === newStatus) return;
-
-    await tx
+    // Atomic guarded update, not read-then-write: two concurrent toggles for
+    // the same task could otherwise both pass a separate read-then-check and
+    // both apply the side effects below (transplant claim, seed deduction)
+    // twice. The WHERE clause below doubles as both ownership check and the
+    // idempotency guard the old code did with a separate `if` — completing
+    // only fires from a not-already-completed status (pending OR missed);
+    // un-completing only fires from "completed" specifically, since the seed
+    // restoration below must never fire for a task that was never completed
+    // (the only real caller, CalendarView.tsx, never uncompletes a "missed"
+    // task, but the guard shouldn't rely on that being true forever).
+    const [task] = await tx
       .update(tasks)
       .set({ status: newStatus, completedAt: completed ? new Date() : null })
-      .where(and(eq(tasks.id, taskId), eq(tasks.userId, userId)));
+      .where(
+        and(
+          eq(tasks.id, taskId),
+          eq(tasks.userId, userId),
+          completed ? ne(tasks.status, "completed") : eq(tasks.status, "completed"),
+        ),
+      )
+      .returning({
+        activatesStageId: tasks.activatesStageId,
+        cropId: tasks.cropId,
+        estimatedSeedsUsed: tasks.estimatedSeedsUsed,
+      });
+    if (!task) return;
+
+    if (task.cropId && task.estimatedSeedsUsed) {
+      // Only rows with a numeric seedCount participate — onboarding's seeds
+      // step only ever sets quantityLabel (free text), leaving seedCount
+      // null. A crop whose only owned rows are null-seedCount reads as
+      // "unknown quantity," not "zero": running the depletion check against
+      // an empty numeric-rows set would otherwise wrongly treat "we never
+      // tracked a number" the same as "genuinely used it all up."
+      const seedRows = await tx
+        .select({ id: seedInventory.id, seedCount: seedInventory.seedCount })
+        .from(seedInventory)
+        .where(
+          and(
+            eq(seedInventory.userId, userId),
+            eq(seedInventory.cropId, task.cropId),
+            isNotNull(seedInventory.seedCount),
+          ),
+        )
+        .orderBy(asc(seedInventory.createdAt));
+
+      if (completed && seedRows.length > 0) {
+        let remaining = task.estimatedSeedsUsed;
+        let totalAfter = 0;
+        for (const row of seedRows) {
+          const current = row.seedCount ?? 0;
+          const deduct = Math.min(current, remaining);
+          const newCount = current - deduct;
+          remaining -= deduct;
+          totalAfter += newCount;
+          if (deduct > 0) {
+            await tx.update(seedInventory).set({ seedCount: newCount }).where(eq(seedInventory.id, row.id));
+          }
+        }
+        if (totalAfter === 0) {
+          // Exact same dedup check generateGrowPlan.ts's shopping-list insert
+          // uses — no status/source filter, just a per-crop existence check —
+          // reused verbatim rather than re-derived, including its inherited
+          // limitation: once ANY shopping-list row exists for this crop
+          // (even a since-used-up purchased one), no new prompt fires.
+          const [existingItem] = await tx
+            .select({ id: shoppingListItems.id })
+            .from(shoppingListItems)
+            .where(and(eq(shoppingListItems.userId, userId), eq(shoppingListItems.cropId, task.cropId)));
+          if (!existingItem) {
+            await tx.insert(shoppingListItems).values({
+              tenantId,
+              userId,
+              cropId: task.cropId,
+              quantityLabel: "1 packet",
+              source: "ai" as const,
+            });
+          }
+        }
+      } else if (!completed && seedRows.length > 0) {
+        // Un-completing: add the nominal amount back to a single row (the
+        // oldest) rather than trying to reverse the exact per-row split the
+        // original deduction made — simpler, and the split itself was never
+        // meant to be precise across rows, just to consume oldest stock first.
+        const oldest = seedRows[0];
+        await tx
+          .update(seedInventory)
+          .set({ seedCount: (oldest.seedCount ?? 0) + task.estimatedSeedsUsed })
+          .where(eq(seedInventory.id, oldest.id));
+      }
+    }
 
     if (!task.activatesStageId) return;
 

@@ -63,6 +63,11 @@ export const planRecommendations = pgTable(
     // (a row is rejected at most once before being replaced). Caps how many
     // more times this lineage may still be rejected (see rejectRecommendationAction).
     regenerationCount: integer("regeneration_count").notNull().default(0),
+    // True only for the one deliberately unusual/uncommon-but-UK-growable
+    // crop the planner adds when the user ticks "try something new" at
+    // generation time — false (the correct value for every pre-existing
+    // row too, hence the default) for every ordinary recommendation.
+    isUnusualSuggestion: boolean("is_unusual_suggestion").notNull().default(false),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (table) => [tenantIsolationPolicy("plan_recommendations", table.tenantId)],

@@ -198,19 +198,33 @@ export const regenerateRecommendationFn = inngest.createFunction(
           throw new Error(`Unknown crop slug "${result.output.cropSlug}" with no newCropName to back it`);
         }
 
-        const dbSlug = slugify(result.output.cropSlug);
-        const [existing] = await db.select({ id: crops.id }).from(crops).where(eq(crops.slug, dbSlug));
-        if (existing) return existing.id;
+        const aiSlug = slugify(result.output.cropSlug);
+        const [existingByAiSlug] = await db.select({ id: crops.id }).from(crops).where(eq(crops.slug, aiSlug));
+        if (existingByAiSlug) return existingByAiSlug.id;
 
         const [{ maxSortOrder }] = await db
           .select({ maxSortOrder: sql<number>`coalesce(max(${crops.sortOrder}), 0)` })
           .from(crops);
         const facts = await getCropFacts(tenantId, result.output.newCropName);
+        // Store cropFacts's own corrected name/spelling, not the replacement
+        // agent's own newCropName — same reasoning/pattern as
+        // generateGrowPlan.ts's resolve-new-crops and seeds.ts's
+        // addSeedAction: this catalog is shared and reused (including by the
+        // /seeds autocomplete), so it should only ever hold the corrected
+        // name. Re-check under the corrected slug too, not just the AI's
+        // original one.
+        const correctedSlug = slugify(facts.output.name) || aiSlug;
+        const [existingByCorrectedSlug] = await db
+          .select({ id: crops.id })
+          .from(crops)
+          .where(eq(crops.slug, correctedSlug));
+        if (existingByCorrectedSlug) return existingByCorrectedSlug.id;
+
         await db
           .insert(crops)
           .values({
-            slug: dbSlug,
-            name: result.output.newCropName,
+            slug: correctedSlug,
+            name: facts.output.name,
             category: facts.output.category,
             emoji: facts.output.emoji,
             spacingCm: facts.output.spacingCm,
@@ -231,7 +245,7 @@ export const regenerateRecommendationFn = inngest.createFunction(
           })
           .onConflictDoNothing({ target: crops.slug });
 
-        const [row] = await db.select({ id: crops.id }).from(crops).where(eq(crops.slug, dbSlug));
+        const [row] = await db.select({ id: crops.id }).from(crops).where(eq(crops.slug, correctedSlug));
         return row.id;
       });
 
@@ -295,6 +309,7 @@ export const regenerateRecommendationFn = inngest.createFunction(
                   cropId: replacementCropId,
                   planRecommendationId: newRecs[i].id,
                   successionSeriesId: t.isSuccessionResow ? seriesIdByInstance[i] : null,
+                  estimatedSeedsUsed: t.estimatedSeedsUsed,
                   activatesStageId:
                     t.activatesStageIndex != null
                       ? (stageIdByRecAndIndex.get(`${newRecs[i].id}|${t.activatesStageIndex}`) ?? null)

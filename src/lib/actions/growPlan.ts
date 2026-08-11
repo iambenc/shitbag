@@ -25,7 +25,7 @@ export async function getGrowPlanGenerationsToday(tenantId: string, userId: stri
   });
 }
 
-export async function generateGrowPlanAction(): Promise<void> {
+export async function generateGrowPlanAction(wantsUnusualCrop: boolean = false): Promise<void> {
   const { userId, tenantId } = await requireSessionAndTenant();
 
   const subscription = await getSubscription(userId, tenantId);
@@ -93,7 +93,7 @@ export async function generateGrowPlanAction(): Promise<void> {
 
   await inngest.send({
     name: "grow-plan/requested",
-    data: { growPlanId: growPlan.id, tenantId, userId },
+    data: { growPlanId: growPlan.id, tenantId, userId, wantsUnusualCrop },
   });
 
   revalidatePath("/", "layout");

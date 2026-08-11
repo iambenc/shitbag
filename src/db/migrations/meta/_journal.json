@@ -176,6 +176,20 @@
       "when": 1786452532503,
       "tag": "0024_naive_lockheed",
       "breakpoints": true
+    },
+    {
+      "idx": 25,
+      "version": "7",
+      "when": 1786480818260,
+      "tag": "0025_first_inertia",
+      "breakpoints": true
+    },
+    {
+      "idx": 26,
+      "version": "7",
+      "when": 1786483914508,
+      "tag": "0026_wooden_mister_sinister",
+      "breakpoints": true
     }
   ]
 }

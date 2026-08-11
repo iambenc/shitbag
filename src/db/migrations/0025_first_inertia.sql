@@ -1,0 +1,1 @@
+ALTER TABLE "plan_recommendations" ADD COLUMN "is_unusual_suggestion" boolean DEFAULT false NOT NULL;

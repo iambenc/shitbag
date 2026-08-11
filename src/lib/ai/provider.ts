@@ -9,9 +9,31 @@ import { decryptSecret } from "@/lib/security/secretBox";
 export type AgentName = TenantAIConfigAgent;
 
 /**
+ * Per-agent platform default model — not one shared constant, so a genuinely
+ * cheap/simple lookup (crop_facts: a handful of planting facts for one crop
+ * name, no vision, no complex reasoning) doesn't have to pay for the same
+ * tier as agents that need it. growing_area_estimator deliberately stays on
+ * the full tier — it needs multimodal/vision support a "lite" tier may not
+ * carry. A tenant's explicit tenantAIConfigs.model override always wins
+ * over this regardless (see getModelForTenant below) — this is only the
+ * fallback when none is set. Also used by admin/ai/page.tsx to show the
+ * *actual* default per agent rather than one hardcoded value, so saving
+ * that form without touching the Model field can't silently pin every
+ * agent to the same model and defeat this.
+ */
+export const DEFAULT_MODEL_BY_AGENT: Record<AgentName, string> = {
+  grow_planner: "gemini-3.5-flash",
+  plant_health: "gemini-3.5-flash",
+  crop_facts: "gemini-3.5-flash-lite",
+  growing_area_estimator: "gemini-3.5-flash",
+  weather_advisor: "gemini-3.5-flash",
+};
+
+/**
  * Resolves the model to use for a given tenant + agent:
  *  1. An active TenantAIConfig row for that tenant/agent, if one has a key.
- *  2. The platform default (GOOGLE_GENERATIVE_AI_API_KEY env var, gemini-3.5-flash).
+ *  2. The platform default for that agent (GOOGLE_GENERATIVE_AI_API_KEY env
+ *     var, DEFAULT_MODEL_BY_AGENT[agent]).
  *  3. `null` if neither is configured — the caller falls back to a mock provider.
  *
  * tenantAIConfigs is RLS-protected like every other tenant-scoped table, so
@@ -56,7 +78,7 @@ export async function getModelForTenant(
   const apiKey = tenantKey || process.env.GOOGLE_GENERATIVE_AI_API_KEY;
   if (!apiKey) return null;
 
-  const modelId = config?.model || "gemini-3.5-flash";
+  const modelId = config?.model || DEFAULT_MODEL_BY_AGENT[agent];
   const google = createGoogleGenerativeAI({ apiKey });
   return { model: google(modelId), provider: config?.provider ?? "google", modelId };
 }

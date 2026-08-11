@@ -49,6 +49,7 @@ type RecommendationGroup = {
   requiresPurchase: boolean;
   estimatedHarvestStart: string | null;
   estimatedHarvestEnd: string | null;
+  isUnusualSuggestion: boolean;
 };
 
 // Same crop + same CURRENT growing-area type/size (e.g. three 20cm pots of
@@ -74,7 +75,7 @@ type RecommendationGroup = {
 // instance's dates would hide that spread).
 function groupRecommendations(
   rows: {
-    recommendation: { id: string; status: PlanRecommendationStatus; regenerationCount: number; reasoning: string; requiresPurchase: boolean; estimatedHarvestStart: string | null; estimatedHarvestEnd: string | null };
+    recommendation: { id: string; status: PlanRecommendationStatus; regenerationCount: number; reasoning: string; requiresPurchase: boolean; estimatedHarvestStart: string | null; estimatedHarvestEnd: string | null; isUnusualSuggestion: boolean };
     crop: { id: string; emoji: string; name: string; verified: boolean; estimatedRetailPricePerKgGbp: number };
     area: Area | null;
     nextArea: Area | null;
@@ -85,7 +86,12 @@ function groupRecommendations(
 
   for (const { recommendation, crop, area, nextArea } of rows) {
     const sizeKey = area ? (areaSizeLabel(area) ?? "unsized") : "none";
-    const key = `${crop.id}|${area?.type ?? "none"}|${sizeKey}|${recommendation.status}|${recommendation.regenerationCount}`;
+    // isUnusualSuggestion is part of the key for the same reason status/
+    // regenerationCount are — an "unusual" pick is deliberately never the
+    // same crop as anything else in the plan in practice, so this should
+    // never actually fire, but it guards the same silent-merge risk if it
+    // ever somehow coincided with an ordinary recommendation of that crop.
+    const key = `${crop.id}|${area?.type ?? "none"}|${sizeKey}|${recommendation.status}|${recommendation.regenerationCount}|${recommendation.isUnusualSuggestion}`;
     const existing = byKey.get(key);
     if (existing) {
       existing.count += 1;
@@ -117,6 +123,7 @@ function groupRecommendations(
       requiresPurchase: recommendation.requiresPurchase,
       estimatedHarvestStart: recommendation.estimatedHarvestStart,
       estimatedHarvestEnd: recommendation.estimatedHarvestEnd,
+      isUnusualSuggestion: recommendation.isUnusualSuggestion,
     };
     byKey.set(key, group);
     groups.push(group);
@@ -351,28 +358,38 @@ export default async function GrowPlanPage() {
               ) : (
                 <FadeIn key={group.key} index={i}>
                 <div className="rounded-lg border border-black/10 bg-white p-6 shadow-card">
-                  <p className="font-display text-lg font-semibold">
-                    {group.crop.emoji} {groupHeading(group)}
+                  <div className="flex flex-wrap items-center gap-2">
+                    <p className="font-display text-lg font-semibold">
+                      {group.crop.emoji} {groupHeading(group)}
+                    </p>
+                    {group.isUnusualSuggestion && (
+                      <span
+                        className="whitespace-nowrap rounded-full bg-(--brand-primary)/15 px-2 py-0.5 text-xs text-(--brand-primary)"
+                        title="You asked to try something new — this is one unusual, uncommon-in-UK-gardens pick"
+                      >
+                        Try something new
+                      </span>
+                    )}
                     {group.requiresPurchase && (
-                      <span className="ml-2 rounded-full bg-(--brand-secondary)/40 px-2 py-0.5 text-xs">
+                      <span className="whitespace-nowrap rounded-full bg-(--brand-secondary)/40 px-2 py-0.5 text-xs">
                         Add to shopping list
                       </span>
                     )}
                     {!group.crop.verified && (
                       <span
-                        className="ml-2 rounded-full bg-(--color-terracotta)/15 px-2 py-0.5 text-xs text-(--color-terracotta)"
+                        className="whitespace-nowrap rounded-full bg-(--color-terracotta)/15 px-2 py-0.5 text-xs text-(--color-terracotta)"
                         title="This crop was added to the catalog by AI and hasn't been reviewed yet."
                       >
                         New, unverified
                       </span>
                     )}
                     <span
-                      className="ml-2 rounded-full border border-black/15 px-2 py-0.5 text-xs text-(--text-muted)"
+                      className="whitespace-nowrap rounded-full border border-black/15 px-2 py-0.5 text-xs text-(--text-muted)"
                       title="Estimated typical UK retail price — growing your own can save you this"
                     >
                       ~£{group.crop.estimatedRetailPricePerKgGbp.toFixed(2)}/kg to buy
                     </span>
-                  </p>
+                  </div>
                   {group.count === 1 && group.area && (
                     <p className="mt-1 text-xs text-(--text-muted)">
                       {growingAreaTypeEmoji[group.area.type]} {growingAreaTypeLabels[group.area.type]}
@@ -399,14 +416,20 @@ export default async function GrowPlanPage() {
             )}
           </div>
 
-          <div className="flex items-center gap-4">
-            <Link href="/calendar" className="text-sm text-(--brand-primary) underline">
+          <div className="flex flex-col items-start gap-4">
+            <Link
+              href="/calendar"
+              className="rounded-full bg-black/5 px-4 py-2 text-sm text-(--text-heading) hover:bg-black/10 active:scale-95 transition"
+            >
               View tasks on calendar →
             </Link>
             {hasGrowingArea &&
               !groupedRecommendations.some((g) => g.status === "regenerating") &&
               (generationsRemainingToday > 0 ? (
-                <GeneratePlanButton label="Generate a new plan" className="text-sm text-(--text-muted) underline" />
+                <GeneratePlanButton
+                  label="Generate a new plan"
+                  className="rounded-full bg-black/5 px-4 py-2 text-sm text-(--text-heading) hover:bg-black/10 active:scale-95 transition"
+                />
               ) : (
                 <span className="text-xs text-(--text-muted)">
                   All {MAX_DAILY_GROW_PLAN_GENERATIONS} plan generations used today

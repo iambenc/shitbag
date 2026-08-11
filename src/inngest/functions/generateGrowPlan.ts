@@ -49,12 +49,12 @@ function validStagesFor(
   return valid;
 }
 
-type EventData = { growPlanId: string; tenantId: string; userId: string };
+type EventData = { growPlanId: string; tenantId: string; userId: string; wantsUnusualCrop?: boolean };
 
 export const generateGrowPlanFn = inngest.createFunction(
   { id: "generate-grow-plan", retries: 2, triggers: [{ event: "grow-plan/requested" }] },
   async ({ event, step }) => {
-    const { growPlanId, tenantId, userId } = event.data as EventData;
+    const { growPlanId, tenantId, userId, wantsUnusualCrop } = event.data as EventData;
 
     // Every generation is a full re-plan of the whole plot: free whatever
     // the user's *previous* plan claimed (both fully-occupied and merely
@@ -186,6 +186,7 @@ export const generateGrowPlanFn = inngest.createFunction(
             estimatedRetailPricePerKgGbp: c.estimatedRetailPricePerKgGbp,
             feedingNotes: c.feedingNotes,
           })),
+          wantsUnusualCrop: wantsUnusualCrop ?? false,
         };
 
         const cropIdBySlug: Record<string, string> = Object.fromEntries(
@@ -218,20 +219,39 @@ export const generateGrowPlanFn = inngest.createFunction(
 
         for (const r of candidates) {
           if (merged[r.cropSlug]) continue;
-          const dbSlug = slugify(r.cropSlug);
+          const aiSlug = slugify(r.cropSlug);
 
-          const [existing] = await db.select({ id: crops.id }).from(crops).where(eq(crops.slug, dbSlug));
-          if (existing) {
-            merged[r.cropSlug] = existing.id;
+          const [existingByAiSlug] = await db.select({ id: crops.id }).from(crops).where(eq(crops.slug, aiSlug));
+          if (existingByAiSlug) {
+            merged[r.cropSlug] = existingByAiSlug.id;
             continue;
           }
 
           const facts = await getCropFacts(tenantId, r.newCropName!);
+          // Store cropFacts's own corrected name/spelling, not whatever the
+          // planner itself proposed in newCropName — the planner is a large,
+          // multi-crop generation call, not a spelling authority, and this
+          // catalog is shared/reused by every future user (including the
+          // /seeds autocomplete, which reads crops.name directly) — see
+          // seeds.ts's addSeedAction for the identical pattern. Re-check for
+          // an existing row under the corrected slug too, not just the AI's
+          // original one: a differently-named proposal from an earlier run
+          // may have already resolved to the same canonical crop.
+          const correctedSlug = slugify(facts.output.name) || aiSlug;
+          const [existingByCorrectedSlug] = await db
+            .select({ id: crops.id })
+            .from(crops)
+            .where(eq(crops.slug, correctedSlug));
+          if (existingByCorrectedSlug) {
+            merged[r.cropSlug] = existingByCorrectedSlug.id;
+            continue;
+          }
+
           await db
             .insert(crops)
             .values({
-              slug: dbSlug,
-              name: r.newCropName!,
+              slug: correctedSlug,
+              name: facts.output.name,
               category: facts.output.category,
               emoji: facts.output.emoji,
               spacingCm: facts.output.spacingCm,
@@ -253,7 +273,7 @@ export const generateGrowPlanFn = inngest.createFunction(
             .onConflictDoNothing({ target: crops.slug });
           nextSortOrder++;
 
-          const [row] = await db.select({ id: crops.id }).from(crops).where(eq(crops.slug, dbSlug));
+          const [row] = await db.select({ id: crops.id }).from(crops).where(eq(crops.slug, correctedSlug));
           merged[r.cropSlug] = row.id;
         }
         return merged;
@@ -303,6 +323,7 @@ export const generateGrowPlanFn = inngest.createFunction(
                   requiresPurchase: r.requiresPurchase,
                   estimatedHarvestStart: r.estimatedHarvestStart,
                   estimatedHarvestEnd: r.estimatedHarvestEnd,
+                  isUnusualSuggestion: r.isUnusualSuggestion,
                 })),
               )
               .returning();
@@ -380,6 +401,7 @@ export const generateGrowPlanFn = inngest.createFunction(
                   // recommendation's tasks.
                   planRecommendationId,
                   successionSeriesId,
+                  estimatedSeedsUsed: t.estimatedSeedsUsed,
                   // Completing this task releases the preceding stage's area
                   // and claims this one — see toggleTaskCompleteAction. Left
                   // null if the AI referenced an area that didn't survive

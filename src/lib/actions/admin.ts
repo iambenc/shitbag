@@ -7,6 +7,7 @@ import { db } from "@/db/client";
 import { withTenant } from "@/lib/tenant/withTenant";
 import { requireTenantAdmin } from "@/lib/actions/shared";
 import { encryptSecret } from "@/lib/security/secretBox";
+import { DEFAULT_MODEL_BY_AGENT } from "@/lib/ai/provider";
 import { CURRENCY_OPTIONS } from "@/lib/actions/adminConstants";
 import {
   tenants,
@@ -107,7 +108,8 @@ export async function upsertAIConfigAction(_prev: ActionState, formData: FormDat
   const agent = agentParsed.data;
 
   const provider = String(formData.get("provider") || "google").trim() || "google";
-  const model = String(formData.get("model") || "gemini-3.5-flash").trim() || "gemini-3.5-flash";
+  const defaultModel = DEFAULT_MODEL_BY_AGENT[agent];
+  const model = String(formData.get("model") || defaultModel).trim() || defaultModel;
   const isActive = formData.get("isActive") === "on";
   const clearKey = formData.get("clearKey") === "on";
   const apiKeyInput = String(formData.get("apiKey") || "").trim();
