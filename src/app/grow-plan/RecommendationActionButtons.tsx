@@ -58,7 +58,7 @@ export function RecommendationActionButtons({
             type="button"
             onClick={handleReject}
             disabled={pending !== null}
-            className="rounded-full border border-black/15 px-3 py-1 text-xs text-(--text-muted) hover:bg-black/5 disabled:opacity-50"
+            className="rounded-full bg-black/5 px-3 py-1 text-xs text-(--text-muted) transition hover:bg-black/10 disabled:opacity-50"
           >
             Reject
           </button>

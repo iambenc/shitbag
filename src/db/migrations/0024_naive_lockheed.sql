@@ -1,0 +1,1 @@
+ALTER TABLE "growing_area_estimations" ADD COLUMN "photo_urls" jsonb;

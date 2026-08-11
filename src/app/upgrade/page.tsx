@@ -61,12 +61,12 @@ export default async function UpgradePage() {
             <p className="mt-2 text-sm text-(--text-muted)">
               Unlock AI-generated grow plans, weather-aware task adjustments, and personalised
               recommendations for your plot. Everything you already have (calendar, shopping list,
-              harvest log, photo journal) stays free either way.
+              harvest log, garden journal) stays free either way.
             </p>
             <form action={startCheckoutAction} className="mt-4">
               <button
                 type="submit"
-                className="rounded-full bg-(--brand-primary) px-6 py-2 text-sm text-white hover:brightness-90 active:scale-95 transition"
+                className="rounded-full bg-(--brand-primary) px-6 py-2 text-sm text-white shadow-button hover:brightness-90 active:scale-95 transition"
               >
                 Subscribe
               </button>

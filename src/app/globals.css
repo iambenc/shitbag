@@ -13,6 +13,12 @@
      existing border rather than replacing it — additive, not a redesign of
      the card style. */
   --shadow-card: 0 1px 2px rgba(31, 42, 31, 0.05), 0 8px 20px rgba(31, 42, 31, 0.07);
+  /* Soft brand-tinted lift for solid primary buttons — tenant-adaptive via
+     color-mix on --brand-primary (same technique as --surface-tint below)
+     rather than a fixed rgba, so it stays correct for any tenant's color.
+     Produces the shadow-button utility the same way shadow-card does. */
+  --shadow-button: 0 1px 2px color-mix(in srgb, var(--brand-primary) 30%, transparent),
+    0 6px 14px color-mix(in srgb, var(--brand-primary) 25%, transparent);
 }
 
 :root {

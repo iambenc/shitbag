@@ -9,6 +9,11 @@ export const SLUG_TO_GROWING_AREA_TYPE: Record<string, GrowingAreaType> = {
   "garden-beds": "bed",
 };
 
+/** The reverse of SLUG_TO_GROWING_AREA_TYPE — given a growing area type, which seeded equipment type slug owns it. */
+export const GROWING_AREA_TYPE_TO_SLUG: Record<GrowingAreaType, string> = Object.fromEntries(
+  Object.entries(SLUG_TO_GROWING_AREA_TYPE).map(([slug, type]) => [type, slug]),
+) as Record<GrowingAreaType, string>;
+
 /**
  * Growing-space types that are actually a *product* someone can buy —
  * excludes "garden-beds": unlike pots/planters/raised beds/seed trays, a

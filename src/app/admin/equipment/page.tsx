@@ -1,4 +1,4 @@
-import { sql } from "drizzle-orm";
+import { sql, isNotNull } from "drizzle-orm";
 import { withTenant } from "@/lib/tenant/withTenant";
 import { equipmentTypes, partnerLinks, userEquipment } from "@/db/schema";
 import { requireTenantAdmin } from "@/lib/actions/shared";
@@ -9,7 +9,8 @@ export default async function AdminEquipmentPage() {
 
   const { types, links, usageCounts } = await withTenant(tenantId, async (tx) => {
     const types = await tx.select().from(equipmentTypes).orderBy(equipmentTypes.sortOrder);
-    const links = await tx.select().from(partnerLinks);
+    // Equipment-type links only — crop-linked rows belong to /admin/crops.
+    const links = await tx.select().from(partnerLinks).where(isNotNull(partnerLinks.equipmentTypeId));
     const usageCounts = await tx
       .select({ equipmentTypeId: userEquipment.equipmentTypeId, count: sql<number>`count(*)::int` })
       .from(userEquipment)
@@ -29,7 +30,10 @@ export default async function AdminEquipmentPage() {
       <div className="mt-8">
         <EquipmentView
           types={types.map((t) => ({ ...t, usageCount: usageByType.get(t.id) ?? 0 }))}
-          links={links}
+          // Narrowed by the isNotNull filter above; EquipmentTypeRow's
+          // PartnerLink type predates polymorphic partnerLinks and only
+          // ever handles the equipment-type case.
+          links={links.map((l) => ({ ...l, equipmentTypeId: l.equipmentTypeId as string }))}
         />
       </div>
     </div>

@@ -60,7 +60,7 @@ export function PlanForm({ plan }: { plan: Plan }) {
       <button
         type="submit"
         disabled={pending}
-        className="self-start rounded-full bg-(--brand-primary) px-6 py-2 text-sm text-white hover:brightness-90 active:scale-95 transition disabled:opacity-60"
+        className="self-start rounded-full bg-(--brand-primary) px-6 py-2 text-sm text-white shadow-button hover:brightness-90 active:scale-95 transition disabled:opacity-60"
       >
         {pending ? "Saving…" : "Save plan"}
       </button>

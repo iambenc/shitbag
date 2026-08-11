@@ -166,7 +166,7 @@ export default async function GrowPlanPage() {
           </p>
           <Link
             href="/upgrade"
-            className="mt-4 inline-block rounded-full bg-(--brand-primary) px-6 py-2 text-sm text-white hover:brightness-90 active:scale-95 transition"
+            className="mt-4 inline-block rounded-full bg-(--brand-primary) px-6 py-2 text-sm text-white shadow-button hover:brightness-90 active:scale-95 transition"
           >
             View membership
           </Link>
@@ -266,7 +266,7 @@ export default async function GrowPlanPage() {
           </p>
           <Link
             href="/garden"
-            className="mt-4 inline-block rounded-full bg-(--brand-primary) px-6 py-2 text-sm text-white hover:brightness-90 active:scale-95 transition"
+            className="mt-4 inline-block rounded-full bg-(--brand-primary) px-6 py-2 text-sm text-white shadow-button hover:brightness-90 active:scale-95 transition"
           >
             Go to your garden
           </Link>
@@ -283,7 +283,7 @@ export default async function GrowPlanPage() {
               <div className="mt-4">
                 <GeneratePlanButton
                   label="Generate my grow plan"
-                  className="rounded-full bg-(--brand-primary) px-6 py-2 text-sm text-white hover:brightness-90 active:scale-95 transition"
+                  className="rounded-full bg-(--brand-primary) px-6 py-2 text-sm text-white shadow-button hover:brightness-90 active:scale-95 transition"
                 />
               </div>
               <p className="mt-2 text-xs text-(--text-muted)">
@@ -316,7 +316,7 @@ export default async function GrowPlanPage() {
               <div className="mt-4">
                 <GeneratePlanButton
                   label="Try again"
-                  className="rounded-full bg-(--brand-primary) px-6 py-2 text-sm text-white hover:brightness-90 active:scale-95 transition"
+                  className="rounded-full bg-(--brand-primary) px-6 py-2 text-sm text-white shadow-button hover:brightness-90 active:scale-95 transition"
                 />
               </div>
               <p className="mt-2 text-xs text-red-700">

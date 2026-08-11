@@ -9,6 +9,9 @@ import {
 } from "@/lib/actions/shopping";
 import { LeafAccent } from "@/components/LeafAccent";
 import { EquipmentIcon } from "@/components/icons";
+import { groupShoppingItems } from "@/lib/shopping/grouping";
+
+type PartnerLink = { label: string; url: string };
 
 type Item = {
   id: string;
@@ -21,10 +24,11 @@ type Item = {
   quantityLabel: string;
   status: "pending" | "purchased";
   source: "manual" | "ai";
+  partnerLink: PartnerLink | null;
 };
 
-type CropOption = { id: string; name: string; emoji: string };
-type EquipmentOption = { id: string; name: string };
+type CropOption = { id: string; name: string; emoji: string; partnerLink: PartnerLink | null };
+type EquipmentOption = { id: string; name: string; partnerLink: PartnerLink | null };
 
 const initialState: AddShoppingItemState = {};
 
@@ -48,6 +52,15 @@ function itemLabel(item: Item) {
   }
   return item.freeText;
 }
+
+// Same crop/equipment/custom item, still the same status, listed more than
+// once — combined into one card acting on every underlying row together,
+// same "group rows, act on all their ids" shape grow-plan recommendation
+// cards already use. Different statuses deliberately never merge: checking
+// off one shouldn't silently also check off a still-needed duplicate.
+// groupShoppingItems() itself is shared with dashboard/page.tsx's shopping-
+// list preview card — see src/lib/shopping/grouping.ts.
+type Group = ReturnType<typeof groupShoppingItems<Item>>[number];
 
 export function ShoppingListView({
   items,
@@ -78,27 +91,30 @@ export function ShoppingListView({
           quantityLabel: result.item!.quantityLabel,
           status: "pending",
           source: "manual",
+          partnerLink: crop?.partnerLink ?? equipmentType?.partnerLink ?? null,
         },
       ]);
     }
     return result;
   }, initialState);
 
-  async function handleToggle(item: Item) {
-    const purchased = item.status !== "purchased";
+  async function handleToggle(group: Group) {
+    const itemIds = group.items.map((i) => i.id);
+    const purchased = group.items[0].status !== "purchased";
     setItemList((items) =>
-      items.map((i) => (i.id === item.id ? { ...i, status: purchased ? "purchased" : "pending" } : i)),
+      items.map((i) => (itemIds.includes(i.id) ? { ...i, status: purchased ? "purchased" : "pending" } : i)),
     );
-    await toggleShoppingItemAction(item.id, purchased);
+    await toggleShoppingItemAction(itemIds, purchased);
   }
 
-  async function handleDelete(itemId: string) {
-    setItemList((items) => items.filter((i) => i.id !== itemId));
-    await deleteShoppingItemAction(itemId);
+  async function handleDelete(group: Group) {
+    const itemIds = group.items.map((i) => i.id);
+    setItemList((items) => items.filter((i) => !itemIds.includes(i.id)));
+    await deleteShoppingItemAction(itemIds);
   }
 
-  const pending = itemList.filter((i) => i.status === "pending");
-  const purchased = itemList.filter((i) => i.status === "purchased");
+  const pendingGroups = groupShoppingItems(itemList.filter((i) => i.status === "pending"));
+  const purchasedGroups = groupShoppingItems(itemList.filter((i) => i.status === "purchased"));
 
   return (
     <div className="flex flex-col gap-8">
@@ -109,37 +125,51 @@ export function ShoppingListView({
             <p className="text-sm text-(--text-muted)">Your list is empty.</p>
           </div>
         )}
-        {[...pending, ...purchased].map((item) => (
-          <div
-            key={item.id}
-            className="flex items-center justify-between gap-3 rounded-lg border border-black/10 bg-white p-3 shadow-card"
-          >
-            <label className="flex flex-1 items-center gap-2 text-sm">
-              <input
-                type="checkbox"
-                checked={item.status === "purchased"}
-                onChange={() => handleToggle(item)}
-                className="accent-(--brand-primary)"
-              />
-              <span className={item.status === "purchased" ? "line-through text-(--text-muted)" : ""}>
-                {itemLabel(item)} · {item.quantityLabel}
-              </span>
-              {item.source === "ai" && (
-                <span className="rounded-full bg-(--brand-secondary)/40 px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide">
-                  AI
-                </span>
-              )}
-            </label>
-            <button
-              type="button"
-              onClick={() => handleDelete(item.id)}
-              className="text-xs text-(--text-muted) hover:text-red-700"
-              aria-label={`Delete ${itemLabelText(item)}`}
+        {[...pendingGroups, ...purchasedGroups].map((group) => {
+          const item = group.items[0];
+          const anyAi = group.items.some((i) => i.source === "ai");
+          return (
+            <div
+              key={group.key}
+              className="flex items-center justify-between gap-3 rounded-lg border border-black/10 bg-white p-3 shadow-card"
             >
-              Delete
-            </button>
-          </div>
-        ))}
+              <label className="flex flex-1 items-center gap-2 text-sm">
+                <input
+                  type="checkbox"
+                  checked={item.status === "purchased"}
+                  onChange={() => handleToggle(group)}
+                  className="accent-(--brand-primary)"
+                />
+                <span className={item.status === "purchased" ? "line-through text-(--text-muted)" : ""}>
+                  {itemLabel(item)} · {group.quantitySummary}
+                </span>
+                {anyAi && (
+                  <span className="rounded-full bg-(--brand-secondary)/40 px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide">
+                    AI
+                  </span>
+                )}
+              </label>
+              {item.partnerLink && (
+                <a
+                  href={item.partnerLink.url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="shrink-0 text-xs text-(--brand-primary) underline"
+                >
+                  {item.partnerLink.label}
+                </a>
+              )}
+              <button
+                type="button"
+                onClick={() => handleDelete(group)}
+                className="text-xs text-(--text-muted) hover:text-red-700"
+                aria-label={`Delete ${itemLabelText(item)}`}
+              >
+                Delete
+              </button>
+            </div>
+          );
+        })}
       </section>
 
       <form action={formAction} className="flex flex-col gap-3 rounded-lg border border-black/10 bg-white p-4 shadow-card">
@@ -147,21 +177,21 @@ export function ShoppingListView({
           <button
             type="button"
             onClick={() => setMode("crop")}
-            className={`rounded-full px-3 py-1 ${mode === "crop" ? "bg-(--brand-primary) text-white" : "border border-black/15"}`}
+            className={`rounded-full px-3 py-1 transition ${mode === "crop" ? "bg-(--brand-primary) text-white shadow-button" : "bg-black/5 text-(--text-muted) hover:bg-black/10"}`}
           >
             From catalog
           </button>
           <button
             type="button"
             onClick={() => setMode("equipment")}
-            className={`rounded-full px-3 py-1 ${mode === "equipment" ? "bg-(--brand-primary) text-white" : "border border-black/15"}`}
+            className={`rounded-full px-3 py-1 transition ${mode === "equipment" ? "bg-(--brand-primary) text-white shadow-button" : "bg-black/5 text-(--text-muted) hover:bg-black/10"}`}
           >
             Equipment
           </button>
           <button
             type="button"
             onClick={() => setMode("custom")}
-            className={`rounded-full px-3 py-1 ${mode === "custom" ? "bg-(--brand-primary) text-white" : "border border-black/15"}`}
+            className={`rounded-full px-3 py-1 transition ${mode === "custom" ? "bg-(--brand-primary) text-white shadow-button" : "bg-black/5 text-(--text-muted) hover:bg-black/10"}`}
           >
             Custom item
           </button>
@@ -209,7 +239,7 @@ export function ShoppingListView({
           />
           <button
             type="submit"
-            className="rounded-full bg-(--brand-primary) px-6 py-2 text-sm text-white hover:brightness-90 active:scale-95 transition"
+            className="rounded-full bg-(--brand-primary) px-6 py-2 text-sm text-white shadow-button hover:brightness-90 active:scale-95 transition"
           >
             Add
           </button>

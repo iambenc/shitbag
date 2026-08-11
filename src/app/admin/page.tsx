@@ -14,6 +14,11 @@ const SECTIONS = [
     title: "Equipment & partner links",
     description: "Equipment types gardeners can pick from, and where to buy them.",
   },
+  {
+    href: "/admin/crops",
+    title: "Crops & partner links",
+    description: "Where gardeners can buy seeds for each crop in the catalog.",
+  },
 ];
 
 export default async function AdminOverviewPage() {

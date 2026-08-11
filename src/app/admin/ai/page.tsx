@@ -7,6 +7,8 @@ const AGENT_LABELS: Record<string, string> = {
   grow_planner: "Grow planner",
   plant_health: "Plant health diagnosis",
   crop_facts: "Crop facts lookup",
+  growing_area_estimator: "Growing area estimator (photo)",
+  weather_advisor: "Weather advisor",
 };
 
 export default async function AdminAIPage() {

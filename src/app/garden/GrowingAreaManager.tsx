@@ -119,27 +119,6 @@ export function GrowingAreaManager({ equipment }: { equipment: EquipmentRow[] })
 
   return (
     <div className="flex flex-col gap-10">
-      <section>
-        <h2 className="text-sm font-medium text-(--text-muted)">Your plot right now</h2>
-        {visualCards.length === 0 ? (
-          <p className="mt-3 text-sm text-(--text-muted)">
-            Nothing placed yet — use the steppers below to add growing space.
-          </p>
-        ) : (
-          <div className="mt-3 flex flex-wrap gap-3">
-            {visualCards.map(({ row, i, occupant, reservedFor }) => (
-              <VisualizationCard
-                key={`${row.userEquipmentId}-${i}`}
-                row={row}
-                index={i}
-                occupant={occupant}
-                reservedFor={reservedFor}
-              />
-            ))}
-          </div>
-        )}
-      </section>
-
       <section className="flex flex-col gap-4">
         <h2 className="text-sm font-medium text-(--text-muted)">Place your equipment</h2>
         {rows.length === 0 && (
@@ -167,7 +146,7 @@ export function GrowingAreaManager({ equipment }: { equipment: EquipmentRow[] })
                   onClick={() => changeCount(row.userEquipmentId, row.placedCount - 1)}
                   disabled={row.placedCount <= 0 || pending === row.userEquipmentId}
                   aria-label={`Remove one placed ${row.name}`}
-                  className="flex h-8 w-8 items-center justify-center rounded-full border border-black/15 disabled:opacity-40"
+                  className="flex h-8 w-8 items-center justify-center rounded-full bg-black/5 hover:bg-black/10 active:scale-95 transition disabled:opacity-40"
                 >
                   –
                 </button>
@@ -179,7 +158,7 @@ export function GrowingAreaManager({ equipment }: { equipment: EquipmentRow[] })
                   onClick={() => changeCount(row.userEquipmentId, row.placedCount + 1)}
                   disabled={row.placedCount >= row.quantityOwned || pending === row.userEquipmentId}
                   aria-label={`Add one placed ${row.name}`}
-                  className="flex h-8 w-8 items-center justify-center rounded-full bg-(--brand-primary) text-white disabled:opacity-40"
+                  className="flex h-8 w-8 items-center justify-center rounded-full bg-(--brand-primary) text-white shadow-button hover:brightness-90 active:scale-95 transition disabled:opacity-40"
                 >
                   +
                 </button>
@@ -187,6 +166,27 @@ export function GrowingAreaManager({ equipment }: { equipment: EquipmentRow[] })
             </div>
           );
         })}
+      </section>
+
+      <section className="rounded-lg border border-black/10 bg-white p-6 shadow-card">
+        <h2 className="font-display text-lg font-semibold">Your plot right now</h2>
+        {visualCards.length === 0 ? (
+          <p className="mt-3 text-sm text-(--text-muted)">
+            Nothing placed yet — use the steppers above to add growing space.
+          </p>
+        ) : (
+          <div className="mt-3 flex flex-wrap gap-3">
+            {visualCards.map(({ row, i, occupant, reservedFor }) => (
+              <VisualizationCard
+                key={`${row.userEquipmentId}-${i}`}
+                row={row}
+                index={i}
+                occupant={occupant}
+                reservedFor={reservedFor}
+              />
+            ))}
+          </div>
+        )}
       </section>
     </div>
   );

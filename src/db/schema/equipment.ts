@@ -1,6 +1,8 @@
-import { pgTable, uuid, text, integer, real, unique } from "drizzle-orm/pg-core";
+import { pgTable, uuid, text, integer, real, unique, check } from "drizzle-orm/pg-core";
+import { sql } from "drizzle-orm";
 import { tenants } from "./tenant";
 import { users } from "./user";
+import { crops } from "./crop";
 import { tenantIsolationPolicy } from "./_rls";
 
 // Which attribute inputs the equipment picker UI shows for a type:
@@ -34,6 +36,13 @@ export const equipmentTypes = pgTable(
   ],
 ).enableRLS();
 
+// Exactly one of equipmentTypeId/cropId is set — an affiliate/shop link for
+// either an equipment type or a crop (seeds), never both. Mirrors
+// shoppingListItems' identical "num_nonnulls(...) = 1" pattern. cropId
+// points at the global, un-tenanted `crops` catalog (no RLS of its own) —
+// same shape as shoppingListItems.cropId already does; the link row itself
+// stays tenant-scoped via tenantId/RLS regardless of which catalog it
+// points into.
 export const partnerLinks = pgTable(
   "partner_links",
   {
@@ -41,14 +50,19 @@ export const partnerLinks = pgTable(
     tenantId: uuid("tenant_id")
       .notNull()
       .references(() => tenants.id, { onDelete: "cascade" }),
-    equipmentTypeId: uuid("equipment_type_id")
-      .notNull()
-      .references(() => equipmentTypes.id, { onDelete: "cascade" }),
+    equipmentTypeId: uuid("equipment_type_id").references(() => equipmentTypes.id, { onDelete: "cascade" }),
+    cropId: uuid("crop_id").references(() => crops.id, { onDelete: "cascade" }),
     label: text("label").notNull(),
     url: text("url").notNull(),
     sortOrder: integer("sort_order").notNull().default(0),
   },
-  (table) => [tenantIsolationPolicy("partner_links", table.tenantId)],
+  (table) => [
+    tenantIsolationPolicy("partner_links", table.tenantId),
+    check(
+      "partner_links_exactly_one_of",
+      sql`num_nonnulls(${table.equipmentTypeId}, ${table.cropId}) = 1`,
+    ),
+  ],
 ).enableRLS();
 
 export const userEquipment = pgTable(

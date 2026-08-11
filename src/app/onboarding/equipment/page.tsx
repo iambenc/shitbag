@@ -1,4 +1,4 @@
-import { asc, eq } from "drizzle-orm";
+import { asc, eq, and, isNotNull } from "drizzle-orm";
 import { auth } from "@/lib/auth";
 import { getCurrentTenant } from "@/lib/tenant/resolve";
 import { withTenant } from "@/lib/tenant/withTenant";
@@ -13,7 +13,10 @@ export default async function EquipmentStepPage() {
   const { types, links, owned } = await withTenant(tenant.id, async (tx) => {
     const [types, links, owned] = await Promise.all([
       tx.select().from(equipmentTypes).where(eq(equipmentTypes.tenantId, tenant.id)).orderBy(asc(equipmentTypes.sortOrder)),
-      tx.select().from(partnerLinks).where(eq(partnerLinks.tenantId, tenant.id)),
+      tx
+        .select()
+        .from(partnerLinks)
+        .where(and(eq(partnerLinks.tenantId, tenant.id), isNotNull(partnerLinks.equipmentTypeId))),
       tx.select().from(userEquipment).where(eq(userEquipment.userId, session!.user.id)),
     ]);
     return { types, links, owned };

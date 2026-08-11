@@ -64,7 +64,7 @@ function UploadForm({ onUploaded }: { onUploaded: (photo: NonNullable<UploadPhot
       <button
         type="submit"
         disabled={pending}
-        className="self-start rounded-full bg-(--brand-primary) px-6 py-2 text-sm text-white hover:brightness-90 active:scale-95 transition disabled:opacity-60"
+        className="self-start rounded-full bg-(--brand-primary) px-6 py-2 text-sm text-white shadow-button hover:brightness-90 active:scale-95 transition disabled:opacity-60"
       >
         {pending ? "Uploading…" : "Upload photo"}
       </button>
@@ -139,14 +139,14 @@ export function JournalView({
         <button
           type="button"
           onClick={() => setTab("mine")}
-          className={`rounded-full px-3 py-1 ${tab === "mine" ? "bg-(--brand-primary) text-white" : "border border-black/15"}`}
+          className={`rounded-full px-3 py-1 transition ${tab === "mine" ? "bg-(--brand-primary) text-white shadow-button" : "bg-black/5 text-(--text-muted) hover:bg-black/10"}`}
         >
           My Photos
         </button>
         <button
           type="button"
           onClick={() => setTab("shared")}
-          className={`rounded-full px-3 py-1 ${tab === "shared" ? "bg-(--brand-primary) text-white" : "border border-black/15"}`}
+          className={`rounded-full px-3 py-1 transition ${tab === "shared" ? "bg-(--brand-primary) text-white shadow-button" : "bg-black/5 text-(--text-muted) hover:bg-black/10"}`}
         >
           Shared in {tenantName}
         </button>

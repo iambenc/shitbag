@@ -2117,3 +2117,967 @@ before finishing. `tsc --noEmit` and `eslint` clean throughout; `/garden` and
 `/onboarding/equipment` confirmed compiling via the dev server. The demo account already had
 owned == placed for every existing row, so the planned one-time backfill turned out to be a no-op
 in practice — checked, not assumed, before treating it as done. No stray test files.
+
+## Feature — modern button treatment (depth, soft-fill chrome, softer chips)
+
+Requested directly: "I'd like the buttons to have a more modern look." Surveyed the actual button
+landscape first (grep, not guesswork) rather than assuming a single fix would cover everything:
+found four distinct button families in use — 14 variants of a primary solid pill (`bg-(--brand-
+primary)` + `text-white`, ~27 real instances once toggle/chip buttons were excluded from the count),
+6 icon-circle buttons with a plain `border border-black/15` outline (calendar month nav, the crop-
+swipe reject button, the equipment-placement steppers — one of which, the "−" stepper, had *no*
+hover or active feedback at all), 5 segmented-control-style toggle/chip buttons (journal tabs,
+shopping-list mode switcher) whose inactive state was the same flat gray outline, and one outlined
+secondary action (grow-plan's Reject button). Deliberately left untouched: the small inline "Remove"
+buttons in `SeedsForm.tsx`/`EquipmentPicker.tsx`, which sit directly beside bordered `<input>`/
+`<select>` fields in the same row — giving them a different (borderless) treatment would break their
+visual alignment with the adjacent form controls they're grouped with, a real cost for no gain since
+the row context, not "is this a button," is what should drive their style here.
+
+Presentation-only, no data-model risk — followed the same direct-implementation calibration as the
+Priority 1/2 design-review passes rather than full Plan Mode.
+
+**New token** (`globals.css`, `@theme inline`): `--shadow-button`, a two-layer soft *brand-tinted*
+shadow (`color-mix(in srgb, var(--brand-primary) 30%/25%, transparent)` at two blur radii) rather
+than a fixed gray/rgba shadow — since `--brand-primary` is tenant-configurable (set as an inline
+style per-tenant in `layout.tsx`), a hardcoded color would've been wrong for any tenant using a
+palette other than Fern. Same mechanism already producing `shadow-card`'s utility class; confirmed
+in the compiled dev-server CSS bundle, including Tailwind's automatic `@supports (color: color-mix(
+in lab, red, red))` fallback layer for browsers without `color-mix` support.
+
+**Primary buttons**: `shadow-button` inserted into every instance of the established `hover:
+brightness-90 active:scale-95 transition` primary-button pattern (27 real matches across 22 files,
+via a scripted pass keyed on `bg-(--brand-primary)` co-occurring with that exact hover/active/
+transition substring on the same line, so it couldn't mis-fire on unrelated classNames) — gives
+every primary CTA a soft colored lift instead of sitting perfectly flat on the page. The one
+exception left alone: `EquipmentPicker.tsx`'s `file:` pseudo-element upload button, a distinct
+input-styling mechanism (and carrying its own already-known separate `hover:file:opacity-90`
+quirk) rather than a real `<button>`.
+
+**Icon-circle buttons**: converted from a thin `border border-black/15` outline to a borderless
+soft-fill — `bg-black/5 hover:bg-black/10 active:scale-95 transition` — across the calendar's
+month-nav buttons, the crop-swipe deck's reject button, and both equipment-placement steppers (the
+matching "+" stepper, already brand-colored, gained the same `shadow-button` treatment as every
+other primary button instead of being left as the one primary-styled button with zero shadow/hover/
+active feedback in the app). Reads as more contemporary flat-UI chrome than a hairline border, and
+closes a real, if minor, pre-existing gap: the "−" stepper previously had no interactive feedback
+of any kind.
+
+**Toggle/chip buttons** (journal tabs, shopping-list mode switcher): inactive state changed from
+`border border-black/15` to the same soft-fill family (`bg-black/5 text-(--text-muted) hover:bg-
+black/10`), active state gained `shadow-button` alongside its existing solid fill — reads as a
+proper segmented control (soft-fill states swapping) rather than a filled pill next to a bare
+outline. `transition` added so the swap animates instead of snapping.
+
+**Reject button** (`RecommendationActionButtons.tsx`): same `border` → `bg-black/5 hover:bg-black/
+10` soft-fill swap, `transition` added. Its sibling Accept button's "not yet accepted" state (a
+brand-tinted outline, `border-(--brand-primary)/40`) was deliberately left as-is — already a
+distinct, intentional tinted style, not the generic gray-border pattern this pass targeted.
+
+Verified: `tsc --noEmit` and `eslint` both clean. Fetched the running dev server's compiled CSS
+bundle directly and confirmed `.shadow-button` compiled with the expected two-layer `color-mix`
+box-shadow plus the `@supports` fallback layer, and spot-checked the rendered `/` page markup to
+confirm `shadow-button` classes are actually present on live output, not just in source. No browser/
+screenshot tool available this session (standing limitation, disclosed consistently throughout) — so
+final visual judgment ("does it actually look more modern") is left to the user checking the running
+dev server (port 3002) themselves; this is a compiles-and-is-internally-consistent confirmation, not
+a claimed visual verification. No schema/data changes, no test scripts to clean up.
+
+## Feature — split garden tools from planting equipment, expand the tools catalog
+
+Requested directly: "let's split the gardening equipment, like water cans, from the planting
+equipment and create a separate list the user can choose from of the most common pieces of
+gardening equipment." Two parts: (1) the equipment picker (shared by onboarding and `/garden`)
+listed every equipment type — pots, planters, raised beds, garden beds, seed trays, *and* the
+watering can — as one flat, undifferentiated sequence of fieldsets; (2) the tools side of that list
+was thin (watering can only) and needed a real "common gardening equipment" catalog to choose from.
+
+No schema change. The distinction between "planting equipment" (becomes growing space when added,
+per the auto-placement feature from earlier this session) and "garden tools" (never does) already
+has a single source of truth: `SLUG_TO_GROWING_AREA_TYPE` in `equipmentMapping.ts`, the same map
+that already drives auto-placement server-side and the `/garden` "placeable" filter. Adding a
+redundant `kind` column would have meant two things that could drift; this map is also already
+provably the correct authority for *any* equipment type, including tenant-admin-created custom
+ones — the admin "Add equipment type" form (`EquipmentView.tsx`) lets a tenant admin create a type
+with an arbitrary slug and no way to add it to `SLUG_TO_GROWING_AREA_TYPE` (a hardcoded TS map)
+without a code change, so a custom type an admin adds is *already*, correctly, never treated as
+growing space today — the split can lean on exactly that same fact rather than introducing a new
+one.
+
+**`src/db/seed-data/equipment.ts`**: reorganized the flat `equipmentTypeSeeds` array into two named
+arrays — `GARDEN_TOOL_SEEDS` and `PLANTING_EQUIPMENT_SEEDS` (concatenated into the still-exported
+`equipmentTypeSeeds`, so `seed.ts`'s existing idempotent insert-if-missing loop needed zero changes).
+Added 9 new tools alongside the existing watering can, picked as a genuinely common "starter kit"
+for a home/allotment gardener rather than an exhaustive hardware-store catalog: hand trowel, hand
+fork, secateurs, garden gloves, digging spade, digging fork, garden rake, garden hoe, wheelbarrow.
+All `category: "count"` (a simple quantity-owned checklist — no size/dimensions field makes sense
+for a trowel), each with a placeholder partner link matching the existing example.com convention
+(no real affiliate programme yet, a pre-existing open item, not new to this pass).
+
+**`src/components/EquipmentPicker.tsx`**: split the single `types.map(...)` into two grouped
+sections — "Planting equipment" (pots, trays, planters, beds — subtext explains the auto-placement
+behavior) and "Garden tools" (subtext: "separate from the growing space itself") — filtering on
+`type.slug in SLUG_TO_GROWING_AREA_TYPE`, imported directly (the map has no `"server-only"` guard,
+already safe for this client component). The original per-type fieldset JSX (quantity stepper for
+"count" types; repeatable size/dimension rows for "sized"/"dimensions" types) was extracted into a
+local `renderTypeFieldset` function, unchanged in behavior, so both new sections render identically
+to how the single flat list rendered before — this is a grouping/labeling change, not a rewrite of
+the picker's interaction model. The existing "You might also want" partner-link suggestions box
+(any not-yet-owned type, any category) was deliberately left untouched: it's the only place any
+type's partner link is currently surfaced at all (neither fieldset variant shows one inline), so
+collapsing or filtering it would have quietly removed the one shopping-link path for the 9 new
+tools — a regression, not a cleanup, and out of scope for what was asked. Same reasoning kept two
+existing inline "Remove"-row buttons (`SeedsForm.tsx`/`EquipmentPicker.tsx`'s own dimension-row
+remove buttons) out of this pass entirely — untouched, no relation to the tool/planting split.
+
+Both call sites (`/garden/page.tsx`, `/onboarding/equipment/page.tsx`) already passed `slug` through
+to `EquipmentPicker`'s `types` prop before this change (needed for other reasons), so no query or
+prop-shape changes were needed at either site.
+
+Ran `pnpm db:seed` against the local dev database to add the 9 new tool types (and their partner
+links) for the real `edurnity` tenant — confirmed via direct Postgres: 15 equipment types total
+afterward (6 pre-existing + 9 new), all 15 with a partner-link row, sort_order collisions between
+the two groups are harmless (e.g. `hand-trowel` and `seed-trays` both landed at sort_order 1) since
+each group is now rendered from its own filtered, independently-ordered slice of the same
+DB-sorted list — verified the *within-group* ordering is clean ascending for both groups. No schema
+migration — this is a pure data-seed addition, the existing idempotent skip-if-slug-exists loop in
+`seed.ts` needed no changes and left the demo account's existing owned-equipment rows untouched.
+
+Verified: `tsc --noEmit` and `eslint` both clean. Confirmed via the running dev server that both
+routes importing `EquipmentPicker` (`/garden`, `/onboarding/equipment`) compile without error under
+Turbopack (307 redirect to `/login`, not a 500) — a real compile-error check, not just a static
+`tsc` pass, since Turbopack resolves the whole route's module graph (including the `EquipmentPicker`
+import) before the auth-redirect check ever runs. No authenticated browser session available this
+session to visually confirm the two-section layout renders as designed against the demo account —
+disclosed explicitly rather than implied; the DB state, compiled build, and code-level review of the
+(structurally unchanged, just regrouped) JSX are what's actually been confirmed. No stray test
+scripts — `pnpm db:seed` is an existing, already-idempotent project script, not a throwaway one.
+
+**Follow-up**: "let's use a + and - to increment decrement the quantity rather than the text
+input." Replaced the `"count"`-category quantity `<input type="number">` in `renderTypeFieldset`
+with a `−`/`+` stepper pair, matching the established pattern already used identically for
+placed-count in `GrowingAreaManager.tsx` (`h-8 w-8 rounded-full` buttons, `disabled:opacity-40` at
+the 0/99 boundary, `aria-label` naming the specific type rather than relying on an implicit
+`<label>`/`<input>` association, since there's no text input to associate with anymore). Applied to
+the shared `"count"`-category branch rather than forked per-section — `renderTypeFieldset` is used
+by both the "Garden tools" and "Planting equipment" groups, and `seed-trays` (in the planting group)
+is also `"count"`-category, so it gets the same stepper; keeping one interaction pattern for one
+field type across both sections was judged better than making the same kind of control look
+different depending on which section it happens to render in. `tsc --noEmit`/`eslint` clean; both
+routes importing `EquipmentPicker` reconfirmed compiling under Turbopack (307 to `/login`, not 500).
+
+## Feature — configurable affiliate/partner links for equipment and crops
+
+Requested directly: "let's add configurable affiliate links for items in the gardening equipment,
+planting equipment, and the shopping list." Investigation found admin-configurable "partner links"
+already existed (`partnerLinks` table + `/admin/equipment`'s add/delete UI), but only for equipment
+types, and only ever surfaced to end users in one place (`EquipmentPicker`'s "You might also want"
+box, and only for *not-yet-owned* types) — never on the shopping list, and crops had no link
+mechanism at all (the `crops` catalog is global/un-tenanted, so a per-tenant affiliate link for a
+crop needs its own tenant-scoped row, same as the existing equipment case).
+
+Design was validated in a review pass before implementation (schema change + check constraint +
+new admin section + three render sites warranted it, same calibration as this session's other
+schema-touching features). It confirmed every fact about current query/type shapes, found the
+`shoppingListItems` table's existing `num_nonnulls(...) = 1` exactly-one-of pattern as direct
+precedent, and — critically — caught that dropping `partnerLinks.equipmentTypeId`'s NOT NULL
+constraint would break `admin/equipment/page.tsx`'s compile (an unfiltered `tx.select().from(
+partnerLinks)` fed into a type hard-coded as `equipmentTypeId: string`), and that the shopping
+list's optimistic client-side add path (`ShoppingListView.tsx`) would silently show no link on a
+freshly-added item until the next full reload, since it built the new row from `crops`/
+`equipmentTypes` option props that didn't carry link data. Both fixed in the plan below. It also
+talked me out of one part of my original design: I'd planned to show every equipment type's link
+inline (owned or not) and simplify "You might also want" down to bare names — review pointed out
+that once every fieldset already shows its own link, "You might also want" listing the same
+not-owned names again becomes pure redundant dead weight, not a simplification. Landed instead on:
+inline link only for *owned* types (the real original gap — zero link visibility existed for owned
+equipment before this), "You might also want" left completely untouched for not-owned types, since
+it already works well there as a compact upsell digest.
+
+**Schema** (`src/db/schema/equipment.ts`): `partnerLinks` made polymorphic — `equipmentTypeId`
+relaxed to nullable, new nullable `cropId` (references the global `crops` table; no circular import,
+confirmed), a `check("partner_links_exactly_one_of", num_nonnulls(equipmentTypeId, cropId) = 1)`
+constraint mirroring `shoppingListItems`' identical existing pattern. Migration
+`0021_glamorous_wolf_cub.sql` — reviewed before applying: `ALTER COLUMN ... DROP NOT NULL` →
+`ADD COLUMN crop_id` → FK → check constraint, in that order (no hazard, and this exact shape
+already succeeded once in production for `shoppingListItems` per `0010_mean_exodus.sql`). Applied;
+verified all 15 pre-existing rows trivially satisfy the new constraint (equipmentTypeId set, cropId
+null), and actively verified the constraint *rejects* a both-null insert (not just assumed).
+
+**Actions** (`src/lib/actions/admin.ts`): new `createCropPartnerLinkAction`, a close mirror of the
+existing `createPartnerLinkAction` but keyed on `cropId`. `deletePartnerLinkAction` needed no logic
+change (already generic-by-`id`, relies purely on RLS for tenant scoping regardless of which FK is
+set — confirmed safe) but now revalidates both `/admin/equipment` and `/admin/crops` since it's
+shared by both.
+
+**Fixed the compile-breaking + hygiene query gaps** the review caught: `admin/equipment/page.tsx`'s
+`partnerLinks` fetch now filters `isNotNull(equipmentTypeId)` (was about to break `EquipmentView`'s
+non-nullable `PartnerLink` type) with a narrowing cast at the callsite documented inline; `garden/
+page.tsx` and `onboarding/equipment/page.tsx`'s equivalent fetches gained the same filter for query
+hygiene (they wouldn't have broken, since they key into a Map that just silently ignores a
+`null`-keyed row, but there's no reason to fetch crop-linked rows there at all).
+
+**New admin section** `/admin/crops` (`page.tsx` + `CropLinksView.tsx` + `CropLinkRow.tsx`,
+structurally mirroring `EquipmentView`/`EquipmentTypeRow` but *only* the partner-links sub-block —
+no create/edit/delete-crop controls, since crops are a shared global catalog, not tenant-owned; an
+admin can only attach/detach their own tenant's links to an existing crop). Added as a 5th card on
+`/admin`'s overview page.
+
+**End-user surfacing**:
+- `EquipmentPicker.tsx`: each type's legend now shows its configured link inline, but only once
+  `ownedTypeIds.has(type.id)` — reactive to the live stepper state, same as the existing `notOwned`
+  computation it reads from.
+- `shopping-list/page.tsx` + `ShoppingListView.tsx`: page now fetches this tenant's `partnerLinks`,
+  builds `linksByCropId`/`linksByEquipmentTypeId` Maps (same last-one-wins simplification as
+  `EquipmentPicker`, for consistency — the underlying admin UI already supports multiple links per
+  type/crop but end users only ever see one, a pre-existing simplification not newly introduced
+  here), and attaches a resolved `partnerLink` to every item (`freeText` items always get `null` —
+  no catalog link possible) *and* to the `crops`/`equipmentTypes` option props passed down, so the
+  client-side optimistic-add path (which builds a new item from those props, not a server round
+  trip) shows the link immediately too, per the review's finding.
+
+Verified: `tsc --noEmit`/`eslint` clean across every touched file. All 6 touched routes (`/garden`,
+`/onboarding/equipment`, `/shopping-list`, `/admin`, `/admin/equipment`, `/admin/crops`) confirmed
+compiling under Turbopack (307 to `/login`, not 500). Inserted a real crop-linked `partnerLinks` row
+against the demo account's actual data (attached to Radish, a crop genuinely on the demo user's
+shopping list) and replicated the exact join/lookup logic `shopping-list/page.tsx` performs directly
+against Postgres — confirmed Radish resolves its link and all 8 other items on the list correctly
+resolve `null`, matching the intended per-item behavior exactly. Test rows removed afterward; demo
+account's `partner_links` table confirmed back to its original 15 rows. No stray files.
+
+## Feature — rename "Photo Journal" to "Garden Journal"
+
+Requested directly: "let's rename the photo journal to Garden Journal." Scoped this to user-facing
+copy only — the nav link (`SiteHeader.tsx`, "Photo Journal" → "Garden Journal"), the page heading
+(`journal/page.tsx`'s h1, "Photo journal" → "Garden Journal" — also fixed a pre-existing case
+mismatch between the two, sentence case vs. title case, now consistently title case in both), and
+one mention in body copy on the upgrade page ("harvest log, photo journal" → "harvest log, garden
+journal", kept lowercase there to match the sentence's existing lowercase treatment of "harvest
+log" beside it). Deliberately did NOT rename the internal `photoJournalEntries` table/schema/
+column/variable names used throughout `src/db/schema/photo.ts`, `photos.ts`, `plantHealth.ts`,
+`admin.ts`, `diagnosePlant.ts`, etc. — that's internal plumbing with no user-visible effect, and a
+real table rename is a separate, hard-to-reverse, unrequested migration; the request read as a
+display-label change. Verified via `tsc --noEmit`/`eslint` (clean) and a grep confirming zero
+remaining "photo journal" user-facing copy anywhere in the app.
+
+## Fix — grow-planner task titles sometimes embedded a raw growing-area id
+
+Reported directly, with a concrete example: a real task title had come back as "Sow lettuce seeds
+directly into seed tray 6e88ba59-a35d-4caa-b2f2-466457a9333c for a rapid cut-and-come-again baby
+leaf crop" — a raw internal uuid leaking into user-facing text. Traced the cause: `growPlanner.ts`'s
+prompt lists every growing area to the model as `- id ${a.id}: ${a.type}, ${areaSizeText(a)}` (e.g.
+"id 6e88ba59-...: seed_tray, ..."), and the `tasks[].title` schema field had no description at all
+constraining its content — nothing told the model *not* to reach for that same id string when it
+wanted to be precise about which specific area of a given type a task referred to (a real pressure
+when several areas of the same type are available). Confirmed `recommendationReplacement.ts` (the
+reject→replace agent) structurally can't have this bug — it already describes growing areas to the
+model via `activatesStageIndex` (a small integer) and a `stageShapeText()` rendering that never
+includes a raw id at all, an existing design choice from an earlier pass, not something added now.
+Confirmed via Postgres that no current task in the demo account's data currently exhibits this
+(`title ~ <uuid regex>` matched zero rows) — the report describes a real but non-reproduced-in-
+current-data occurrence, not an ongoing visible bug in the demo account today.
+
+Fixed in `growPlanner.ts` only, two reinforcing changes (matching this codebase's established
+convention of constraining AI output via both the field's own Zod `.describe()` and a numbered
+INSTRUCTIONS bullet, e.g. how `isIndoor`/`isSuccessionResow` are already documented): `tasks[].title`
+gained an explicit description forbidding any growing-area id or other raw identifier in the title,
+with the user's own reported bad example given verbatim as the negative case; INSTRUCTIONS item 5
+(the task-generation rule) gained a trailing sentence: growing-area ids are for
+`activatesGrowingAreaId`/`stages` only, never a task's title or explanation, even to disambiguate
+between two areas of the same type — refer to areas there only by type and size.
+
+Verified: `tsc --noEmit`/`eslint` clean. Not verified against a live model call — this is a
+straightforward "never do X" constraint backed by an explicit schema description (unlike the
+earlier succession-sowing "typically 2-5" instruction, which was a genuinely probabilistic count
+needing live confirmation), and this session's Gemini free-tier quota has been fragile more than
+once already; spending a live call here was judged not worth the risk given the fix's low
+complexity. Disclosed explicitly rather than claimed — worth a real "Try again" regeneration by the
+user if they want firsthand confirmation the new titles come back clean.
+
+## Feature — savings report (money saved growing your own), feature-flagged off
+
+Follow-up to a monetisation-ideas discussion: asked what else could grow revenue beyond affiliate
+links and white-label tenanting; proposed a "you've saved £X this year" report as the strongest fit,
+since it's the one idea genuinely native to data this app already tracks (`crops.
+estimatedRetailPricePerKgGbp`, added earlier this session for the grow planner's value-bias, plus
+the existing `harvestLog` table) rather than something any gardening app could bolt on. User asked
+to build it now but keep it feature-flagged off for future use.
+
+**No existing feature-flag infrastructure existed anywhere in this codebase** (no env-var
+convention, no third-party flag service, no per-tenant flags column) — checked before designing one.
+Added `src/lib/featureFlags.ts`: a single hardcoded `FEATURE_FLAGS` const object, deliberately not
+an env var — for a small number of flags, a code change visible in git history/review is a clearer
+"we're launching this" signal than an environment variable that could silently differ (or be
+forgotten) across environments. Flipping `moneySavedReport` to `true` and redeploying is the entire
+launch mechanism; no migration, no config UI.
+
+**Real design problem, not just plumbing**: `harvestLog.unit` is free text (placeholder "kg,
+pieces…", defaulting to "kg" but never enforced) — multiplying an arbitrary unit's quantity against
+a crop's £/kg retail estimate would silently produce nonsense for anything not actually weight-based
+("3 punnets" × £/kg is meaningless). New `src/lib/savings.ts`: `computeSavings()` normalizes only a
+small recognized allowlist of weight units (kg/kilogram(s)/g/gram(s), case-insensitive) to kg and
+multiplies against `estimatedRetailPricePerKgGbp`; anything else (punnets, bunches, "pieces",
+unrecognized text) is deliberately excluded from the total rather than guessed at, with the excluded
+count surfaced back to the user via a visible caveat rather than silently dropped. This is the same
+"be transparent about approximation" spirit already established for `estimatedRetailPricePerKgGbp`
+itself (documented there as an AI best-guess, not an authoritative dataset) — a monetisation-facing
+number showing a wrong total would be a real trust problem, not just a rough edge.
+
+**New route** `src/app/savings/page.tsx`: mirrors `grow-plan/page.tsx`'s exact existing paid-gate
+pattern (`getSubscription`/`isPaidTier`, a "This is a membership feature" card linking to
+`/upgrade`) — positioned as a premium feature from day one, not something that'd need a paywall
+bolted on later once the flag flips. Gated twice, defense in depth: `notFound()` (a 404, not a
+redirect — gives no signal the route exists) if `FEATURE_FLAGS.moneySavedReport` is off, checked
+before even the auth check; the paid-gate as the second layer for anyone who reaches it once the
+flag is on. Report shows a headline estimated-£-saved figure, a per-crop breakdown sorted by value
+(reusing the same `computeSavings()` aggregation), an empty state for zero weight-logged harvests,
+and the excluded-entries caveat when relevant, plus a general "rough guide, not an exact figure"
+disclaimer matching this codebase's established tone for AI/estimate-derived numbers.
+
+**Entry point**: `dashboard/page.tsx`'s existing `RESOURCE_LINKS` array (already the established
+launcher for `/grow-plan`, `/favourites`, `/garden`, `/harvests` — confirmed neither of the latter
+two nor `/grow-plan` has any *other* nav link anywhere in the app; this array is genuinely the only
+route in). Kept the 4 existing entries as a permanent array and appended a 5th conditionally at
+render time (`[...RESOURCE_LINKS, ...(FEATURE_FLAGS.moneySavedReport ? [SAVINGS_RESOURCE_LINK] : [])]`)
+rather than mutating the module-level array, so there's no dependency on import-order side effects.
+
+Verified: `tsc --noEmit`/`eslint` clean. Confirmed `/savings` 404s while the flag is off (not just
+redirects — an actual 404, verified via curl) and `/dashboard` still compiles and redirects
+correctly through auth. The demo account has zero `harvest_log` rows, so end-to-end UI verification
+against real data wasn't possible (disclosed rather than skipped silently); instead verified
+`computeSavings()`'s actual logic directly via a throwaway Node script against representative mixed-
+unit data (kg, g, a deliberately-excluded "punnets" entry) — confirmed kg/g normalization, case-
+insensitivity, correct exclusion and its count, correct multi-entry per-crop aggregation, and
+correct value-descending sort, all via explicit assertions, not just eyeballing output. Test script
+removed after. No schema changes, no migration, nothing to clean up in the database.
+
+## Feature — photo-based growing-area estimation, with user override before saving
+
+Requested across two messages: first a feasibility question ("take a photo(s) of their planting
+areas and for an AI agent to estimate the individual growing areas") — answered directly that it's
+feasible and fits the existing photo-upload/vision-agent pattern already proven for plant health
+diagnosis, but flagged that absolute *dimensions* from a photo alone are inherently unreliable
+without something in frame for scale, so it'd need to be "AI proposes, user confirms" rather than
+fully automatic. Then confirmed directly: "let's start on the AI estimation... allow the users to
+override any suggestions."
+
+Design was validated in a Plan review before implementation (schema-touching + a new agent
+warranted it). It confirmed the full site inventory of `growingAreas`-creating code (`equipmentRows.ts`,
+`syncGrowingAreas.ts`) and caught two real issues in the first draft: the `appliedAt`-based
+idempotency guard was described as "check then write," exactly the double-click/two-tab race
+`rejectRecommendationAction`'s atomic pattern exists to avoid — fixed to a single guarded `UPDATE ...
+WHERE status='complete' AND applied_at IS NULL ... RETURNING`, insert only if it actually returned a
+row; and it flagged (correctly) that both this feature and the weather advisor below introduce a new
+AI "agent slot" that needs adding to `tenantAIConfigAgentEnum` — confirmed via `pnpm db:generate`
+that this is a TypeScript-only constraint (no DB check constraint), so no migration was actually
+needed for that part, just the enum + admin label update.
+
+**Schema** (`src/db/schema/growing-area-estimation.ts`, new): `growingAreaEstimations` — id, tenant/
+user, `photoStorageKeys: jsonb.$type<string[]>()` (a run can take several photos together, not one
+row per photo, since the AI's proposed areas aren't necessarily 1:1 with input photos), `status`
+(pending/complete/failed, mirroring `plantDiagnoses`), `provider`/`model`, `rawOutput: jsonb`,
+`errorMessage`, `appliedAt: timestamp | null` (the atomic guard described above). Deliberately no
+child "proposals" table — the AI's output is read exactly once (the review page) and either
+discarded or turned straight into real rows; the review page's client-side row-editing state is the
+only "editing" that ever happens, submitted fresh rather than written back into `rawOutput`.
+Migration `0022_oval_jack_murdock.sql`, straightforward `CREATE TABLE` + RLS policy, same shape as
+every other tenant-scoped table.
+
+**Agent** `src/lib/ai/agents/growingAreaEstimator.ts`: one `generateObject` call with multiple
+`{type:"file"}` content blocks (all uploaded photos together), Zod schema `{areas: [{type,
+sizeValue, sizeUnit, widthCm, lengthCm, depthCm, confidence, description}], summary}`. Prompt
+explicitly instructs a LOW confidence score (not an invented precise number) whenever no size
+reference (ruler, brick, hand, known pot, etc.) is visible in a photo — directly addressing the
+dimension-reliability concern raised in the original feasibility answer. Mock fallback: canned
+2-area proposal, matching every other agent's `[Mock estimate — connect a Gemini API key...]`
+convention.
+
+**Inngest function** `src/inngest/functions/estimateGrowingAreas.ts`: gather-context → call-agent
+(reads all photo buffers via `storage.readBuffer`) → persist-results, catch → `status:"failed"` —
+identical shape to `diagnosePlantFn`. Registered in `/api/inngest/route.ts`.
+
+**Actions** `src/lib/actions/growingAreaEstimation.ts`: `uploadPhotosForEstimationAction` (multi-file
+`formData.getAll("photos")`, capped at `MAX_ESTIMATION_PHOTOS` (5), per-file type/size validation
+matching `uploadAndDiagnoseAction`, paid-gated, daily-capped via new `MAX_DAILY_GROWING_AREA_
+ESTIMATIONS = 3` counting rows regardless of status — a failed run still consumes a slot, same rule
+and rationale as `getPlantDiagnosesToday`); `confirmGrowingAreaProposalsAction` (Zod-validates the
+submitted row set, the atomic guarded update described above, then a direct `tx.insert(growingAreas)`
+with `status:"available"`/`sourceUserEquipmentId:null` — confirmed via the Plan review that
+`buildGrowingAreaRows` genuinely doesn't fit here, since it requires a non-nullable
+`sourceUserEquipmentId` and these areas have no equipment provenance).
+
+**Pages**: `/garden/estimate` (upload form, paid-gate card, daily-cap message, `JobInterstitial`
+while pending — same shape as `/plant-health`) and `/garden/estimate/[id]` (review page — parses
+`rawOutput` through the agent's own Zod schema rather than an unchecked cast, since unlike
+`plantDiagnoses.rawOutput` this flows into an editable form, not just a display string; handles
+failed/already-applied states explicitly). New `EstimationReviewForm.tsx` client component mirrors
+`EquipmentPicker`'s row-state editing pattern — type dropdown, size fields switching between
+sized (pot) and dimensioned (everything else, matching `EquipmentPicker`'s exact same split and its
+same "no depth for a ground-level bed" exclusion), a low-confidence flag shown inline, remove/add-
+manually controls. New status route `/api/growing-area-estimations/[id]/status/route.ts` mirrors the
+plant-diagnoses one exactly. Entry point: a card on `/garden/page.tsx` itself (not the dashboard's
+`RESOURCE_LINKS`), since this is garden-management-specific.
+
+Verified: `tsc --noEmit`/`eslint` clean. All new routes confirmed compiling under Turbopack.
+`/api/inngest` confirms `function_count: 7` (both new functions registered and synced). The atomic
+`appliedAt` guard was actively tested, not just reasoned about — a throwaway script fired two
+concurrent guarded UPDATEs at a real `complete`-status test row and confirmed exactly one claimed it,
+the other correctly no-opped; the mock output was validated against the agent's own Zod schema. A
+live end-to-end run wasn't possible this session — see the weather-advisor entry below for why
+(shared cause, this session's Gemini free-tier quota). Test rows/scripts removed after.
+
+## Feature — AI weather advisor, replacing the deterministic daily rule
+
+Requested directly: "Let's add another agent to assess the weather for the week ahead and make
+suggestions based on that, for example if the temperature is high extra watering should be done by
+the user. This should be done ONCE per day based on the daily forecast." Investigation found a
+deterministic (non-AI) version of almost exactly this already existed — `dailyJobsFn`'s
+"weather-adjustment" step, hardcoded `isHotAndDry`→one watering task / `isRainy`→delete pending
+weather tasks — so this is a genuine upgrade (richer, AI-reasoned suggestions covering more than one
+binary check) rather than a from-scratch feature.
+
+Design was validated in a Plan review before implementation, which found the *real* architectural
+issue: my first draft put the new agent call inside `dailyJobsFn`'s existing per-tenant/per-user
+loop, all inside one `step.run()`. The review checked how every other AI-calling Inngest function in
+this codebase is actually shaped (`diagnosePlantFn`, `regenerateRecommendationFn`) and confirmed
+every single one wraps exactly *one* LLM call per step, never N calls for N entities inside one step
+— because Inngest memoizes at the step boundary, not per-loop-iteration, so a step wrapping many
+sequential LLM calls would re-call the provider for every already-succeeded user on any retry of that
+step. Real retry-amplification/cost risk, not a style concern. Restructured per the review's specific
+suggestion: `dailyJobsFn`'s step now only *identifies* eligible users (paid, lat/long set — cheap
+DB-only work, safely re-runnable), then fans out one `weather-advice/requested` event per eligible
+user via `step.sendEvent`; a new dedicated function does the actual one-user, one-LLM-call work with
+its own step memoization and retries, exactly like every other agent-calling function.
+
+**Agent** `src/lib/ai/agents/weatherAdvisor.ts`: input is the 7-day `getWeeklyForecast` array (not
+just today, per the request's "week ahead" framing) + expertise level; output `{suggestions:
+[{title, notes}]}`, max 3. Prompt explicitly instructs the model that most ordinary/mild days should
+yield *zero* suggestions — not manufacture busywork daily just to have something to say — with
+examples covering more than the original single rule (heat/dryness → extra watering, frost/cold →
+protect tender plants, heavy rain → hold off watering and watch for waterlogging, high wind →
+stake/secure). Mock fallback deliberately reproduces the exact deterministic behavior it replaces
+(hot+dry → the same "Water your plants today" suggestion; rainy or mild → none), verified via a
+throwaway script against all three of this codebase's existing forced-weather-scenario values
+(hot_dry/rainy/mild) with explicit assertions — real behavior-parity confirmation, not assumed.
+
+**Wiring**: `dailyJobsFn`'s "weather-adjustment" step renamed to "find-eligible-users" and reduced to
+exactly that (paid + lat/long check, same query as before, no forecast fetch or task writes left in
+it) — its return value is the array fanned out via `step.sendEvent`. New function
+`src/inngest/functions/applyWeatherAdvice.ts` (registered in `/api/inngest/route.ts`): gather-context
+(fresh profile lookup, doesn't trust the event payload for anything beyond ids) → call-agent
+(`getWeeklyForecast` + `assessWeather`) → persist-results (delete existing pending weather-source
+tasks due today/tomorrow — applied unconditionally now, not just on the old rainy-branch, so stale
+suggestions from a previous day's forecast never linger — then insert this run's fresh suggestions,
+if any). `retries: 2` set explicitly (matching `diagnosePlantFn`); no dedicated status row for
+failures since nothing user-facing polls this background run — a caught error is logged and
+re-thrown so Inngest's own retry/dashboard visibility handles it, same reasoning as why this doesn't
+need new app-level state. Confirmed via the Plan review: no other code depends on the exact string
+"Water your plants today" or on at-most-one-weather-task-per-day, so replacing (not augmenting) the
+old rule is safe; `getWeeklyForecast` has the identical forced-scenario override as the `getForecast`
+it replaces, so the existing `dev/run-jobs` + `weatherScenario` dev-testing path keeps working
+unchanged.
+
+Verified: `tsc --noEmit`/`eslint` clean. Real end-to-end trigger against the demo account: sent the
+`dev/run-jobs` event directly via `inngest.send()` (the HTTP dev-trigger route needs an authenticated
+session cookie this workflow doesn't have) with `weatherScenario:"hot_dry"` — confirmed via the
+Inngest dev server's own API that `dailyJobsFn` correctly found 2 eligible paid users and fanned out
+2 `weather-advice/requested` events. Both downstream runs then failed — but on Gemini's free-tier
+quota limit (`AI_APICallError: You exceeded your current quota... limit: 20`), confirmed via the run's
+full stack trace, not a code defect: the platform has a real API key configured, so `getModelForTenant`
+correctly attempted the live call rather than falling back to mock (mock only triggers when *no* key
+is configured anywhere), retried 3 times per Inngest's own step-retry, and failed loudly exactly as
+intended once retries were exhausted — this is this session's already-documented recurring Gemini
+quota fragility, not a new problem. Given that, verified the two pieces that failure prevented from
+running live, directly: the mock-fallback output logic (confirmed against all 3 forced scenarios,
+matching the pre-existing deterministic behavior exactly) and the persist-results delete-then-insert
+logic (replicated directly against the real demo account's data — confirmed a hot-day suggestion
+correctly inserts a `source:"weather"` task, and confirmed the clean-slate delete correctly clears it
+on a subsequent mild-day run with zero suggestions). Demo account confirmed left with zero stray
+weather tasks afterward. No stray test scripts.
+
+## Feature — combine duplicate shopping-list items into one card
+
+Requested directly: "on the shopping list, when an item is listed multiple times combine them into
+one order." Investigation found `addShoppingItemAction` has never deduplicated at all — unlike the
+AI weekly-shopping-list job (which already checks for an existing item before inserting), a manual
+add always creates a new row, so the same crop/equipment/custom item could genuinely appear as
+several separate lines.
+
+Chose display-time grouping over insert-time merging, for a few concrete reasons: it's non-
+destructive (no risk of losing data via a bad merge), it automatically catches *any* existing or
+future duplicate regardless of source (manual re-add, a bug elsewhere, historical data — no backfill
+needed), and it mirrors a pattern already established in this codebase (`groupRecommendations` on
+`/grow-plan` — multiple rows collapsed into one card, actions applied to every underlying id
+together). `quantityLabel` is free text ("1 packet", "500g") with no fixed unit, so there's no safe
+general way to *sum* two labels numerically; instead identical labels are counted ("1 packet ×2")
+and distinct ones are joined ("1 packet ×2 + 500g") — combined into one line without pretending to
+do arithmetic across incompatible units. No schema change, no Plan review needed — presentational
+grouping plus a bulk-action extension of two already-simple CRUD actions.
+
+**`src/lib/actions/shopping.ts`**: `toggleShoppingItemAction`/`deleteShoppingItemAction` changed from
+taking a single `itemId: string` to `itemIds: string[]`, scoped via `inArray(...)` instead of `eq(...)`
+— same array-of-ids-in-one-scoped-update shape as `rejectRecommendationAction`. Confirmed via grep
+these are only ever called from `ShoppingListView.tsx`, so no other call site needed updating.
+
+**`src/app/shopping-list/ShoppingListView.tsx`**: new `groupItems()` — groups by
+`` `${cropId}|${equipmentTypeId}|${freeText.trim().toLowerCase()}|${status}` `` (status included
+deliberately: checking off one duplicate must never silently check off a still-needed one too, same
+reasoning this codebase already used for including `status` in the grow-plan grouping key). Each
+group carries every underlying row's id, a combined quantity summary, and an `anyAi` flag (the AI
+badge shows if *any* row in the group came from the AI job). `handleToggle`/`handleDelete` now
+operate on `group.itemIds` rather than a single id, both for the optimistic client-side update and
+the server action call.
+
+Verified: `tsc --noEmit`/`eslint` clean, `/shopping-list` confirmed compiling. Grouping/combining
+logic tested directly with representative duplicate data (three same-crop pending rows across two
+distinct quantity labels and mixed manual/AI sources) — confirmed correct group count, correct
+`"1 packet ×2 + 500g"` combined summary, correct AI-badge propagation, and confirmed a purchased row
+of the same crop correctly stays in its own separate group rather than merging with the pending
+ones. Bulk toggle/delete then verified against the real demo account: duplicated a real pending
+item, confirmed a single bulk `UPDATE ... WHERE id IN (...)` correctly moved both rows to `purchased`
+together, then cleaned up and restored the account to its exact original single-row state.
+
+## Feature — password reset flow
+
+Preceded by two direct requests: making `iambenc@icloud.com` a `tenant_admin` (a role-column update
+— straightforward, but flagged that this codebase's pure-JWT sessions only stamp `role` at sign-in,
+so an already-active session needs a fresh login to pick up the change, not just the DB write) and
+setting that account's password to a specific value (a direct bcrypt hash update, cost 12 matching
+`signup.ts`'s own hashing, verified against the login comparison logic afterward). Then: "we'll need
+to work on the password recovery flow" — since there was no way to recover a forgotten password at
+all beforehand (confirmed: no email-sending capability anywhere in this codebase, no reset-token
+schema, no forgot-password route).
+
+Design was validated in a Plan review before implementation (auth/security-adjacent, warranted extra
+scrutiny even though the overall pattern — token + hash + expiry — is a well-understood one, not
+novel). It confirmed the architecture was sound (tenant-scoped lookup via the same pre-auth
+`getCurrentTenant()`/`withTenant()` pattern `signup.ts`/`auth.ts` already use, SHA-256-not-bcrypt for
+the token hash, the `console.log`-in-place-of-email dev-mode fallback mirroring `startCheckoutAction`'s
+exact precedent) but found two real issues and one gap worth naming explicitly rather than leaving
+silent:
+
+1. **Token redemption race** — the original design was a read-then-write ("check `usedAt IS NULL`,
+   then update"), exactly the anti-pattern this codebase already has named comments warning against
+   (`rejectRecommendationAction`, `confirmGrowingAreaProposalsAction`) — two concurrent submissions
+   of the same token (double-click, a retried request) could both pass the read before either
+   commits, redeeming it twice. Fixed to a single atomic `UPDATE ... WHERE tokenHash=... AND
+   usedAt IS NULL AND expiresAt > now() ... RETURNING`, proceeding only if it actually returned a row.
+2. **Timing side-channel in the enumeration protection** — the request action always returns the
+   identical message regardless of whether the email matched an account (so a stranger can't learn
+   who has an account by reading the response), but the original draft only did the hash+INSERT work
+   on the "found" branch — a patient attacker could still distinguish registered emails by response
+   *latency* even with identical response *text*. Fixed by always generating the token/hash and
+   always running one DB statement of comparable shape on both branches (a real INSERT when found, a
+   real SELECT against the same table/column when not).
+3. **Session invalidation on password change is a known, unaddressed gap** — this codebase's pure-JWT
+   sessions (`src/lib/auth.ts`) have no server-side revocation mechanism at all (the `jwt()` callback
+   only ever reads existing token claims, never re-checks the DB), so resetting a password does NOT
+   invalidate an already-issued session cookie for that account. Deliberately scoped out (would need
+   a `passwordChangedAt`/session-version check added to the JWT callback, or a switch to DB-backed
+   sessions — a bigger change than this pass), but written down as an explicit code comment at the
+   point it matters rather than left as a silent, undocumented hole.
+
+**Schema** (`src/db/schema/password-reset.ts`, new): `passwordResetTokens` — id, tenant/user,
+`tokenHash` (SHA-256 of the raw token, never the raw token itself — same reasoning as not storing
+plaintext passwords, but a fast hash rather than bcrypt: bcrypt's slow hashing exists to resist
+brute-forcing a low-entropy human-chosen secret, and a 256-bit random token is already infeasible to
+brute-force regardless of hash speed), globally unique (the lookup happens before the tenant is
+known from the token alone — cross-tenant collision risk at 256 bits is cryptographically
+negligible), `expiresAt` (60 minutes), `usedAt` (null = still redeemable). Migration
+`0023_numerous_sentry.sql`, standard `CREATE TABLE` + RLS policy shape.
+
+**Actions** (`src/lib/actions/passwordReset.ts`, new): `requestPasswordResetAction` (email → generic
+message always, dev-mode link logged server-side only — never returned to the client, since showing
+it conditionally would itself leak whether the email existed) and `resetPasswordAction` (bound to the
+token from the dynamic route via `.bind(null, token)`, atomic claim as described above, then updates
+`users.passwordHash` and invalidates every sibling token for that user inside the same transaction,
+all collapsed to one generic "invalid or expired" error regardless of the specific reason — the
+caller already possesses the token itself, so a more granular message isn't a meaningful enumeration
+vector, just no reason to be more specific either).
+
+**Pages**: `/forgot-password` (email form, `"use client"` page matching `/login`'s existing shape —
+no server-side auth check needed, it's a public unauthenticated flow) and `/reset-password/[token]`
+(server component reading the route param, delegating to a client `ResetPasswordForm`). `/login`
+gained a "Forgot password?" link.
+
+Verified: `tsc --noEmit`/`eslint` clean. All three new routes confirmed compiling (200, correctly
+public/unauthenticated, not redirected). Exercised the complete flow directly against the real
+`iambenc@icloud.com` account (the one just given a real password this session) via a throwaway
+script replicating the action logic exactly: generated a real token, confirmed the not-found branch
+touches the DB with an equivalent-shape no-op, then **actually raced two concurrent claims of the
+same token** (not just reasoned about the fix) and confirmed exactly one won; confirmed the losing
+claim's `userId` was unreachable and the winner's matched the real user; created a second sibling
+token and confirmed the invalidation step correctly marked it used too; updated the password and
+confirmed via `bcryptjs.compare` that the *old* password (`Password123!`) stopped matching and the
+new one did. Restored the account's original password hash and deleted all test-created token rows
+afterward — confirmed via a final check that `Password123!` still works, the `tenant_admin` role is
+intact, and zero `password_reset_tokens` rows remain.
+
+## Fix — growing-area UUID leak was only actually closed for task titles, not explanations
+
+Earlier this session, a grow-plan task title was reported showing a raw growing-area uuid ("...into
+seed tray 6e88ba59-a35d-4caa-b2f2-466457a9333c..."), fixed by adding an explicit `.describe()`
+constraint to `growPlanner.ts`'s `tasks[].title` Zod field plus an INSTRUCTIONS bullet, and
+explicitly flagged as *not* verified against a live model call (Gemini quota fragility). The user
+has now surfaced a live screenshot proving the same leak still happens — but in the task's
+**explanation** text, not the title ("Sow spinach seeds indoors in seed tray fe4bcc2a-fdc9-408f-
+8bf4-4c26e68e3e80..."). Root cause: the earlier fix only added the field-level `.describe()` to
+`title`; the INSTRUCTIONS bullet *did* say "never write one into a task's title or explanation," but
+— consistent with this session's repeated finding that instruction-only constraints are less
+reliable than instruction + field-level schema description together (the same lesson from the
+succession-sowing "typically 2-5" under-delivery earlier) — the model respected it for `title` but
+not for `explanation`, which had no schema-level guard of its own.
+
+**Fix**: added the identical `.describe()` constraint to `growPlanner.ts`'s `tasks[].explanation`
+field, using the user's own reported real example (the actual uuid from their screenshot) as the
+negative case, same technique as the original title fix. Confirmed `recommendationReplacement.ts`
+structurally can't have this bug — re-checked its prompt exposes growing areas only via
+`activatesStageIndex` (a small integer) and `stageShapeText()`, never a raw id, so there's no `.describe()`
+gap to add there.
+
+**Also cleaned up the real, existing damage**: queried the live demo account for every task with a
+uuid pattern in its title *or* notes and found **11 affected tasks**, not just the one the user
+screenshotted — the leak had been happening across several grow-plan generations, not a one-off.
+Rewrote each one's `notes` text by hand to read naturally (e.g. "Sow spinach seeds indoors in a seed
+tray to raise strong seedlings ready for transplanting." — the user's own example, applied verbatim;
+"Carefully transplant your healthy spinach seedlings into the 10L pot to allow full root
+development." for one that named a pot rather than a tray), then re-ran the same broad query and
+confirmed zero tasks anywhere in the account still match the uuid pattern in either field. `tsc
+--noEmit`/`eslint` clean. Not re-verified against a live model call for the same reason as before
+(quota fragility) — this time the fix covers both fields the leak is structurally possible in, so
+the gap that let this recur should be closed, but that claim is still resting on schema-description
++ instruction-text reasoning rather than an observed clean regeneration.
+
+## Fix — shopping-list grouping only applied to the full list, not the dashboard preview
+
+Reported directly, with a screenshot showing 5 separate "Lettuce" lines on the dashboard's shopping-
+list preview card. The earlier "combine duplicate shopping-list items" pass only touched `/shopping-
+list`'s `ShoppingListView.tsx` — `dashboard/page.tsx` has its own, entirely separate shopping-list
+preview widget (queries `shoppingListItems` directly, maps 1:1 into `<li>` rows) that was never
+touched, so it kept showing raw ungrouped rows. Confirmed the screenshot's exact scenario against
+real data: the affected account genuinely has 5 duplicate pending "Lettuce" rows and 5 duplicate
+"Spinach" rows (`1 packet` each) — this wasn't a display-only glitch, the underlying duplicate rows
+are real (from the pre-existing lack of dedup in `addShoppingItemAction`, unchanged by design — see
+the earlier grouping pass's write-up for why display-time grouping was chosen over insert-time
+merging).
+
+Rather than duplicate the grouping/combining logic into `dashboard/page.tsx` a second time (real risk
+of the two views' grouping behavior silently drifting apart), extracted it into a new shared, generic
+utility: `src/lib/shopping/grouping.ts`'s `groupShoppingItems<T>()`, taking any item shape with the
+minimal `{id, cropId, equipmentTypeId, freeText, quantityLabel, status}` fields and returning groups
+of `{key, items: T[], quantitySummary}` — deliberately returning every grouped instance rather than
+a pre-decided set of derived fields (an `anyAi` flag, etc.), so each caller derives whatever else it
+needs from the full group rather than the shared function guessing every caller's requirements. This
+is a deviation from this codebase's more common "duplicate rather than share" call (e.g. Inngest
+gather-context steps) — that precedent applies to complex multi-step logic with only one real reuse
+benefit; this is a small pure function with two real call sites that must never show different
+grouping behavior for the same data.
+
+`ShoppingListView.tsx` refactored to import and call the shared function instead of its own local
+copy (which is now deleted entirely — `groupKey`/`combineQuantityLabels`/`groupItems` all removed,
+`Group` is now `ReturnType<typeof groupShoppingItems<Item>>[number]`). `dashboard/page.tsx`'s
+shopping-list preview: maps its joined `{item, crop, equipmentType}` rows into the flat shape the
+shared function needs, groups them, and renders `group.items[0]` for display fields + `group.
+quantitySummary` for the combined quantity — same rendering shape as the full list, just without the
+checkbox/delete/partner-link affordances the preview never had. Left the existing `.limit(6)` on the
+raw pre-grouping query as-is — a preview showing fewer than 6 lines when duplicates collapse is a
+correct, even improved, outcome for a glance-only widget, not a regression worth fetching extra rows
+to avoid.
+
+Verified: `tsc --noEmit`/`eslint` clean, both `/dashboard` and `/shopping-list` confirmed compiling.
+Replicated the exact screenshot scenario (4 lettuce + 1 spinach + 1 lettuce, matching the visible
+order) through the extracted grouping logic directly — confirmed it collapses to exactly 2 groups
+(a 5-instance lettuce group, a 1-instance spinach group) instead of the 6 raw lines shown before. No
+schema change, no data mutation — the underlying duplicate rows are untouched (by design, same as
+the original grouping pass), only how both views render them changed.
+
+**Follow-up**: "'1 packet x 5' should be '5 packets'" — the initial combining logic only ever tagged
+a count onto the whole label string (`"1 packet ×5"`), never did real arithmetic. Rewrote
+`combineQuantityLabels` to actually parse a leading number + unit from each label (`"1 packet"` ->
+`{amount:1, unit:"packet"}`, `"500g"` -> `{amount:500, unit:"g"}`) and, only when *every* label in
+the group parses and shares the same unit (compared loosely — "packet" and "packets" are treated as
+the same unit so a user typing the singular once and the plural another time still combines
+cleanly), sums the amounts and reformats with a small heuristic pluralizer (skips known metric
+abbreviations like `kg`/`g`/`ml` since those don't pluralize, handles `-es`/`-ies` for words ending
+in s/x/ch/sh or a consonant+y). Anything that doesn't parse (no leading number, e.g. "a packet") or
+whose units genuinely differ across the group still falls back to the original count/join behavior
+— arithmetic only ever happens when it's actually safe to do, never guessed. A group of exactly one
+item bypasses all of this and returns the label completely unchanged, so a real user's own non-
+duplicated text is never reformatted as a side effect.
+
+Verified with 8 explicit cases via a throwaway script, each asserted against an exact expected
+string: the reported case (`"1 packet"` ×5 → `"5 packets"`), a single non-duplicate item passed
+through unchanged, same-unit summing for both a spaced label (`"1 packet"`+`"2 packets"` → `"3
+packets"`) and an unspaced one (`"500g"`+`"500g"` → `"1000 g"`), correct `-es` pluralization
+(`"1 box"`×2 → `"2 boxes"`), and both fallback cases (mismatched units, and labels with no leading
+number) correctly NOT attempting arithmetic. All 8 passed. `tsc --noEmit`/`eslint` clean, both
+routes reconfirmed compiling.
+
+## Fix — "Your plot right now" was sandwiched between the two equipment sections, not separate
+
+Reported directly: "the planting / gardening equipment sections need to be their own section
+separate from the 'Your plot right now' section on /garden." The actual layout bug: `/garden`'s
+page order was "Your equipment" (the picker) → "Your plot right now" (the plot visualization,
+inside `GrowingAreaManager`) → "Place your equipment" (the placement steppers, also inside
+`GrowingAreaManager`, rendered as its second `<section>`) — the plot-visualization section was
+literally sandwiched between the two equipment-management sections rather than sitting outside
+them, which is why it never read as "its own separate section" no matter how it was styled.
+
+**`GrowingAreaManager.tsx`**: swapped the order of its two `<section>`s — "Place your equipment"
+(the steppers) now renders first, immediately following "Your equipment" above it in `page.tsx`, so
+all equipment/placement controls are contiguous; "Your plot right now" now renders last. Also gave
+"Your plot right now" real visual weight instead of the same small `text-sm font-medium text-(--
+text-muted)` label the two equipment sections use — wrapped it in a `rounded-lg border shadow-card`
+box with a `font-display text-lg font-semibold` heading, matching this app's established "standalone
+info panel" card convention (as opposed to the lighter label style appropriate for input-list
+sections). The deliberate style mismatch reinforces the separation: the two equipment sections read
+as related/similar, the plot overview reads as a distinct, different kind of thing.
+
+Verified: `tsc --noEmit`/`eslint` clean, `/garden` confirmed still compiling. Presentational
+reordering only — no data/query changes, `VisualizationCard`/`changeCount`/the steppers' behavior
+all untouched.
+
+## Change — dashboard: replace the "This week" task list with Calendar
+
+Requested directly: "let's get rid of the week view and move the calendar section up to replace
+it." `dashboard/page.tsx`'s main column had, in order: Weather this week → **This week** (a flat
+task-list widget, `ThisWeekTasks.tsx`) → Shopping list → Plant health → **Calendar** (a full month-
+grid `CalendarView`) → Garden profile. Removed the "This week" card entirely and moved Calendar into
+its position (right after Weather), rather than just deleting one and leaving a gap.
+
+Since `ThisWeekTasks.tsx` was only ever imported from this one page, removing its usage made the
+whole file dead code — deleted it outright rather than leaving an unused component behind. Also
+removed `weekTasks` (the `allTasks` filtered down to the next 7 days, computed solely to feed
+`ThisWeekTasks`) and the `pad`/`isoDate` helpers that existed only to compute that filter's date
+bounds — all now genuinely unused, not just unreferenced by the removed card. Renumbered every
+remaining `FadeIn index` in the main column (0-4, was 0-5) and the resource-links column's offset
+(`i + 5`, was `i + 6`) to match the new 5-card count, so the stagger animation still runs in the
+correct visual order rather than skipping a beat where the removed card used to be.
+
+Verified: `tsc --noEmit`/`eslint` clean (would have caught the unused-variable removals as errors
+under this project's lint config, not just a style nit — confirmed clean, not assumed), grepped to
+confirm zero remaining references to `ThisWeekTasks` anywhere in the codebase before deleting the
+file, `/dashboard` confirmed still compiling. Purely presentational — no schema/query changes beyond
+removing the now-dead date-filtering computation.
+
+## Fix — photo estimate upload exceeded the Server Action body limit
+
+Reported directly, with a real Next.js error screenshot: "Body exceeded 1 MB limit" when submitting
+`/garden/estimate`'s upload form. Root cause: Next's Server Actions default to a 1MB request body
+cap, and this form allows up to `MAX_ESTIMATION_PHOTOS` (5) photos at up to `MAX_PHOTO_BYTES` (8MB)
+each — a worst case of 40MB, nowhere close to fitting, and even a couple of ordinary modern phone
+photos (routinely 5-10MB each) would already have blown past it. Per AGENTS.md, checked this
+project's actual (modified) Next.js docs before touching config — `node_modules/next/dist/docs/.../
+serverActions.md` confirmed `experimental.serverActions.bodySizeLimit` is still the right/current
+option for this version (v16.3.0), not something renamed or restructured.
+
+User asked specifically to resize images before upload, which is also the better primary fix (faster
+uploads, not just a bigger ceiling): **`UploadPhotosForm.tsx`** now resizes every selected photo
+client-side before submitting — `createImageBitmap` + a canvas draw down to a max 1600px on the
+longest side, re-encoded as JPEG at 0.8 quality (vision models don't need full camera resolution to
+read a size reference or judge layout, so this costs nothing the AI estimate actually needs). Form
+submission intercepted via `onSubmit` (not the native `action={formAction}` wiring, since resizing is
+async and has to happen before the `FormData` is built) — resized files are appended to a fresh
+`FormData` under the same `"photos"` field name the server action already expects, then dispatched
+via calling `formAction(formData)` directly (React's action functions from `useActionState` can be
+invoked imperatively with a `FormData`, not just via native form submission). A per-file `try/catch`
+falls back to the original, un-resized file if a particular photo fails to decode (real-world photo
+uploads are unpredictable — HEIC edge cases, etc.) rather than blocking the whole batch; server-side
+validation still catches anything genuinely unacceptable. Already-over-the-cap submissions
+(`files.length > MAX_ESTIMATION_PHOTOS`) skip resizing entirely and submit as-is, so the existing
+server-side cap error still fires immediately rather than wasting time resizing photos that'll be
+rejected anyway.
+
+**`next.config.ts`**: also raised `experimental.serverActions.bodySizeLimit` to `"10mb"` — headroom
+for the realistic resized batch, not a substitute for resizing. A pathological case where every
+photo's resize genuinely fails and falls back to originals (8MB × 5 = 40MB worst case) would still
+correctly hit this limit and error, rather than the config bump silently accepting an unbounded body.
+
+Verified: `tsc --noEmit`/`eslint` clean. `/garden/estimate` reconfirmed compiling after the config
+change (Next's dev server auto-restarts on `next.config.ts` changes). Verified the resize math
+directly (the browser-only `createImageBitmap`/canvas APIs can't run outside a browser, no browser
+tool available this session — disclosed rather than assumed): a throwaway script confirmed the
+target-dimension calculation correctly scales a typical 12MP phone photo (4032×3024) down to
+1600×1200, correctly preserves aspect ratio for portrait orientation, and correctly never upscales an
+already-small image. The actual client-side canvas encoding and the end-to-end upload haven't been
+exercised in a real browser this session — worth trying a real multi-photo upload to confirm the fix
+holds in practice.
+
+**Follow-up (real bug, not just a leftover warning)**: after the resize fix, the user reported "no
+output from the AI agent shown" after uploading, with a console error: "An async function with
+useActionState was called outside of a transition... isPending will not update correctly." The
+`onSubmit` handler introduced for client-side resizing called `formAction(formData)` directly from a
+plain async event handler, not wrapped in a transition. This isn't just a cosmetic pending-indicator
+bug: `useActionState`'s dispatch function has to run inside a proper React transition for Next's
+Server Action `redirect()` handling to work correctly too — called outside one, the action can still
+run, but the redirect to `/garden/estimate/[id]` can silently never fire, leaving the user on the
+same page with no visible result. That exactly matches the report.
+
+Fixed in `UploadPhotosForm.tsx`: added `useTransition`, wrapped both `formAction(formData)` call
+sites (the normal resize-then-submit path and the already-over-the-cap fast path) in
+`startTransition(() => formAction(formData))`. The async resize work itself stays outside the
+transition (transitions are for the state-updating action dispatch, not arbitrary async work) —
+only the actual action call is wrapped. `tsc --noEmit`/`eslint` clean, `/garden/estimate`
+reconfirmed compiling. This was a plain component change (no `next.config.ts` involved), so unlike
+the body-size-limit fix this one didn't need a dev server restart — Turbopack hot-reloads it
+normally.
+
+## Feature — show the uploaded photos on the estimate review page
+
+Requested: "It would be cool to see the AI vision interpretations, and we should be allowing the user
+to override the agents estimates." The override half was already built (the review form already lets
+you edit type/size, remove a proposed row, or add one manually before confirming) — the real gap was
+that the review page never showed the photos that were actually analyzed at all, only the AI's text
+output. Scoped this to displaying the uploaded photos generally, not attributing individual proposed
+areas back to a specific source photo — the AI's output is one flat area list across all photos
+combined, and building per-area photo attribution would need a schema/prompt change of its own; the
+concrete ask was "see what the AI looked at," which a straightforward photo gallery satisfies without
+that added complexity.
+
+**Schema**: `growingAreaEstimations` gains `photoUrls: jsonb.$type<string[]>()`, nullable, stored
+*separately* from `photoStorageKeys` rather than derived from it — matching `photoJournalEntries`'
+existing precedent of storing both a storage key and a URL rather than assuming the local filesystem
+backend's `/uploads/${key}` shape holds forever (a future R2/CDN backend's URL might not be
+derivable that way). Nullable specifically so the 3 pre-existing rows from this session's own
+testing (created before this column existed) don't need a backfill — they simply render with no
+photo gallery, same as before this change, rather than needing a migration to reconstruct URLs for
+them. Migration `0024_naive_lockheed.sql`, a single plain `ADD COLUMN`.
+
+**`uploadPhotosForEstimationAction`**: now collects both `key` and `url` from each `storage.upload()`
+call (previously only kept `key`) and persists `photoUrls` alongside `photoStorageKeys` at insert
+time.
+
+**Review page** (`/garden/estimate/[id]/page.tsx`): new "What the AI looked at" section between the
+summary and the editable proposal form — a responsive photo grid, each image linking to itself in a
+new tab for a full-size view (no lightbox component, kept simple). `<img>` used directly with the
+same `@next/next/no-img-element` eslint-disable convention and comment text already established in
+`JournalView.tsx` for locally-stored user uploads, not introduced fresh. Renders nothing (not even
+an empty section) when `photoUrls` is null/empty, so old rows and the case of it failing to persist
+for any reason both degrade gracefully rather than showing a broken gallery.
+
+Verified: `tsc --noEmit`/`eslint` clean. Confirmed against real data rather than assumed: the 3
+pre-existing rows from earlier testing genuinely have `photo_urls IS NULL` in Postgres, and the
+review page for one of them still compiles/renders without error (the `?? []` fallback holding).
+Inserted a throwaway row mirroring the new action's exact insert shape (`photo_storage_keys` +
+`photo_urls` both populated) and confirmed its review page also compiles cleanly; removed the test
+row afterward. No live browser check of the actual rendered gallery this session (disclosed, not
+assumed) — worth a real look after a fresh upload.
+
+## Fix — the actual "no output shown" bug: the review page bounced pending estimations away
+
+After the transition fix, the user still reported no output. Diagnosed by checking real data rather
+than guessing: two fresh submissions genuinely reached the server and completed successfully (real
+Gemini calls, ~10-11s each, sensible real vision output — "eggplant and pepper plants... with a brick
+raised bed visible to the left"), which ruled out the upload/resize/transition path as the problem.
+The actual bug was in `/garden/estimate/[id]/page.tsx` itself, written during the original feature
+build: `if (estimation.status === "pending") redirect("/garden/estimate")`.
+
+`uploadPhotosForEstimationAction` redirects to this exact id-specific page *immediately* after
+inserting the row — while the Inngest job (a real ~10s Gemini call) is still running, so the
+estimation is still genuinely `"pending"` at that moment. That line bounced the user straight back to
+the index page instead of showing progress in place. The index page's own pending-detection logic
+then rendered a *second*, independent `JobInterstitial` — which, once the job completed, called
+`router.refresh()` on the *index* page, re-rendering it back to a plain upload form (or the daily-cap
+message), with no link anywhere back to the now-finished result. Net effect: a real, successful
+estimation completed on the server, and the user had no way to ever see it without knowing to guess
+the review URL directly.
+
+**Fix**: `/garden/estimate/[id]/page.tsx` now renders `JobInterstitial` in place for a `"pending"`
+status instead of redirecting away — same component, pointed at this id's own status route
+(`/api/growing-area-estimations/${id}/status`), polling until it resolves and then calling
+`router.refresh()` on this same URL, which re-renders into the actual review content (photos +
+editable form) once status flips. `/garden/estimate/page.tsx` (the index) now redirects to the
+pending id's own page instead of hosting a duplicate interstitial — this only matters for someone
+landing back on the index while a job is still in flight (a second tab, navigating away and back),
+since the upload action itself already goes straight to the id page; consolidating the interstitial-
+to-review flow onto that one page means there's exactly one place it can dead-end, not two.
+
+Verified: `tsc --noEmit`/`eslint` clean on both files. Confirmed via Postgres that the two real
+completed estimations these fixes were diagnosed against are sitting there correctly (`status:
+"complete"`, `applied_at: null`, real multi-area output) and pointed the user directly at both
+review URLs so the already-completed work isn't lost while the fix rolls out. Could not exercise the
+actual pending→interstitial→refresh→review transition in a live authenticated browser session this
+session (no browser tool, and constructing an authenticated request by hand isn't practical for a
+polling/redirect flow like this) — verified via careful code re-reading of the full control flow
+instead, disclosed rather than claimed as browser-tested. Worth confirming with a fresh upload that
+the interstitial now correctly resolves into the review page in place.
+
+## Fix — confirming a photo estimate now adds real equipment, not orphaned growing areas
+
+Requested directly: "When a user approves the planting equipment identified by AI from the uploaded
+photo the items should be added to their inventory ready to be added to their plot." Real gap in the
+original build: `confirmGrowingAreaProposalsAction` inserted `growingAreas` rows directly with
+`sourceUserEquipmentId: null` — a confirmed pot became usable growing space, but was completely
+invisible in "Your equipment" on `/garden`: no owned-quantity tracking, no steppers, none of the
+inventory model every other growing area in the app already assumes it came from. It also bypassed
+this session's earlier "equipment auto-placement" feature entirely instead of reusing it.
+
+**`src/lib/garden/equipmentMapping.ts`**: added `GROWING_AREA_TYPE_TO_SLUG`, the reverse of the
+existing `SLUG_TO_GROWING_AREA_TYPE` map (derived from it via `Object.entries`, not hand-duplicated,
+so the two can't drift apart) — needed to go from a proposed area's `type` back to which seeded
+`equipmentTypes` slug owns it.
+
+**`confirmGrowingAreaProposalsAction`** rewritten: confirmed rows are now grouped by everything that
+has to match for them to be "the same owned item" (type + size/dimensions — never type alone, since
+a 20cm pot and a 25cm pot are genuinely different owned equipment), mirroring exactly how
+`EquipmentPicker` already represents "3x 20cm pots" as one row with a quantity, not three rows. For
+each group: resolve the real `equipmentTypeId` for this tenant via the slug map, insert one
+`userEquipment` row with that group's summed quantity, then call the existing shared
+`buildGrowingAreaRows` helper (already used by both `syncGrowingAreas.ts` and `equipmentRows.ts`, so
+this is a third caller of proven code, not a new insert shape) to create that many `growingAreas`
+rows with `sourceUserEquipmentId` pointing at the new equipment row — the exact same "own it → auto-
+placed as ready-to-grow-in" behavior manually adding equipment through the picker already has. The
+atomic `appliedAt` claim guard from the original build is unchanged, still runs first inside the same
+transaction, with the equipment/growing-area inserts only happening once it succeeds. A confirmed
+group whose type somehow has no seeded equipment type for this tenant is silently skipped rather than
+failing the whole confirm — matches this codebase's established silent-drop-on-ineligible convention
+(e.g. `/garden`'s own `placeable` filter) — though this should never actually happen, since all five
+growing-area types are always seeded per tenant.
+
+Verified: `tsc --noEmit`/`eslint` clean. Replicated the full new logic directly against real demo
+data (not a mock scenario) — created a test estimation with 3 identical 20cm pots + 1 raised bed,
+ran the grouping/resolve/insert logic exactly as the action does, and confirmed: the 3 pots correctly
+collapsed into one `userEquipment` row with `quantity: 3` (not three separate rows), the raised bed
+got its own row, both equipment types resolved to the correct real seeded `equipmentTypes` ids, and
+`growingAreas` rows were created with the correct count per group (3 for the pots, 1 for the bed)
+each correctly pointing back to its new equipment row via `sourceUserEquipmentId`. All test data
+removed afterward, confirmed zero leftover rows. `/garden/estimate` reconfirmed compiling.
+
+## Change — Shopping list and Plant health added to the dashboard sidebar
+
+Requested directly: "let's add the shopping list and the plant health to the sidebar on the
+dashboard." Both already have live-preview cards in the dashboard's main column, but weren't in the
+`RESOURCE_LINKS` sidebar list alongside AI Grow Plan/Favourite crops/Manage your garden layout/
+Harvests — the sidebar is a plain navigation shortcut list (title + static description, no live
+data), a different purpose from the main-column preview cards, so having both isn't a duplication of
+function, just two different ways to reach the same page. Added both entries right after "AI Grow
+Plan" (`/shopping-list` — "See everything you need to pick up.", `/plant-health` — "Upload a photo
+of a struggling plant for an AI diagnosis — membership feature.", matching the existing membership-
+feature phrasing style already used for the Grow Plan and Savings report entries). No index/animation
+changes needed — the sidebar's `FadeIn` stagger already maps over `RESOURCE_LINKS` by array position
+(`i + 5`), so it automatically accommodates the two new entries without adjustment.
+
+Verified: `tsc --noEmit`/`eslint` clean, `/dashboard` confirmed compiling. Purely additive/
+presentational — no query or data changes.
+
+## Change — drop the "AI" badge on calendar tasks
+
+Requested directly: "let's get rid of the AI label on tasks in the calendar section of the
+dashboard." Found it in `CalendarView.tsx` — `{task.source !== "manual" && <span>{task.source}</span>}`,
+rendering the raw `source` enum value uppercased via CSS, so `"ai"` displayed as "AI" and
+`"weather"` displayed as "WEATHER". `CalendarView` is shared between `/calendar` and the dashboard's
+Calendar card (confirmed — same component, same import), so this one change covers "the calendar
+section of the dashboard" the request named and the standalone `/calendar` page identically, not two
+divergent badge conventions.
+
+Narrowed the condition from `source !== "manual"` to `source === "weather"` rather than deleting the
+badge outright — AI is the default origin for nearly every task in this app (a single grow-plan
+generation alone can produce dozens), so tagging almost everything "AI" was mostly noise; a weather-
+driven task is comparatively rare and a genuinely distinct, useful signal ("this got added because
+of the forecast," from this session's earlier weather-advisor feature) worth keeping visible. Also
+replaced the interpolated `{task.source}` with a literal `"Weather"` string now that it's the only
+case left, so the display text no longer depends on the raw enum spelling staying display-friendly.
+
+Verified: `tsc --noEmit`/`eslint` clean, both `/dashboard` and `/calendar` confirmed compiling.
+Purely presentational — `taskSourceEnum`/task data untouched, only which badge renders for which
+source.

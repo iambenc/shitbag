@@ -148,6 +148,34 @@
       "when": 1786375743118,
       "tag": "0020_rapid_ben_grimm",
       "breakpoints": true
+    },
+    {
+      "idx": 21,
+      "version": "7",
+      "when": 1786398070729,
+      "tag": "0021_glamorous_wolf_cub",
+      "breakpoints": true
+    },
+    {
+      "idx": 22,
+      "version": "7",
+      "when": 1786400881480,
+      "tag": "0022_oval_jack_murdock",
+      "breakpoints": true
+    },
+    {
+      "idx": 23,
+      "version": "7",
+      "when": 1786436146868,
+      "tag": "0023_numerous_sentry",
+      "breakpoints": true
+    },
+    {
+      "idx": 24,
+      "version": "7",
+      "when": 1786452532503,
+      "tag": "0024_naive_lockheed",
+      "breakpoints": true
     }
   ]
 }

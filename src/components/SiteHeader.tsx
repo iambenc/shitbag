@@ -26,7 +26,7 @@ function NavItems({
         </Link>
         <Link
           href="/signup"
-          className="rounded-full bg-(--brand-primary) px-4 py-1.5 text-white hover:brightness-90 active:scale-95 transition"
+          className="rounded-full bg-(--brand-primary) px-4 py-1.5 text-white shadow-button hover:brightness-90 active:scale-95 transition"
           onClick={onNavigate}
         >
           Sign up
@@ -44,7 +44,7 @@ function NavItems({
         My Garden
       </Link>
       <Link href="/journal" className="hover:underline" onClick={onNavigate}>
-        Photo Journal
+        Garden Journal
       </Link>
       {!isPaid && (
         <Link

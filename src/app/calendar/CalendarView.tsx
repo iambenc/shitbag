@@ -128,7 +128,7 @@ export function CalendarView({ initialTasks }: { initialTasks: Task[] }) {
           <button
             type="button"
             onClick={() => changeMonth(-1)}
-            className="rounded-full border border-black/15 p-1.5 hover:bg-black/5"
+            className="rounded-full bg-black/5 p-1.5 hover:bg-black/10 active:scale-95 transition"
             aria-label="Previous month"
           >
             <ChevronLeftIcon className="h-4 w-4" />
@@ -139,7 +139,7 @@ export function CalendarView({ initialTasks }: { initialTasks: Task[] }) {
           <button
             type="button"
             onClick={() => changeMonth(1)}
-            className="rounded-full border border-black/15 p-1.5 hover:bg-black/5"
+            className="rounded-full bg-black/5 p-1.5 hover:bg-black/10 active:scale-95 transition"
             aria-label="Next month"
           >
             <ChevronRightIcon className="h-4 w-4" />
@@ -228,9 +228,9 @@ export function CalendarView({ initialTasks }: { initialTasks: Task[] }) {
                     >
                       {task.title}
                     </span>
-                    {task.source !== "manual" && (
+                    {task.source === "weather" && (
                       <span className="ml-2 rounded-full bg-(--brand-secondary)/40 px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide">
-                        {task.source}
+                        Weather
                       </span>
                     )}
                     {task.isIndoor && (
@@ -296,7 +296,7 @@ export function CalendarView({ initialTasks }: { initialTasks: Task[] }) {
             />
             <button
               type="submit"
-              className="rounded-full bg-(--brand-primary) px-4 py-1.5 text-sm text-white hover:brightness-90 active:scale-95 transition"
+              className="rounded-full bg-(--brand-primary) px-4 py-1.5 text-sm text-white shadow-button hover:brightness-90 active:scale-95 transition"
             >
               Add
             </button>

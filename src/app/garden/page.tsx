@@ -1,5 +1,6 @@
 import { redirect } from "next/navigation";
-import { eq, asc, inArray } from "drizzle-orm";
+import Link from "next/link";
+import { eq, asc, inArray, isNotNull, and } from "drizzle-orm";
 import { auth } from "@/lib/auth";
 import { getCurrentTenant } from "@/lib/tenant/resolve";
 import { withTenant } from "@/lib/tenant/withTenant";
@@ -40,7 +41,10 @@ export default async function GardenPage() {
         .where(eq(growingAreas.userId, session.user.id))
         .orderBy(asc(growingAreas.createdAt)),
       tx.select().from(equipmentTypes).where(eq(equipmentTypes.tenantId, tenant.id)).orderBy(asc(equipmentTypes.sortOrder)),
-      tx.select().from(partnerLinks).where(eq(partnerLinks.tenantId, tenant.id)),
+      tx
+        .select()
+        .from(partnerLinks)
+        .where(and(eq(partnerLinks.tenantId, tenant.id), isNotNull(partnerLinks.equipmentTypeId))),
     ]);
 
     // What's currently growing (in_use areas) or earmarked for later
@@ -116,6 +120,19 @@ export default async function GardenPage() {
         Newly added equipment is automatically ready to grow in — adjust the counts below if you
         want to hold some back.
       </p>
+
+      <Link
+        href="/garden/estimate"
+        className="mt-4 inline-flex items-center gap-2 rounded-lg border border-black/10 bg-white p-4 shadow-card hover:border-(--brand-primary)/40 hover:-translate-y-0.5 hover:shadow-lg transition-all duration-200"
+      >
+        <div>
+          <p className="font-display text-lg font-semibold">📷 Estimate from photos</p>
+          <p className="mt-1 text-sm text-(--text-muted)">
+            Photograph your growing space and let AI propose the areas — review before anything&rsquo;s
+            added.
+          </p>
+        </div>
+      </Link>
 
       <div className="mt-8">
         <h2 className="text-sm font-medium text-(--text-muted)">Your equipment</h2>

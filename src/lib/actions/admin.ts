@@ -210,10 +210,34 @@ export async function createPartnerLinkAction(_prev: ActionState, formData: Form
   return { success: true };
 }
 
+export async function createCropPartnerLinkAction(_prev: ActionState, formData: FormData): Promise<ActionState> {
+  const { tenantId } = await requireTenantAdmin();
+
+  const cropId = String(formData.get("cropId") || "");
+  const label = String(formData.get("label") || "").trim();
+  const url = String(formData.get("url") || "").trim();
+  if (!cropId || !label || !url) {
+    return { error: "Crop, label, and URL are required." };
+  }
+  try {
+    new URL(url);
+  } catch {
+    return { error: "Enter a valid URL." };
+  }
+
+  await withTenant(tenantId, (tx) => tx.insert(partnerLinks).values({ tenantId, cropId, label, url }));
+  revalidatePath("/admin/crops");
+  return { success: true };
+}
+
+// Shared by both the equipment and crop partner-link forms — deletes purely
+// by id, relying on RLS (not which FK is set) for tenant scoping, so it
+// doesn't need to know which kind of link it's deleting.
 export async function deletePartnerLinkAction(id: string): Promise<void> {
   const { tenantId } = await requireTenantAdmin();
   await withTenant(tenantId, (tx) => tx.delete(partnerLinks).where(eq(partnerLinks.id, id)));
   revalidatePath("/admin/equipment");
+  revalidatePath("/admin/crops");
 }
 
 // --- Photo report queue -----------------------------------------------------

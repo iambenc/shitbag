@@ -19,7 +19,7 @@ export default async function Home() {
       </p>
       <Link
         href={session?.user ? "/dashboard" : "/signup"}
-        className="rounded-full bg-(--brand-primary) px-6 py-3 font-medium text-white hover:brightness-90 active:scale-95 transition"
+        className="rounded-full bg-(--brand-primary) px-6 py-3 font-medium text-white shadow-button hover:brightness-90 active:scale-95 transition"
       >
         {session?.user ? "Go to your dashboard" : "Get started"}
       </Link>

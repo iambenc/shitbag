@@ -42,7 +42,7 @@ export default async function PlantHealthPage() {
           </p>
           <Link
             href="/upgrade"
-            className="mt-4 inline-block rounded-full bg-(--brand-primary) px-6 py-2 text-sm text-white hover:brightness-90 active:scale-95 transition"
+            className="mt-4 inline-block rounded-full bg-(--brand-primary) px-6 py-2 text-sm text-white shadow-button hover:brightness-90 active:scale-95 transition"
           >
             View membership
           </Link>

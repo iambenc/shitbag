@@ -36,11 +36,14 @@ export default function LoginPage() {
             className="rounded-md border border-black/15 px-3 py-2"
           />
         </label>
+        <Link href="/forgot-password" className="self-start text-sm text-(--brand-primary) underline">
+          Forgot password?
+        </Link>
         {state.error && <p className="text-sm text-red-700">{state.error}</p>}
         <button
           type="submit"
           disabled={pending}
-          className="rounded-full bg-(--brand-primary) px-6 py-2 text-white hover:brightness-90 active:scale-95 transition disabled:opacity-60"
+          className="rounded-full bg-(--brand-primary) px-6 py-2 text-white shadow-button hover:brightness-90 active:scale-95 transition disabled:opacity-60"
         >
           {pending ? "Logging in…" : "Log in"}
         </button>

@@ -1,7 +1,7 @@
 "use server";
 
 import { z } from "zod";
-import { eq, and } from "drizzle-orm";
+import { eq, and, inArray } from "drizzle-orm";
 import { withTenant } from "@/lib/tenant/withTenant";
 import { shoppingListItems } from "@/db/schema";
 import { requireSessionAndTenant } from "@/lib/actions/shared";
@@ -71,21 +71,27 @@ export async function addShoppingItemAction(
   };
 }
 
-export async function toggleShoppingItemAction(itemId: string, purchased: boolean): Promise<void> {
+// Takes every id in a combined-display group (see ShoppingListView's
+// groupItems()) so checking off one merged "order" checks off every
+// underlying row it represents, not just the first — same
+// array-of-ids-in-one-scoped-update shape as rejectRecommendationAction.
+export async function toggleShoppingItemAction(itemIds: string[], purchased: boolean): Promise<void> {
+  if (itemIds.length === 0) return;
   const { userId, tenantId } = await requireSessionAndTenant();
   await withTenant(tenantId, async (tx) => {
     await tx
       .update(shoppingListItems)
       .set({ status: purchased ? "purchased" : "pending" })
-      .where(and(eq(shoppingListItems.id, itemId), eq(shoppingListItems.userId, userId)));
+      .where(and(inArray(shoppingListItems.id, itemIds), eq(shoppingListItems.userId, userId)));
   });
 }
 
-export async function deleteShoppingItemAction(itemId: string): Promise<void> {
+export async function deleteShoppingItemAction(itemIds: string[]): Promise<void> {
+  if (itemIds.length === 0) return;
   const { userId, tenantId } = await requireSessionAndTenant();
   await withTenant(tenantId, async (tx) => {
     await tx
       .delete(shoppingListItems)
-      .where(and(eq(shoppingListItems.id, itemId), eq(shoppingListItems.userId, userId)));
+      .where(and(inArray(shoppingListItems.id, itemIds), eq(shoppingListItems.userId, userId)));
   });
 }

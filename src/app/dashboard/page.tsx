@@ -11,24 +11,28 @@ import { getSubscription, isPaidTier } from "@/lib/billing/subscription";
 import { severityLabels, severityBadgeClasses } from "@/lib/plantHealth/labels";
 import { UpgradeBanner } from "@/components/UpgradeBanner";
 import { CalendarView } from "@/app/calendar/CalendarView";
-import { ThisWeekTasks } from "./ThisWeekTasks";
 import { getWeeklyForecast } from "@/lib/weather";
 import { weatherCodeLabel, weatherCodeIcon } from "@/lib/weather/labels";
 import { EquipmentIcon } from "@/components/icons";
 import { FadeIn } from "@/components/FadeIn";
-
-function pad(n: number) {
-  return n.toString().padStart(2, "0");
-}
-function isoDate(d: Date) {
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
-}
+import { FEATURE_FLAGS } from "@/lib/featureFlags";
+import { groupShoppingItems } from "@/lib/shopping/grouping";
 
 const RESOURCE_LINKS = [
   {
     href: "/grow-plan",
     title: "AI Grow Plan",
     description: "A plan tailored to your plot, seeds, and experience — membership feature.",
+  },
+  {
+    href: "/shopping-list",
+    title: "Shopping list",
+    description: "See everything you need to pick up.",
+  },
+  {
+    href: "/plant-health",
+    title: "Plant health",
+    description: "Upload a photo of a struggling plant for an AI diagnosis — membership feature.",
   },
   {
     href: "/favourites",
@@ -46,6 +50,16 @@ const RESOURCE_LINKS = [
     description: "Log what you've picked.",
   },
 ];
+
+// Feature-flagged, not part of the permanent list above — appended only
+// while FEATURE_FLAGS.moneySavedReport is on. The route itself also 404s
+// defensively (see src/app/savings/page.tsx) in case someone reaches it by
+// a guessed URL while this is off.
+const SAVINGS_RESOURCE_LINK = {
+  href: "/savings",
+  title: "Savings report",
+  description: "See how much you've saved growing your own — membership feature.",
+};
 
 function shoppingItemLabel(item: {
   cropName: string | null;
@@ -72,12 +86,6 @@ export default async function DashboardPage() {
   const tenant = await getCurrentTenant();
   const profile = await getUserProfile(session.user.id, tenant.id);
   if (!profile?.onboardingCompletedAt) redirect("/onboarding/location");
-
-  const today = new Date();
-  const weekAhead = new Date(today);
-  weekAhead.setDate(weekAhead.getDate() + 6);
-  const todayStr = isoDate(today);
-  const weekAheadStr = isoDate(weekAhead);
 
   // Free/no-key API, so shown to every user regardless of tier — unlike the
   // AI-powered features, there's no cost to gate. Runs alongside the DB
@@ -119,8 +127,26 @@ export default async function DashboardPage() {
     }),
     forecastPromise,
   ]);
-  const weekTasks = allTasks.filter((t) => t.dueDate >= todayStr && t.dueDate <= weekAheadStr);
   const paid = isPaidTier(await getSubscription(session.user.id, tenant.id));
+
+  // Same combining behavior as the full /shopping-list page — see
+  // src/lib/shopping/grouping.ts. Grouped from the already-limit(6)'d raw
+  // rows, so a preview with duplicates may show fewer than 6 lines; that's
+  // fine (arguably more correct) for a glance-only widget, not worth
+  // fetching extra rows just to guarantee a fixed count post-grouping.
+  const shoppingItemGroups = groupShoppingItems(
+    shoppingItems.map((r) => ({
+      id: r.item.id,
+      cropId: r.item.cropId,
+      cropName: r.crop?.name ?? null,
+      cropEmoji: r.crop?.emoji ?? null,
+      equipmentTypeId: r.item.equipmentTypeId,
+      equipmentTypeName: r.equipmentType?.name ?? null,
+      freeText: r.item.freeText,
+      quantityLabel: r.item.quantityLabel,
+      status: r.item.status,
+    })),
+  );
 
   return (
     <div className="mx-auto max-w-5xl px-6 py-16">
@@ -173,13 +199,20 @@ export default async function DashboardPage() {
 
           <FadeIn index={1}>
           <div className="rounded-lg border border-black/10 border-t-4 border-t-(--brand-secondary) bg-white p-6 shadow-card">
-            <p className="font-display text-lg font-semibold">This week</p>
+            <div className="flex items-center justify-between">
+              <p className="font-display text-lg font-semibold">Calendar</p>
+              <Link href="/calendar" className="text-sm text-(--brand-primary) underline">
+                Open full calendar →
+              </Link>
+            </div>
             <div className="mt-3">
-              <ThisWeekTasks
-                tasks={weekTasks.map((t) => ({
+              <CalendarView
+                initialTasks={allTasks.map((t) => ({
                   id: t.id,
                   title: t.title,
+                  notes: t.notes,
                   dueDate: t.dueDate,
+                  hardDeadlineDate: t.hardDeadlineDate,
                   status: t.status,
                   source: t.source,
                   isIndoor: t.isIndoor,
@@ -199,16 +232,19 @@ export default async function DashboardPage() {
               </Link>
             </div>
             <div className="mt-3">
-              {shoppingItems.length === 0 ? (
+              {shoppingItemGroups.length === 0 ? (
                 <p className="text-sm text-(--text-muted)">Nothing pending — you&rsquo;re all stocked up.</p>
               ) : (
                 <ul className="flex flex-col gap-1 text-sm">
-                  {shoppingItems.map((r) => (
-                    <li key={r.item.id} className="flex items-center justify-between gap-2">
-                      <span>{shoppingItemLabel({ cropName: r.crop?.name ?? null, cropEmoji: r.crop?.emoji ?? null, equipmentTypeName: r.equipmentType?.name ?? null, freeText: r.item.freeText })}</span>
-                      <span className="text-(--text-muted)">{r.item.quantityLabel}</span>
-                    </li>
-                  ))}
+                  {shoppingItemGroups.map((group) => {
+                    const item = group.items[0];
+                    return (
+                      <li key={group.key} className="flex items-center justify-between gap-2">
+                        <span>{shoppingItemLabel({ cropName: item.cropName, cropEmoji: item.cropEmoji, equipmentTypeName: item.equipmentTypeName, freeText: item.freeText })}</span>
+                        <span className="text-(--text-muted)">{group.quantitySummary}</span>
+                      </li>
+                    );
+                  })}
                 </ul>
               )}
             </div>
@@ -252,32 +288,6 @@ export default async function DashboardPage() {
 
           <FadeIn index={4}>
           <div className="rounded-lg border border-black/10 bg-white p-6 shadow-card">
-            <div className="flex items-center justify-between">
-              <p className="font-display text-lg font-semibold">Calendar</p>
-              <Link href="/calendar" className="text-sm text-(--brand-primary) underline">
-                Open full calendar →
-              </Link>
-            </div>
-            <div className="mt-3">
-              <CalendarView
-                initialTasks={allTasks.map((t) => ({
-                  id: t.id,
-                  title: t.title,
-                  notes: t.notes,
-                  dueDate: t.dueDate,
-                  hardDeadlineDate: t.hardDeadlineDate,
-                  status: t.status,
-                  source: t.source,
-                  isIndoor: t.isIndoor,
-                  successionSeriesId: t.successionSeriesId,
-                }))}
-              />
-            </div>
-          </div>
-          </FadeIn>
-
-          <FadeIn index={5}>
-          <div className="rounded-lg border border-black/10 bg-white p-6 shadow-card">
             <p className="font-display text-lg font-semibold">Your garden profile is set up.</p>
             <ul className="mt-3 flex flex-col gap-1 text-sm text-(--text-muted)">
               <li>Plot: {profile.plotSize ? plotSizeLabels[profile.plotSize] : "—"}</li>
@@ -294,8 +304,8 @@ export default async function DashboardPage() {
         </div>
 
         <div className="flex flex-col gap-3">
-          {RESOURCE_LINKS.map((link, i) => (
-            <FadeIn key={link.href} index={i + 6}>
+          {[...RESOURCE_LINKS, ...(FEATURE_FLAGS.moneySavedReport ? [SAVINGS_RESOURCE_LINK] : [])].map((link, i) => (
+            <FadeIn key={link.href} index={i + 5}>
               <Link
                 href={link.href}
                 className="flex items-center justify-between rounded-lg border border-black/10 bg-white p-4 shadow-card hover:border-(--brand-primary)/40 hover:-translate-y-0.5 hover:shadow-lg transition-all duration-200"
