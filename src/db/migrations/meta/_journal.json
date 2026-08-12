@@ -190,6 +190,27 @@
       "when": 1786483914508,
       "tag": "0026_wooden_mister_sinister",
       "breakpoints": true
+    },
+    {
+      "idx": 27,
+      "version": "7",
+      "when": 1786520454132,
+      "tag": "0027_sparkling_morph",
+      "breakpoints": true
+    },
+    {
+      "idx": 28,
+      "version": "7",
+      "when": 1786522618240,
+      "tag": "0028_shocking_wilson_fisk",
+      "breakpoints": true
+    },
+    {
+      "idx": 29,
+      "version": "7",
+      "when": 1786526009969,
+      "tag": "0029_gigantic_dazzler",
+      "breakpoints": true
     }
   ]
 }

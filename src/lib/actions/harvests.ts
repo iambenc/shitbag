@@ -2,12 +2,17 @@
 
 import { z } from "zod";
 import { eq, and } from "drizzle-orm";
+import { db } from "@/db/client";
 import { withTenant } from "@/lib/tenant/withTenant";
-import { harvestLog } from "@/db/schema";
+import { harvestLog, cropVarieties } from "@/db/schema";
 import { requireSessionAndTenant } from "@/lib/actions/shared";
 
 const addHarvestSchema = z.object({
   cropId: z.string().uuid(),
+  // Optional, picked from a dependent dropdown (see HarvestsView.tsx) — user-
+  // selected only, never AI-resolved here, unlike /seeds' free-text variety
+  // field.
+  varietyId: z.string().uuid().optional(),
   quantity: z.coerce.number().positive().max(100000),
   unit: z.string().trim().min(1).max(30),
   harvestedAt: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "Pick a date"),
@@ -17,6 +22,7 @@ const addHarvestSchema = z.object({
 export type CreatedHarvest = {
   id: string;
   cropId: string;
+  varietyId: string | null;
   quantity: number;
   unit: string;
   harvestedAt: string;
@@ -31,6 +37,7 @@ export async function addHarvestAction(
 ): Promise<AddHarvestState> {
   const parsed = addHarvestSchema.safeParse({
     cropId: formData.get("cropId"),
+    varietyId: formData.get("varietyId") || undefined,
     quantity: formData.get("quantity"),
     unit: formData.get("unit"),
     harvestedAt: formData.get("harvestedAt"),
@@ -38,6 +45,20 @@ export async function addHarvestAction(
   });
   if (!parsed.success) {
     return { error: parsed.error.issues[0]?.message ?? "Check the details and try again." };
+  }
+
+  // Confirm the submitted variety actually belongs to the submitted crop —
+  // a mismatched pair (e.g. a stale dropdown after switching crops) would
+  // otherwise silently attach an unrelated crop's variety. Silently dropped
+  // (not an error) if it doesn't match, same silent-drop-on-invalid-
+  // reference convention used throughout this app.
+  let varietyId: string | null = null;
+  if (parsed.data.varietyId) {
+    const [variety] = await db
+      .select({ id: cropVarieties.id })
+      .from(cropVarieties)
+      .where(and(eq(cropVarieties.id, parsed.data.varietyId), eq(cropVarieties.cropId, parsed.data.cropId)));
+    varietyId = variety?.id ?? null;
   }
 
   const { userId, tenantId } = await requireSessionAndTenant();
@@ -48,6 +69,7 @@ export async function addHarvestAction(
         tenantId,
         userId,
         cropId: parsed.data.cropId,
+        varietyId,
         quantity: parsed.data.quantity,
         unit: parsed.data.unit,
         harvestedAt: parsed.data.harvestedAt,
@@ -61,6 +83,7 @@ export async function addHarvestAction(
     harvest: {
       id: harvest.id,
       cropId: harvest.cropId,
+      varietyId: harvest.varietyId,
       quantity: harvest.quantity,
       unit: harvest.unit,
       harvestedAt: harvest.harvestedAt,

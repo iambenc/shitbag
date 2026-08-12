@@ -14,12 +14,14 @@ import {
   userFavoriteCrops,
   harvestLog,
   crops,
+  cropVarieties,
   shoppingListItems,
   equipmentTypes,
   userEquipment,
 } from "@/db/schema";
 import { generateGrowPlan, type GrowPlannerInput } from "@/lib/ai/agents/growPlanner";
 import { getCropFacts } from "@/lib/ai/agents/cropFacts";
+import { getVarietyFacts, type ParentCropFacts } from "@/lib/ai/agents/varietyFacts";
 import { PURCHASABLE_GROWING_SPACE_SLUGS, SLUG_TO_GROWING_AREA_TYPE } from "@/lib/garden/equipmentMapping";
 
 function slugify(value: string): string {
@@ -88,6 +90,15 @@ export const generateGrowPlanFn = inngest.createFunction(
     const context = await step.run("gather-context", async () => {
       const allCrops = await db.select().from(crops);
       const cropById = new Map(allCrops.map((c) => [c.id, c]));
+      // Global, un-tenanted, same as crops itself.
+      const allVarieties = await db.select().from(cropVarieties);
+      const varietyById = new Map(allVarieties.map((v) => [v.id, v]));
+      const varietiesByCropId = new Map<string, typeof allVarieties>();
+      for (const v of allVarieties) {
+        const list = varietiesByCropId.get(v.cropId) ?? [];
+        list.push(v);
+        varietiesByCropId.set(v.cropId, list);
+      }
 
       return withTenant(tenantId, async (tx) => {
         const [profile, allAreas, ownedEquipment, seeds, favorites, harvests] = await Promise.all([
@@ -151,9 +162,14 @@ export const generateGrowPlanFn = inngest.createFunction(
             depthCm: a.depthCm,
           })),
           unplacedEquipment,
-          ownedSeedCropSlugs: seeds
-            .map((s) => cropById.get(s.cropId)?.slug)
-            .filter((s): s is string => Boolean(s)),
+          ownedSeeds: seeds
+            .map((s) => {
+              const cropSlug = cropById.get(s.cropId)?.slug;
+              if (!cropSlug) return null;
+              const varietySlug = s.varietyId ? (varietyById.get(s.varietyId)?.slug ?? null) : null;
+              return { cropSlug, varietySlug };
+            })
+            .filter((s): s is { cropSlug: string; varietySlug: string | null } => s !== null),
           favoriteCropSlugs: favorites
             .filter((f) => f.liked)
             .map((f) => cropById.get(f.cropId)?.slug)
@@ -185,6 +201,20 @@ export const generateGrowPlanFn = inngest.createFunction(
             supportsSuccessionSowing: c.supportsSuccessionSowing,
             estimatedRetailPricePerKgGbp: c.estimatedRetailPricePerKgGbp,
             feedingNotes: c.feedingNotes,
+            // Each override resolved to the parent crop's own value when
+            // null — done once here, not re-derived in the prompt template
+            // or the mock (see AvailableVariety's own comment).
+            varieties: (varietiesByCropId.get(c.id) ?? []).map((v) => ({
+              slug: v.slug,
+              name: v.name,
+              daysToHarvestMin: v.daysToHarvestMin ?? c.daysToHarvestMin,
+              daysToHarvestMax: v.daysToHarvestMax ?? c.daysToHarvestMax,
+              spacingCm: v.spacingCm ?? c.spacingCm,
+              growthHabit: v.growthHabit,
+              diseaseResistanceNotes: v.diseaseResistanceNotes,
+              characteristics: v.characteristics,
+              estimatedRetailPricePerKgGbp: v.estimatedRetailPricePerKgGbp ?? c.estimatedRetailPricePerKgGbp,
+            })),
           })),
           wantsUnusualCrop: wantsUnusualCrop ?? false,
         };
@@ -192,96 +222,210 @@ export const generateGrowPlanFn = inngest.createFunction(
         const cropIdBySlug: Record<string, string> = Object.fromEntries(
           allCrops.map((c) => [c.slug, c.id]),
         );
-        return { input, cropIdBySlug, availableGrowingAreaIds: availableAreas.map((a) => a.id) };
+        // Keyed `${cropSlug}|${varietySlug}` — seeds resolve-new-crops' own
+        // variety-resolution map for the "already-known variety" fast path,
+        // mirroring how cropIdBySlug seeds `merged` there for crops.
+        const varietyIdByCropSlugAndVarietySlug: Record<string, string> = {};
+        for (const c of allCrops) {
+          for (const v of varietiesByCropId.get(c.id) ?? []) {
+            varietyIdByCropSlugAndVarietySlug[`${c.slug}|${v.slug}`] = v.id;
+          }
+        }
+        return {
+          input,
+          cropIdBySlug,
+          varietyIdByCropSlugAndVarietySlug,
+          availableGrowingAreaIds: availableAreas.map((a) => a.id),
+        };
       });
     });
 
     try {
       const result = await step.run("call-agent", () => generateGrowPlan(tenantId, context.input));
 
-      // Crops the AI proposed that aren't in the catalog snapshot it was
-      // given. Live-checks the DB by slug before ever calling the facts
-      // agent — another tenant's run may have already backfilled the same
-      // crop since gather-context ran — and only then falls back to AI.
-      // Runs sequentially (not Promise.all) so a duplicate proposal within
-      // this same output self-dedupes on its second pass. Uses the plain
-      // unscoped `db` client throughout, same as gather-context's crops
-      // reads: this table has no tenant concept to scope by.
-      const resolvedCropIdBySlug = await step.run("resolve-new-crops", async () => {
-        const merged: Record<string, string> = { ...context.cropIdBySlug };
-        const candidates = result.output.recommendations.filter((r) => r.newCropName && !merged[r.cropSlug]);
-        if (candidates.length === 0) return merged;
+      // Crops (and now varieties) the AI proposed that aren't in the catalog
+      // snapshot it was given. Live-checks the DB by slug before ever
+      // calling the facts agent — another tenant's run may have already
+      // backfilled the same crop/variety since gather-context ran — and
+      // only then falls back to AI. Runs sequentially over every
+      // recommendation (not Promise.all, not just newCropName candidates —
+      // a recommendation can need variety resolution even when its crop is
+      // already in the catalog) so a duplicate proposal within this same
+      // output self-dedupes on its second pass, AND so a variety is only
+      // ever resolved after its own crop has a real, final cropId — a
+      // variety resolved for a crop that's ITSELF new in this same run
+      // needs that crop's just-created id, not a pre-resolution snapshot.
+      // Uses the plain unscoped `db` client throughout, same as
+      // gather-context's crops/cropVarieties reads: neither table has a
+      // tenant concept to scope by.
+      const resolved = await step.run("resolve-new-crops", async () => {
+        const cropIdBySlug: Record<string, string> = { ...context.cropIdBySlug };
+        // Keyed `${cropSlug}|${varietySlug}` (the AI's own proposed slugs,
+        // not the corrected ones) — mirrors cropIdBySlug's own keying.
+        const varietyIdByKey: Record<string, string> = { ...context.varietyIdByCropSlugAndVarietySlug };
 
-        const [{ maxSortOrder }] = await db
-          .select({ maxSortOrder: sql<number>`coalesce(max(${crops.sortOrder}), 0)` })
-          .from(crops);
-        let nextSortOrder = maxSortOrder + 1;
-
-        for (const r of candidates) {
-          if (merged[r.cropSlug]) continue;
-          const aiSlug = slugify(r.cropSlug);
-
-          const [existingByAiSlug] = await db.select({ id: crops.id }).from(crops).where(eq(crops.slug, aiSlug));
-          if (existingByAiSlug) {
-            merged[r.cropSlug] = existingByAiSlug.id;
-            continue;
+        let nextCropSortOrderCache: number | null = null;
+        async function nextCropSortOrder(): Promise<number> {
+          if (nextCropSortOrderCache === null) {
+            const [{ maxSortOrder }] = await db
+              .select({ maxSortOrder: sql<number>`coalesce(max(${crops.sortOrder}), 0)` })
+              .from(crops);
+            nextCropSortOrderCache = maxSortOrder + 1;
           }
-
-          const facts = await getCropFacts(tenantId, r.newCropName!);
-          // Store cropFacts's own corrected name/spelling, not whatever the
-          // planner itself proposed in newCropName — the planner is a large,
-          // multi-crop generation call, not a spelling authority, and this
-          // catalog is shared/reused by every future user (including the
-          // /seeds autocomplete, which reads crops.name directly) — see
-          // seeds.ts's addSeedAction for the identical pattern. Re-check for
-          // an existing row under the corrected slug too, not just the AI's
-          // original one: a differently-named proposal from an earlier run
-          // may have already resolved to the same canonical crop.
-          const correctedSlug = slugify(facts.output.name) || aiSlug;
-          const [existingByCorrectedSlug] = await db
-            .select({ id: crops.id })
-            .from(crops)
-            .where(eq(crops.slug, correctedSlug));
-          if (existingByCorrectedSlug) {
-            merged[r.cropSlug] = existingByCorrectedSlug.id;
-            continue;
-          }
-
-          await db
-            .insert(crops)
-            .values({
-              slug: correctedSlug,
-              name: facts.output.name,
-              category: facts.output.category,
-              emoji: facts.output.emoji,
-              spacingCm: facts.output.spacingCm,
-              soilDepthCm: facts.output.soilDepthCm,
-              sowIndoorFromMonth: facts.output.sowIndoorFromMonth,
-              sowIndoorToMonth: facts.output.sowIndoorToMonth,
-              sowOutdoorFromMonth: facts.output.sowOutdoorFromMonth,
-              sowOutdoorToMonth: facts.output.sowOutdoorToMonth,
-              daysToHarvestMin: facts.output.daysToHarvestMin,
-              daysToHarvestMax: facts.output.daysToHarvestMax,
-              supportsSuccessionSowing: facts.output.supportsSuccessionSowing,
-              estimatedRetailPricePerKgGbp: facts.output.estimatedRetailPricePerKgGbp,
-              feedingNotes: facts.output.feedingNotes,
-              sortOrder: nextSortOrder,
-              verified: false,
-              sourceProvider: facts.provider,
-              sourceModel: facts.model,
-            })
-            .onConflictDoNothing({ target: crops.slug });
-          nextSortOrder++;
-
-          const [row] = await db.select({ id: crops.id }).from(crops).where(eq(crops.slug, correctedSlug));
-          merged[r.cropSlug] = row.id;
+          return nextCropSortOrderCache++;
         }
-        return merged;
+
+        // Cached per crop id within this run — a fresh DB read either way
+        // (whether the crop was pre-existing or just created above), so
+        // variety resolution always has real parent-crop facts to give the
+        // AI as context, regardless of which path the crop took.
+        const parentFactsCache = new Map<string, ParentCropFacts>();
+        async function getParentFacts(cropId: string): Promise<ParentCropFacts> {
+          const cached = parentFactsCache.get(cropId);
+          if (cached) return cached;
+          const [row] = await db.select().from(crops).where(eq(crops.id, cropId));
+          const facts: ParentCropFacts = {
+            name: row.name,
+            category: row.category,
+            spacingCm: row.spacingCm,
+            daysToHarvestMin: row.daysToHarvestMin,
+            daysToHarvestMax: row.daysToHarvestMax,
+            estimatedRetailPricePerKgGbp: row.estimatedRetailPricePerKgGbp,
+          };
+          parentFactsCache.set(cropId, facts);
+          return facts;
+        }
+
+        for (const r of result.output.recommendations) {
+          if (r.newCropName && !cropIdBySlug[r.cropSlug]) {
+            const aiSlug = slugify(r.cropSlug);
+
+            const [existingByAiSlug] = await db.select({ id: crops.id }).from(crops).where(eq(crops.slug, aiSlug));
+            if (existingByAiSlug) {
+              cropIdBySlug[r.cropSlug] = existingByAiSlug.id;
+            } else {
+              const facts = await getCropFacts(tenantId, r.newCropName);
+              // Store cropFacts's own corrected name/spelling, not whatever
+              // the planner itself proposed in newCropName — the planner is
+              // a large, multi-crop generation call, not a spelling
+              // authority, and this catalog is shared/reused by every
+              // future user (including the /seeds autocomplete, which reads
+              // crops.name directly) — see seeds.ts's addSeedAction for the
+              // identical pattern. Re-check for an existing row under the
+              // corrected slug too, not just the AI's original one: a
+              // differently-named proposal from an earlier run may have
+              // already resolved to the same canonical crop.
+              const correctedSlug = slugify(facts.output.name) || aiSlug;
+              const [existingByCorrectedSlug] = await db
+                .select({ id: crops.id })
+                .from(crops)
+                .where(eq(crops.slug, correctedSlug));
+              if (existingByCorrectedSlug) {
+                cropIdBySlug[r.cropSlug] = existingByCorrectedSlug.id;
+              } else {
+                await db
+                  .insert(crops)
+                  .values({
+                    slug: correctedSlug,
+                    name: facts.output.name,
+                    category: facts.output.category,
+                    emoji: facts.output.emoji,
+                    spacingCm: facts.output.spacingCm,
+                    soilDepthCm: facts.output.soilDepthCm,
+                    sowIndoorFromMonth: facts.output.sowIndoorFromMonth,
+                    sowIndoorToMonth: facts.output.sowIndoorToMonth,
+                    sowOutdoorFromMonth: facts.output.sowOutdoorFromMonth,
+                    sowOutdoorToMonth: facts.output.sowOutdoorToMonth,
+                    daysToHarvestMin: facts.output.daysToHarvestMin,
+                    daysToHarvestMax: facts.output.daysToHarvestMax,
+                    supportsSuccessionSowing: facts.output.supportsSuccessionSowing,
+                    estimatedRetailPricePerKgGbp: facts.output.estimatedRetailPricePerKgGbp,
+                    feedingNotes: facts.output.feedingNotes,
+                    sortOrder: await nextCropSortOrder(),
+                    verified: false,
+                    sourceProvider: facts.provider,
+                    sourceModel: facts.model,
+                  })
+                  .onConflictDoNothing({ target: crops.slug });
+
+                const [row] = await db.select({ id: crops.id }).from(crops).where(eq(crops.slug, correctedSlug));
+                cropIdBySlug[r.cropSlug] = row.id;
+              }
+            }
+          }
+
+          // Variety resolution runs after the crop above, using its now-
+          // final cropId — a variety can't be resolved against a crop that
+          // doesn't exist yet. Silently skipped (same tolerance as every
+          // other invalid-reference case in this function) if the crop
+          // itself somehow failed to resolve.
+          if (r.varietySlug) {
+            const cropId = cropIdBySlug[r.cropSlug];
+            const varietyKey = `${r.cropSlug}|${r.varietySlug}`;
+            if (cropId && !varietyIdByKey[varietyKey]) {
+              const varietyAiSlug = slugify(r.varietySlug);
+              const [existingVarietyByAiSlug] = await db
+                .select({ id: cropVarieties.id })
+                .from(cropVarieties)
+                .where(and(eq(cropVarieties.cropId, cropId), eq(cropVarieties.slug, varietyAiSlug)));
+              if (existingVarietyByAiSlug) {
+                varietyIdByKey[varietyKey] = existingVarietyByAiSlug.id;
+              } else if (r.newVarietyName) {
+                const parentFacts = await getParentFacts(cropId);
+                const varietyFacts = await getVarietyFacts(tenantId, parentFacts.name, r.newVarietyName, parentFacts);
+                const correctedVarietySlug = slugify(varietyFacts.output.name) || varietyAiSlug;
+                const [existingVarietyByCorrectedSlug] = await db
+                  .select({ id: cropVarieties.id })
+                  .from(cropVarieties)
+                  .where(and(eq(cropVarieties.cropId, cropId), eq(cropVarieties.slug, correctedVarietySlug)));
+                if (existingVarietyByCorrectedSlug) {
+                  varietyIdByKey[varietyKey] = existingVarietyByCorrectedSlug.id;
+                } else {
+                  await db
+                    .insert(cropVarieties)
+                    .values({
+                      cropId,
+                      slug: correctedVarietySlug,
+                      name: varietyFacts.output.name,
+                      daysToHarvestMin: varietyFacts.output.daysToHarvestMin,
+                      daysToHarvestMax: varietyFacts.output.daysToHarvestMax,
+                      spacingCm: varietyFacts.output.spacingCm,
+                      growthHabit: varietyFacts.output.growthHabit,
+                      diseaseResistanceNotes: varietyFacts.output.diseaseResistanceNotes,
+                      characteristics: varietyFacts.output.characteristics,
+                      estimatedRetailPricePerKgGbp: varietyFacts.output.estimatedRetailPricePerKgGbp,
+                      verified: false,
+                      sourceProvider: varietyFacts.provider,
+                      sourceModel: varietyFacts.model,
+                    })
+                    .onConflictDoNothing({ target: [cropVarieties.cropId, cropVarieties.slug] });
+
+                  const [row] = await db
+                    .select({ id: cropVarieties.id })
+                    .from(cropVarieties)
+                    .where(and(eq(cropVarieties.cropId, cropId), eq(cropVarieties.slug, correctedVarietySlug)));
+                  varietyIdByKey[varietyKey] = row.id;
+                }
+              }
+            }
+          }
+        }
+
+        return { cropIdBySlug, varietyIdByKey };
       });
+      const resolvedCropIdBySlug = resolved.cropIdBySlug;
+      const resolvedVarietyIdByKey = resolved.varietyIdByKey;
 
       await step.run("persist-results", async () => {
         await withTenant(tenantId, async (tx) => {
           const cropIdBySlug = resolvedCropIdBySlug;
+          // null when the recommendation didn't pick a variety, or the pick
+          // didn't survive resolution (same silent-drop tolerance as an
+          // invalid crop reference) — never throws, a recommendation is
+          // still fully valid without a variety.
+          function varietyIdFor(r: (typeof result.output.recommendations)[number]): string | null {
+            return r.varietySlug ? (resolvedVarietyIdByKey[`${r.cropSlug}|${r.varietySlug}`] ?? null) : null;
+          }
 
           // A recommendation needs both a real crop AND at least one real,
           // un-claimed growing area to survive — same silent-drop-on-
@@ -311,6 +455,11 @@ export const generateGrowPlanFn = inngest.createFunction(
           // specific recommendation (cropSlug alone is ambiguous whenever the
           // same crop appears in two recommendations, e.g. two lettuce beds).
           const recommendationIdByOriginalIndex = new Map<number, string>();
+          // Propagated down to each recommendation's own tasks below —
+          // tasks never carry their own AI-supplied variety, they inherit
+          // the one their owning recommendation resolved to, same as cropId
+          // already works.
+          const varietyIdByRecommendationId = new Map<string, string | null>();
           if (validRecommendations.length > 0) {
             const insertedRecommendations = await tx
               .insert(planRecommendations)
@@ -319,6 +468,7 @@ export const generateGrowPlanFn = inngest.createFunction(
                   tenantId,
                   growPlanId,
                   cropId: cropIdBySlug[r.cropSlug],
+                  varietyId: varietyIdFor(r),
                   reasoning: r.reasoning,
                   requiresPurchase: r.requiresPurchase,
                   estimatedHarvestStart: r.estimatedHarvestStart,
@@ -327,8 +477,9 @@ export const generateGrowPlanFn = inngest.createFunction(
                 })),
               )
               .returning();
-            validRecommendations.forEach(({ originalIndex }, i) => {
+            validRecommendations.forEach(({ r, originalIndex }, i) => {
               recommendationIdByOriginalIndex.set(originalIndex, insertedRecommendations[i].id);
+              varietyIdByRecommendationId.set(insertedRecommendations[i].id, varietyIdFor(r));
             });
 
             const stageRows = validRecommendations.flatMap(({ stages }, i) =>
@@ -400,6 +551,9 @@ export const generateGrowPlanFn = inngest.createFunction(
                   // broke reject cleanup for any never-yet-regenerated
                   // recommendation's tasks.
                   planRecommendationId,
+                  // Inherited from the owning recommendation's own resolved
+                  // variety — never asked of the AI per-task.
+                  varietyId: planRecommendationId ? (varietyIdByRecommendationId.get(planRecommendationId) ?? null) : null,
                   successionSeriesId,
                   estimatedSeedsUsed: t.estimatedSeedsUsed,
                   // Completing this task releases the preceding stage's area

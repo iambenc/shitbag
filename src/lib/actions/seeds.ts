@@ -4,11 +4,14 @@ import { z } from "zod";
 import { eq, and, gte, count, sql } from "drizzle-orm";
 import { db } from "@/db/client";
 import { withTenant } from "@/lib/tenant/withTenant";
-import { seedInventory, crops } from "@/db/schema";
+import { seedInventory, crops, cropVarieties, seedPacketScans } from "@/db/schema";
 import { requireSessionAndTenant } from "@/lib/actions/shared";
 import { getCropFacts } from "@/lib/ai/agents/cropFacts";
+import { getVarietyFacts, type ParentCropFacts } from "@/lib/ai/agents/varietyFacts";
+import { scanSeedPacket } from "@/lib/ai/agents/seedPacketScanner";
+import { ALLOWED_IMAGE_TYPES, MAX_PHOTO_BYTES } from "@/lib/storage";
 import { startOfTodayLocal } from "@/lib/dates";
-import { MAX_DAILY_SEED_ADDITIONS } from "@/lib/ai/limits";
+import { MAX_DAILY_SEED_ADDITIONS, MAX_DAILY_SEED_PACKET_SCANS } from "@/lib/ai/limits";
 
 // Mirrors generateGrowPlan.ts's own slugify — not shared, deliberately: that
 // function's resolve-new-crops step is Inngest-wrapped, batches several
@@ -27,8 +30,10 @@ function slugify(value: string): string {
 
 // Counts only rows this action itself created (source: "purchased") — the
 // cap exists to bound this action's own worst-case AI cost (an unrecognized
-// crop name triggers a real cropFacts call), not to limit the separate,
-// already-bounded onboarding seeds step.
+// crop name triggers a real cropFacts call, and an unrecognized variety name
+// triggers a second, separate getVarietyFacts call — up to two AI calls per
+// single add), not to limit the separate, already-bounded onboarding seeds
+// step.
 export async function getSeedAdditionsToday(tenantId: string, userId: string): Promise<number> {
   return withTenant(tenantId, async (tx) => {
     const [row] = await tx
@@ -45,12 +50,92 @@ export async function getSeedAdditionsToday(tenantId: string, userId: string): P
   });
 }
 
+// Counts every scan attempt regardless of outcome — the vision call is the
+// cost driver, not whether the result was useful, same "count the attempt,
+// not the success" reasoning as getPlantDiagnosesToday.
+export async function getSeedPacketScansToday(tenantId: string, userId: string): Promise<number> {
+  return withTenant(tenantId, async (tx) => {
+    const [row] = await tx
+      .select({ count: count() })
+      .from(seedPacketScans)
+      .where(and(eq(seedPacketScans.userId, userId), gte(seedPacketScans.createdAt, startOfTodayLocal())));
+    return row.count;
+  });
+}
+
+export type SeedPacketScanClientResult = {
+  cropName: string;
+  varietyName: string | null;
+  seedCount: number | null;
+  seedCountIsEstimate: boolean;
+  notes: string | null;
+};
+
+export type ScanSeedPacketState = { error?: string; scan?: SeedPacketScanClientResult };
+
+// One-shot autofill, not a persisted proposal: the extracted fields are
+// returned straight to the client to pre-fill /seeds' add-seed form
+// (SeedsView.tsx) — the user reviews/edits every field there before
+// addSeedAction (a completely separate call) ever writes anything. The
+// photo itself is never stored — converted to a Buffer, sent to the vision
+// call, then discarded; only a bare counter row (seedPacketScans) persists,
+// purely to back the daily cap below.
+export async function scanSeedPacketAction(formData: FormData): Promise<ScanSeedPacketState> {
+  const { userId, tenantId } = await requireSessionAndTenant();
+
+  const file = formData.get("photo");
+  if (!(file instanceof File) || file.size === 0) {
+    return { error: "Choose a photo of the seed packet first." };
+  }
+  if (file.size > MAX_PHOTO_BYTES) {
+    return { error: "That photo is too large (max 8MB)." };
+  }
+  const extension = ALLOWED_IMAGE_TYPES[file.type];
+  if (!extension) {
+    return { error: "Please upload a JPEG, PNG, WebP, or GIF image." };
+  }
+
+  const scansToday = await getSeedPacketScansToday(tenantId, userId);
+  if (scansToday >= MAX_DAILY_SEED_PACKET_SCANS) {
+    return { error: `You've scanned ${MAX_DAILY_SEED_PACKET_SCANS} packets today — come back tomorrow, or add this one by typing it in.` };
+  }
+
+  const buffer = Buffer.from(await file.arrayBuffer());
+  const result = await scanSeedPacket(tenantId, { imageBuffer: buffer, contentType: file.type });
+
+  await withTenant(tenantId, async (tx) => {
+    await tx.insert(seedPacketScans).values({ tenantId, userId });
+  });
+
+  // Confirmed live (not just theorized): given a photo with no seed packet
+  // in it at all, the model correctly declines to invent a crop rather than
+  // hallucinating one — cropName comes back null with an explanation in
+  // notes. Surface that as a normal error rather than passing a missing
+  // crop name through to the form.
+  if (!result.output.cropName) {
+    return { error: result.output.notes ?? "Couldn't find a seed packet in that photo — try a clearer picture, or add it manually." };
+  }
+
+  return {
+    scan: {
+      cropName: result.output.cropName,
+      varietyName: result.output.varietyName,
+      seedCount: result.output.seedCount,
+      seedCountIsEstimate: result.output.seedCountIsEstimate,
+      notes: result.output.notes,
+    },
+  };
+}
+
 const addSeedSchema = z.object({
   cropName: z.string().trim().min(1, "Enter what you bought").max(100),
   // How many individual seeds, not packets/grams — this is what the grow
   // planner's estimatedSeedsUsed deduction (toggleTaskCompleteAction) is
   // denominated in, so the two need to share a unit.
   seedCount: z.coerce.number().int().positive("Enter how many seeds").max(100000),
+  // Optional — a user may not know/care which cultivar they bought. Empty
+  // string (the common case, field left blank) treated the same as absent.
+  varietyName: z.string().trim().max(100).optional(),
 });
 
 export type CreatedSeed = {
@@ -58,9 +143,12 @@ export type CreatedSeed = {
   cropId: string;
   cropName: string;
   cropEmoji: string;
+  varietyId: string | null;
+  varietyName: string | null;
   quantityLabel: string;
   seedCount: number;
   cropIsNew: boolean;
+  varietyIsNew: boolean;
 };
 
 export type AddSeedState = { error?: string; seed?: CreatedSeed };
@@ -69,6 +157,7 @@ export async function addSeedAction(_prevState: AddSeedState, formData: FormData
   const parsed = addSeedSchema.safeParse({
     cropName: formData.get("cropName"),
     seedCount: formData.get("seedCount"),
+    varietyName: formData.get("varietyName") || undefined,
   });
   if (!parsed.success) {
     return { error: parsed.error.issues[0]?.message ?? "Check the details and try again." };
@@ -139,6 +228,71 @@ export async function addSeedAction(_prevState: AddSeedState, formData: FormData
     }
   }
 
+  // Variety resolution runs after the crop above, using its now-final id —
+  // a variety can't be resolved against a crop that doesn't exist yet. Same
+  // typed-slug-fast-path / AI-call / corrected-slug-dedupe shape as the crop
+  // resolution just above, scoped additionally by cropId (crop_varieties'
+  // unique constraint is per-crop, not global — see its own schema comment).
+  let varietyId: string | null = null;
+  let varietyName: string | null = null;
+  let varietyIsNew = false;
+  const typedVarietyName = parsed.data.varietyName;
+  if (typedVarietyName) {
+    const typedVarietySlug = slugify(typedVarietyName);
+    if (typedVarietySlug) {
+      let [variety] = await db
+        .select()
+        .from(cropVarieties)
+        .where(and(eq(cropVarieties.cropId, crop.id), eq(cropVarieties.slug, typedVarietySlug)));
+
+      if (!variety) {
+        const parentFacts: ParentCropFacts = {
+          name: crop.name,
+          category: crop.category,
+          spacingCm: crop.spacingCm,
+          daysToHarvestMin: crop.daysToHarvestMin,
+          daysToHarvestMax: crop.daysToHarvestMax,
+          estimatedRetailPricePerKgGbp: crop.estimatedRetailPricePerKgGbp,
+        };
+        const varietyFacts = await getVarietyFacts(tenantId, crop.name, typedVarietyName, parentFacts);
+        const correctedVarietySlug = slugify(varietyFacts.output.name) || typedVarietySlug;
+        [variety] = await db
+          .select()
+          .from(cropVarieties)
+          .where(and(eq(cropVarieties.cropId, crop.id), eq(cropVarieties.slug, correctedVarietySlug)));
+
+        if (!variety) {
+          varietyIsNew = true;
+          await db
+            .insert(cropVarieties)
+            .values({
+              cropId: crop.id,
+              slug: correctedVarietySlug,
+              name: varietyFacts.output.name,
+              daysToHarvestMin: varietyFacts.output.daysToHarvestMin,
+              daysToHarvestMax: varietyFacts.output.daysToHarvestMax,
+              spacingCm: varietyFacts.output.spacingCm,
+              growthHabit: varietyFacts.output.growthHabit,
+              diseaseResistanceNotes: varietyFacts.output.diseaseResistanceNotes,
+              characteristics: varietyFacts.output.characteristics,
+              estimatedRetailPricePerKgGbp: varietyFacts.output.estimatedRetailPricePerKgGbp,
+              verified: false,
+              sourceProvider: varietyFacts.provider,
+              sourceModel: varietyFacts.model,
+            })
+            .onConflictDoNothing({ target: [cropVarieties.cropId, cropVarieties.slug] });
+
+          [variety] = await db
+            .select()
+            .from(cropVarieties)
+            .where(and(eq(cropVarieties.cropId, crop.id), eq(cropVarieties.slug, correctedVarietySlug)));
+        }
+      }
+      varietyId = variety.id;
+      varietyName = variety.name;
+    }
+  }
+
   const quantityLabel = `${parsed.data.seedCount} seed${parsed.data.seedCount === 1 ? "" : "s"}`;
   const seed = await withTenant(tenantId, async (tx) => {
     const [row] = await tx
@@ -147,6 +301,7 @@ export async function addSeedAction(_prevState: AddSeedState, formData: FormData
         tenantId,
         userId,
         cropId: crop.id,
+        varietyId,
         quantityLabel,
         seedCount: parsed.data.seedCount,
         source: "purchased",
@@ -161,9 +316,12 @@ export async function addSeedAction(_prevState: AddSeedState, formData: FormData
       cropId: crop.id,
       cropName: crop.name,
       cropEmoji: crop.emoji,
+      varietyId,
+      varietyName,
       quantityLabel: seed.quantityLabel,
       seedCount: parsed.data.seedCount,
       cropIsNew,
+      varietyIsNew,
     },
   };
 }

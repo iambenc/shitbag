@@ -27,6 +27,10 @@ export const DEFAULT_MODEL_BY_AGENT: Record<AgentName, string> = {
   crop_facts: "gemini-3.5-flash-lite",
   growing_area_estimator: "gemini-3.5-flash",
   weather_advisor: "gemini-3.5-flash",
+  // Reading text off a photographed seed packet is a vision task, same tier
+  // requirement as growing_area_estimator/plant_health — the lite tier is
+  // reserved for text-only lookups like crop_facts.
+  seed_packet_scanner: "gemini-3.5-flash",
 };
 
 /**

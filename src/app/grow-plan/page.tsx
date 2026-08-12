@@ -4,7 +4,7 @@ import { eq, and, desc, inArray } from "drizzle-orm";
 import { auth } from "@/lib/auth";
 import { getCurrentTenant } from "@/lib/tenant/resolve";
 import { withTenant } from "@/lib/tenant/withTenant";
-import { growPlans, planRecommendations, planRecommendationStages, crops, growingAreas } from "@/db/schema";
+import { growPlans, planRecommendations, planRecommendationStages, crops, cropVarieties, growingAreas } from "@/db/schema";
 import { getUserProfile } from "@/lib/onboarding/profile";
 import { getSubscription, isPaidTier } from "@/lib/billing/subscription";
 import { getGrowPlanGenerationsToday } from "@/lib/actions/growPlan";
@@ -42,6 +42,7 @@ type RecommendationGroup = {
   status: PlanRecommendationStatus;
   regenerationCount: number;
   crop: { emoji: string; name: string; verified: boolean; estimatedRetailPricePerKgGbp: number };
+  variety: { id: string; name: string } | null;
   area: Area | null;
   nextArea: Area | null;
   count: number;
@@ -70,13 +71,22 @@ type RecommendationGroup = {
 // must not merge, since the displayed "N retries left" and the reject
 // action's per-row retry-cap guard both assume every row in a group shares
 // one count; without this a reject on such a merged card could silently
-// half-succeed. Harvest window widens to span every instance in the group
-// (the AI staggers these on purpose to avoid a glut, so collapsing to one
-// instance's dates would hide that spread).
+// half-succeed. variety.id is part of the key for the identical reason: two
+// sibling recommendations of the same crop but different cultivars (e.g. a
+// Moneymaker tomato pot and a Gardener's Delight tomato pot, same size,
+// same status) are genuinely different picks and must never merge into one
+// card — a reject on a merged card would discard both distinct variety
+// choices and replace them with a single AI-picked one (see
+// regenerateRecommendation.ts, which applies one replacement crop/variety
+// uniformly across every instance in a rejected group). Harvest window
+// widens to span every instance in the group (the AI staggers these on
+// purpose to avoid a glut, so collapsing to one instance's dates would hide
+// that spread).
 function groupRecommendations(
   rows: {
     recommendation: { id: string; status: PlanRecommendationStatus; regenerationCount: number; reasoning: string; requiresPurchase: boolean; estimatedHarvestStart: string | null; estimatedHarvestEnd: string | null; isUnusualSuggestion: boolean };
     crop: { id: string; emoji: string; name: string; verified: boolean; estimatedRetailPricePerKgGbp: number };
+    variety: { id: string; name: string } | null;
     area: Area | null;
     nextArea: Area | null;
   }[],
@@ -84,14 +94,14 @@ function groupRecommendations(
   const groups: RecommendationGroup[] = [];
   const byKey = new Map<string, RecommendationGroup>();
 
-  for (const { recommendation, crop, area, nextArea } of rows) {
+  for (const { recommendation, crop, variety, area, nextArea } of rows) {
     const sizeKey = area ? (areaSizeLabel(area) ?? "unsized") : "none";
     // isUnusualSuggestion is part of the key for the same reason status/
     // regenerationCount are — an "unusual" pick is deliberately never the
     // same crop as anything else in the plan in practice, so this should
     // never actually fire, but it guards the same silent-merge risk if it
     // ever somehow coincided with an ordinary recommendation of that crop.
-    const key = `${crop.id}|${area?.type ?? "none"}|${sizeKey}|${recommendation.status}|${recommendation.regenerationCount}|${recommendation.isUnusualSuggestion}`;
+    const key = `${crop.id}|${variety?.id ?? "none"}|${area?.type ?? "none"}|${sizeKey}|${recommendation.status}|${recommendation.regenerationCount}|${recommendation.isUnusualSuggestion}`;
     const existing = byKey.get(key);
     if (existing) {
       existing.count += 1;
@@ -116,6 +126,7 @@ function groupRecommendations(
       status: recommendation.status,
       regenerationCount: recommendation.regenerationCount,
       crop,
+      variety,
       area,
       nextArea,
       count: 1,
@@ -132,12 +143,13 @@ function groupRecommendations(
 }
 
 function groupHeading(group: RecommendationGroup): string {
-  if (group.count === 1) return group.crop.name;
-  if (!group.area) return `${group.count}× ${group.crop.name}`;
+  const cropLabel = group.variety ? `${group.crop.name} (${group.variety.name})` : group.crop.name;
+  if (group.count === 1) return cropLabel;
+  if (!group.area) return `${group.count}× ${cropLabel}`;
   const size = areaSizeLabel(group.area);
   const typeLabel = growingAreaTypeLabels[group.area.type].toLowerCase();
   const sizedType = size ? `${size} ${typeLabel}s` : `${typeLabel}s`;
-  return `${group.count} x ${sizedType} of ${group.crop.name}`;
+  return `${group.count} x ${sizedType} of ${cropLabel}`;
 }
 
 function nextStageHint(nextArea: Area | null): string | null {
@@ -209,9 +221,10 @@ export default async function GrowPlanPage() {
   const groupedRecommendations = latestPlan?.status === "complete"
     ? await withTenant(tenant.id, async (tx) => {
         const recs = await tx
-          .select({ recommendation: planRecommendations, crop: crops })
+          .select({ recommendation: planRecommendations, crop: crops, variety: cropVarieties })
           .from(planRecommendations)
           .innerJoin(crops, eq(planRecommendations.cropId, crops.id))
+          .leftJoin(cropVarieties, eq(planRecommendations.varietyId, cropVarieties.id))
           .where(
             and(
               eq(planRecommendations.growPlanId, latestPlan.id),
@@ -238,7 +251,7 @@ export default async function GrowPlanPage() {
         // "Where is this recommendation right now" is its active stage
         // (exactly one, given the linear progression); the immediate next
         // upcoming stage (if any) becomes the "next: ..." hint.
-        const rows = recs.map(({ recommendation, crop }) => {
+        const rows = recs.map(({ recommendation, crop, variety }) => {
           const stages = (stagesByRecommendation.get(recommendation.id) ?? []).sort(
             (a, b) => a.stage.stageIndex - b.stage.stageIndex,
           );
@@ -251,6 +264,7 @@ export default async function GrowPlanPage() {
           return {
             recommendation,
             crop,
+            variety: variety ? { id: variety.id, name: variety.name } : null,
             area: activeStage?.area ?? null,
             nextArea: nextStage?.area ?? null,
           };
@@ -353,6 +367,7 @@ export default async function GrowPlanPage() {
                 <RegeneratingCard
                   key={group.key}
                   cropName={group.crop.name}
+                  varietyName={group.variety?.name ?? null}
                   statusUrl={`/api/plan-recommendations/${group.recommendationIds[0]}/status`}
                 />
               ) : (

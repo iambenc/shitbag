@@ -14,3 +14,4 @@ export * from "./grow-plan";
 export * from "./task-reschedule-event";
 export * from "./plant-diagnosis";
 export * from "./photo-report";
+export * from "./seed-packet-scan";

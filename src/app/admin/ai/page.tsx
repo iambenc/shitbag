@@ -10,6 +10,7 @@ const AGENT_LABELS: Record<string, string> = {
   crop_facts: "Crop facts lookup",
   growing_area_estimator: "Growing area estimator (photo)",
   weather_advisor: "Weather advisor",
+  seed_packet_scanner: "Seed packet scanner (photo)",
 };
 
 export default async function AdminAIPage() {

@@ -11,7 +11,15 @@ const POLL_INTERVAL_MS = 2500;
 // guarantee every id in a group is always in lockstep, so one is enough).
 // Deliberately not JobInterstitial — that's now a full-screen, page-blocking
 // overlay for whole-plan generation; this is a small, scoped card update.
-export function RegeneratingCard({ cropName, statusUrl }: { cropName: string; statusUrl: string }) {
+export function RegeneratingCard({
+  cropName,
+  varietyName,
+  statusUrl,
+}: {
+  cropName: string;
+  varietyName: string | null;
+  statusUrl: string;
+}) {
   const router = useRouter();
 
   useEffect(() => {
@@ -35,7 +43,10 @@ export function RegeneratingCard({ cropName, statusUrl }: { cropName: string; st
       <span className="motion-safe:animate-[grow-pulse_1.8s_ease-in-out_infinite] text-3xl" aria-hidden>
         🌱
       </span>
-      <p className="text-sm font-medium">Finding an alternative for {cropName}…</p>
+      <p className="text-sm font-medium">
+        Finding an alternative for {cropName}
+        {varietyName ? ` (${varietyName})` : ""}…
+      </p>
     </div>
   );
 }

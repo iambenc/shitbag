@@ -1,7 +1,7 @@
 import { pgTable, uuid, text, boolean, integer, date, jsonb, timestamp, unique } from "drizzle-orm/pg-core";
 import { tenants } from "./tenant";
 import { users } from "./user";
-import { crops } from "./crop";
+import { crops, cropVarieties } from "./crop";
 import { growingAreas } from "./growing-area";
 import { tenantIsolationPolicy } from "./_rls";
 
@@ -52,6 +52,13 @@ export const planRecommendations = pgTable(
     cropId: uuid("crop_id")
       .notNull()
       .references(() => crops.id, { onDelete: "cascade" }),
+    // Nullable — the planner may pick a specific cultivar (with a genuine
+    // reason: an owned seed's variety, a growth-habit fit, disease
+    // resistance) or leave this a plain species-level recommendation. See
+    // growPlanner.ts's varietySlug/newVarietyName fields. Propagated down to
+    // this recommendation's own tasks (tasks.varietyId) at persist time —
+    // tasks never carry their own AI-supplied variety, they inherit it.
+    varietyId: uuid("variety_id").references(() => cropVarieties.id, { onDelete: "set null" }),
     reasoning: text("reasoning").notNull(),
     requiresPurchase: boolean("requires_purchase").notNull().default(false),
     estimatedHarvestStart: date("estimated_harvest_start", { mode: "string" }),

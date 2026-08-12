@@ -13,6 +13,7 @@ import {
   userFavoriteCrops,
   harvestLog,
   crops,
+  cropVarieties,
   shoppingListItems,
 } from "@/db/schema";
 import {
@@ -21,6 +22,7 @@ import {
   type StageShape,
 } from "@/lib/ai/agents/recommendationReplacement";
 import { getCropFacts } from "@/lib/ai/agents/cropFacts";
+import { getVarietyFacts, type ParentCropFacts } from "@/lib/ai/agents/varietyFacts";
 
 function slugify(value: string): string {
   return value
@@ -56,6 +58,14 @@ export const regenerateRecommendationFn = inngest.createFunction(
     const context = await step.run("gather-context", async () => {
       const allCrops = await db.select().from(crops);
       const cropById = new Map(allCrops.map((c) => [c.id, c]));
+      const allVarieties = await db.select().from(cropVarieties);
+      const varietyById = new Map(allVarieties.map((v) => [v.id, v]));
+      const varietiesByCropId = new Map<string, typeof allVarieties>();
+      for (const v of allVarieties) {
+        const list = varietiesByCropId.get(v.cropId) ?? [];
+        list.push(v);
+        varietiesByCropId.set(v.cropId, list);
+      }
 
       return withTenant(tenantId, async (tx) => {
         const [profile, seeds, favorites, harvests, rejectedRecs, stageRows, otherActiveRecs] = await Promise.all([
@@ -141,9 +151,14 @@ export const regenerateRecommendationFn = inngest.createFunction(
           stageShape,
           instanceCount: instances.length,
           excludedCropSlugs,
-          ownedSeedCropSlugs: seeds
-            .map((s) => cropById.get(s.cropId)?.slug)
-            .filter((s): s is string => Boolean(s)),
+          ownedSeeds: seeds
+            .map((s) => {
+              const cropSlug = cropById.get(s.cropId)?.slug;
+              if (!cropSlug) return null;
+              const varietySlug = s.varietyId ? (varietyById.get(s.varietyId)?.slug ?? null) : null;
+              return { cropSlug, varietySlug };
+            })
+            .filter((s): s is { cropSlug: string; varietySlug: string | null } => s !== null),
           favoriteCropSlugs: favorites
             .filter((f) => f.liked)
             .map((f) => cropById.get(f.cropId)?.slug)
@@ -175,11 +190,28 @@ export const regenerateRecommendationFn = inngest.createFunction(
             supportsSuccessionSowing: c.supportsSuccessionSowing,
             estimatedRetailPricePerKgGbp: c.estimatedRetailPricePerKgGbp,
             feedingNotes: c.feedingNotes,
+            varieties: (varietiesByCropId.get(c.id) ?? []).map((v) => ({
+              slug: v.slug,
+              name: v.name,
+              daysToHarvestMin: v.daysToHarvestMin ?? c.daysToHarvestMin,
+              daysToHarvestMax: v.daysToHarvestMax ?? c.daysToHarvestMax,
+              spacingCm: v.spacingCm ?? c.spacingCm,
+              growthHabit: v.growthHabit,
+              diseaseResistanceNotes: v.diseaseResistanceNotes,
+              characteristics: v.characteristics,
+              estimatedRetailPricePerKgGbp: v.estimatedRetailPricePerKgGbp ?? c.estimatedRetailPricePerKgGbp,
+            })),
           })),
         };
 
         const cropIdBySlug: Record<string, string> = Object.fromEntries(allCrops.map((c) => [c.slug, c.id]));
-        return { input, cropIdBySlug, instances };
+        const varietyIdByCropSlugAndVarietySlug: Record<string, string> = {};
+        for (const c of allCrops) {
+          for (const v of varietiesByCropId.get(c.id) ?? []) {
+            varietyIdByCropSlugAndVarietySlug[`${c.slug}|${v.slug}`] = v.id;
+          }
+        }
+        return { input, cropIdBySlug, varietyIdByCropSlugAndVarietySlug, instances };
       });
     });
 
@@ -187,67 +219,147 @@ export const regenerateRecommendationFn = inngest.createFunction(
       const result = await step.run("call-agent", () => generateRecommendationReplacement(tenantId, context.input));
 
       // Single-candidate version of generateGrowPlan.ts's resolve-new-crops
-      // — duplicated rather than extracted/shared, same reasoning as that
-      // function's own comment: the two call sites' surrounding shape
-      // (batch vs. one) differs enough that sharing isn't worth risking
-      // proven code for.
-      const replacementCropId = await step.run("resolve-new-crop", async () => {
+      // (now resolving a variety too) — duplicated rather than extracted/
+      // shared, same reasoning as that function's own comment: the two call
+      // sites' surrounding shape (batch vs. one) differs enough that
+      // sharing isn't worth risking proven code for. Variety resolution
+      // runs after the crop above, using its now-final id — same ordering
+      // requirement as generateGrowPlan.ts's sibling logic.
+      const resolved = await step.run("resolve-new-crop", async () => {
         const cropIdBySlug = context.cropIdBySlug;
-        if (cropIdBySlug[result.output.cropSlug]) return cropIdBySlug[result.output.cropSlug];
-        if (!result.output.newCropName) {
+        let replacementCropId: string;
+
+        if (cropIdBySlug[result.output.cropSlug]) {
+          replacementCropId = cropIdBySlug[result.output.cropSlug];
+        } else if (!result.output.newCropName) {
           throw new Error(`Unknown crop slug "${result.output.cropSlug}" with no newCropName to back it`);
+        } else {
+          const aiSlug = slugify(result.output.cropSlug);
+          const [existingByAiSlug] = await db.select({ id: crops.id }).from(crops).where(eq(crops.slug, aiSlug));
+          if (existingByAiSlug) {
+            replacementCropId = existingByAiSlug.id;
+          } else {
+            const [{ maxSortOrder }] = await db
+              .select({ maxSortOrder: sql<number>`coalesce(max(${crops.sortOrder}), 0)` })
+              .from(crops);
+            const facts = await getCropFacts(tenantId, result.output.newCropName);
+            // Store cropFacts's own corrected name/spelling, not the
+            // replacement agent's own newCropName — same reasoning/pattern
+            // as generateGrowPlan.ts's resolve-new-crops and seeds.ts's
+            // addSeedAction: this catalog is shared and reused (including
+            // by the /seeds autocomplete), so it should only ever hold the
+            // corrected name. Re-check under the corrected slug too, not
+            // just the AI's original one.
+            const correctedSlug = slugify(facts.output.name) || aiSlug;
+            const [existingByCorrectedSlug] = await db
+              .select({ id: crops.id })
+              .from(crops)
+              .where(eq(crops.slug, correctedSlug));
+            if (existingByCorrectedSlug) {
+              replacementCropId = existingByCorrectedSlug.id;
+            } else {
+              await db
+                .insert(crops)
+                .values({
+                  slug: correctedSlug,
+                  name: facts.output.name,
+                  category: facts.output.category,
+                  emoji: facts.output.emoji,
+                  spacingCm: facts.output.spacingCm,
+                  soilDepthCm: facts.output.soilDepthCm,
+                  sowIndoorFromMonth: facts.output.sowIndoorFromMonth,
+                  sowIndoorToMonth: facts.output.sowIndoorToMonth,
+                  sowOutdoorFromMonth: facts.output.sowOutdoorFromMonth,
+                  sowOutdoorToMonth: facts.output.sowOutdoorToMonth,
+                  daysToHarvestMin: facts.output.daysToHarvestMin,
+                  daysToHarvestMax: facts.output.daysToHarvestMax,
+                  supportsSuccessionSowing: facts.output.supportsSuccessionSowing,
+                  estimatedRetailPricePerKgGbp: facts.output.estimatedRetailPricePerKgGbp,
+                  feedingNotes: facts.output.feedingNotes,
+                  sortOrder: maxSortOrder + 1,
+                  verified: false,
+                  sourceProvider: facts.provider,
+                  sourceModel: facts.model,
+                })
+                .onConflictDoNothing({ target: crops.slug });
+
+              const [row] = await db.select({ id: crops.id }).from(crops).where(eq(crops.slug, correctedSlug));
+              replacementCropId = row.id;
+            }
+          }
         }
 
-        const aiSlug = slugify(result.output.cropSlug);
-        const [existingByAiSlug] = await db.select({ id: crops.id }).from(crops).where(eq(crops.slug, aiSlug));
-        if (existingByAiSlug) return existingByAiSlug.id;
+        let replacementVarietyId: string | null = null;
+        if (result.output.varietySlug) {
+          const varietyKey = `${result.output.cropSlug}|${result.output.varietySlug}`;
+          const preSeeded = context.varietyIdByCropSlugAndVarietySlug[varietyKey];
+          if (preSeeded) {
+            replacementVarietyId = preSeeded;
+          } else {
+            const varietyAiSlug = slugify(result.output.varietySlug);
+            const [existingVarietyByAiSlug] = await db
+              .select({ id: cropVarieties.id })
+              .from(cropVarieties)
+              .where(and(eq(cropVarieties.cropId, replacementCropId), eq(cropVarieties.slug, varietyAiSlug)));
+            if (existingVarietyByAiSlug) {
+              replacementVarietyId = existingVarietyByAiSlug.id;
+            } else if (result.output.newVarietyName) {
+              const [parentRow] = await db.select().from(crops).where(eq(crops.id, replacementCropId));
+              const parentFacts: ParentCropFacts = {
+                name: parentRow.name,
+                category: parentRow.category,
+                spacingCm: parentRow.spacingCm,
+                daysToHarvestMin: parentRow.daysToHarvestMin,
+                daysToHarvestMax: parentRow.daysToHarvestMax,
+                estimatedRetailPricePerKgGbp: parentRow.estimatedRetailPricePerKgGbp,
+              };
+              const varietyFacts = await getVarietyFacts(
+                tenantId,
+                parentFacts.name,
+                result.output.newVarietyName,
+                parentFacts,
+              );
+              const correctedVarietySlug = slugify(varietyFacts.output.name) || varietyAiSlug;
+              const [existingVarietyByCorrectedSlug] = await db
+                .select({ id: cropVarieties.id })
+                .from(cropVarieties)
+                .where(and(eq(cropVarieties.cropId, replacementCropId), eq(cropVarieties.slug, correctedVarietySlug)));
+              if (existingVarietyByCorrectedSlug) {
+                replacementVarietyId = existingVarietyByCorrectedSlug.id;
+              } else {
+                await db
+                  .insert(cropVarieties)
+                  .values({
+                    cropId: replacementCropId,
+                    slug: correctedVarietySlug,
+                    name: varietyFacts.output.name,
+                    daysToHarvestMin: varietyFacts.output.daysToHarvestMin,
+                    daysToHarvestMax: varietyFacts.output.daysToHarvestMax,
+                    spacingCm: varietyFacts.output.spacingCm,
+                    growthHabit: varietyFacts.output.growthHabit,
+                    diseaseResistanceNotes: varietyFacts.output.diseaseResistanceNotes,
+                    characteristics: varietyFacts.output.characteristics,
+                    estimatedRetailPricePerKgGbp: varietyFacts.output.estimatedRetailPricePerKgGbp,
+                    verified: false,
+                    sourceProvider: varietyFacts.provider,
+                    sourceModel: varietyFacts.model,
+                  })
+                  .onConflictDoNothing({ target: [cropVarieties.cropId, cropVarieties.slug] });
 
-        const [{ maxSortOrder }] = await db
-          .select({ maxSortOrder: sql<number>`coalesce(max(${crops.sortOrder}), 0)` })
-          .from(crops);
-        const facts = await getCropFacts(tenantId, result.output.newCropName);
-        // Store cropFacts's own corrected name/spelling, not the replacement
-        // agent's own newCropName — same reasoning/pattern as
-        // generateGrowPlan.ts's resolve-new-crops and seeds.ts's
-        // addSeedAction: this catalog is shared and reused (including by the
-        // /seeds autocomplete), so it should only ever hold the corrected
-        // name. Re-check under the corrected slug too, not just the AI's
-        // original one.
-        const correctedSlug = slugify(facts.output.name) || aiSlug;
-        const [existingByCorrectedSlug] = await db
-          .select({ id: crops.id })
-          .from(crops)
-          .where(eq(crops.slug, correctedSlug));
-        if (existingByCorrectedSlug) return existingByCorrectedSlug.id;
+                const [row] = await db
+                  .select({ id: cropVarieties.id })
+                  .from(cropVarieties)
+                  .where(and(eq(cropVarieties.cropId, replacementCropId), eq(cropVarieties.slug, correctedVarietySlug)));
+                replacementVarietyId = row.id;
+              }
+            }
+          }
+        }
 
-        await db
-          .insert(crops)
-          .values({
-            slug: correctedSlug,
-            name: facts.output.name,
-            category: facts.output.category,
-            emoji: facts.output.emoji,
-            spacingCm: facts.output.spacingCm,
-            soilDepthCm: facts.output.soilDepthCm,
-            sowIndoorFromMonth: facts.output.sowIndoorFromMonth,
-            sowIndoorToMonth: facts.output.sowIndoorToMonth,
-            sowOutdoorFromMonth: facts.output.sowOutdoorFromMonth,
-            sowOutdoorToMonth: facts.output.sowOutdoorToMonth,
-            daysToHarvestMin: facts.output.daysToHarvestMin,
-            daysToHarvestMax: facts.output.daysToHarvestMax,
-            supportsSuccessionSowing: facts.output.supportsSuccessionSowing,
-            estimatedRetailPricePerKgGbp: facts.output.estimatedRetailPricePerKgGbp,
-            feedingNotes: facts.output.feedingNotes,
-            sortOrder: maxSortOrder + 1,
-            verified: false,
-            sourceProvider: facts.provider,
-            sourceModel: facts.model,
-          })
-          .onConflictDoNothing({ target: crops.slug });
-
-        const [row] = await db.select({ id: crops.id }).from(crops).where(eq(crops.slug, correctedSlug));
-        return row.id;
+        return { cropId: replacementCropId, varietyId: replacementVarietyId };
       });
+      const replacementCropId = resolved.cropId;
+      const replacementVarietyId = resolved.varietyId;
 
       // One transaction for everything: inserting all N replacement
       // instances AND retiring all N rejected ones. A multi-step version
@@ -265,6 +377,7 @@ export const regenerateRecommendationFn = inngest.createFunction(
                 tenantId,
                 growPlanId,
                 cropId: replacementCropId,
+                varietyId: replacementVarietyId,
                 reasoning: result.output.reasoning,
                 requiresPurchase: result.output.requiresPurchase,
                 estimatedHarvestStart: result.output.estimatedHarvestStart,
@@ -307,6 +420,7 @@ export const regenerateRecommendationFn = inngest.createFunction(
                   dueDate: t.dueDate,
                   hardDeadlineDate: t.hardDeadlineDate,
                   cropId: replacementCropId,
+                  varietyId: replacementVarietyId,
                   planRecommendationId: newRecs[i].id,
                   successionSeriesId: t.isSuccessionResow ? seriesIdByInstance[i] : null,
                   estimatedSeedsUsed: t.estimatedSeedsUsed,

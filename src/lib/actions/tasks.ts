@@ -1,7 +1,7 @@
 "use server";
 
 import { z } from "zod";
-import { eq, and, ne, isNotNull, asc } from "drizzle-orm";
+import { eq, and, ne, isNull, isNotNull, asc } from "drizzle-orm";
 import { withTenant } from "@/lib/tenant/withTenant";
 import {
   tasks,
@@ -103,72 +103,151 @@ export async function toggleTaskCompleteAction(taskId: string, completed: boolea
       .returning({
         activatesStageId: tasks.activatesStageId,
         cropId: tasks.cropId,
+        varietyId: tasks.varietyId,
         estimatedSeedsUsed: tasks.estimatedSeedsUsed,
+        seedDeductionApplied: tasks.seedDeductionApplied,
+        seedDeductionVarietyId: tasks.seedDeductionVarietyId,
       });
     if (!task) return;
 
     if (task.cropId && task.estimatedSeedsUsed) {
-      // Only rows with a numeric seedCount participate — onboarding's seeds
-      // step only ever sets quantityLabel (free text), leaving seedCount
-      // null. A crop whose only owned rows are null-seedCount reads as
-      // "unknown quantity," not "zero": running the depletion check against
-      // an empty numeric-rows set would otherwise wrongly treat "we never
-      // tracked a number" the same as "genuinely used it all up."
-      const seedRows = await tx
-        .select({ id: seedInventory.id, seedCount: seedInventory.seedCount })
-        .from(seedInventory)
-        .where(
-          and(
-            eq(seedInventory.userId, userId),
-            eq(seedInventory.cropId, task.cropId),
-            isNotNull(seedInventory.seedCount),
-          ),
-        )
-        .orderBy(asc(seedInventory.createdAt));
+      if (completed) {
+        // Prefer stock matching this task's own variety, if it has one and
+        // any exists — a Moneymaker sowing shouldn't deplete a Gardener's
+        // Delight packet just because they're both "Tomato." Falls back to
+        // variety-agnostic stock (varietyId IS NULL — e.g. an onboarding row
+        // that never recorded a variety) only when no variety-matched
+        // numeric stock exists, or the task itself has no variety. Only rows
+        // with a numeric seedCount participate at all — onboarding's seeds
+        // step only ever sets quantityLabel (free text), leaving seedCount
+        // null, which reads as "unknown quantity," not "zero."
+        let seedRows: { id: string; seedCount: number | null }[] = [];
+        let deductionBucket: string | null = null;
+        if (task.varietyId) {
+          seedRows = await tx
+            .select({ id: seedInventory.id, seedCount: seedInventory.seedCount })
+            .from(seedInventory)
+            .where(
+              and(
+                eq(seedInventory.userId, userId),
+                eq(seedInventory.cropId, task.cropId),
+                eq(seedInventory.varietyId, task.varietyId),
+                isNotNull(seedInventory.seedCount),
+              ),
+            )
+            .orderBy(asc(seedInventory.createdAt));
+          deductionBucket = task.varietyId;
+        }
+        if (seedRows.length === 0) {
+          seedRows = await tx
+            .select({ id: seedInventory.id, seedCount: seedInventory.seedCount })
+            .from(seedInventory)
+            .where(
+              and(
+                eq(seedInventory.userId, userId),
+                eq(seedInventory.cropId, task.cropId),
+                isNull(seedInventory.varietyId),
+                isNotNull(seedInventory.seedCount),
+              ),
+            )
+            .orderBy(asc(seedInventory.createdAt));
+          deductionBucket = null;
+        }
 
-      if (completed && seedRows.length > 0) {
-        let remaining = task.estimatedSeedsUsed;
-        let totalAfter = 0;
-        for (const row of seedRows) {
-          const current = row.seedCount ?? 0;
-          const deduct = Math.min(current, remaining);
-          const newCount = current - deduct;
-          remaining -= deduct;
-          totalAfter += newCount;
-          if (deduct > 0) {
-            await tx.update(seedInventory).set({ seedCount: newCount }).where(eq(seedInventory.id, row.id));
+        if (seedRows.length > 0) {
+          // Record that a deduction fired, and which bucket it used —
+          // restoration below must credit this exact bucket back, not
+          // re-decide the variety-vs-agnostic preference fresh. Stock added
+          // to the OTHER bucket between now and un-completing must never
+          // redirect the restored seeds there instead. The boolean flag is
+          // what disambiguates "deducted from the agnostic bucket" from "no
+          // deduction fired at all" — both would otherwise look identical
+          // (seedDeductionVarietyId null either way).
+          await tx
+            .update(tasks)
+            .set({ seedDeductionApplied: true, seedDeductionVarietyId: deductionBucket })
+            .where(eq(tasks.id, taskId));
+
+          let remaining = task.estimatedSeedsUsed;
+          let totalAfter = 0;
+          for (const row of seedRows) {
+            const current = row.seedCount ?? 0;
+            const deduct = Math.min(current, remaining);
+            const newCount = current - deduct;
+            remaining -= deduct;
+            totalAfter += newCount;
+            if (deduct > 0) {
+              await tx.update(seedInventory).set({ seedCount: newCount }).where(eq(seedInventory.id, row.id));
+            }
+          }
+          if (totalAfter === 0) {
+            // Exact same dedup check generateGrowPlan.ts's shopping-list
+            // insert uses — no status/source filter, just a per-crop
+            // existence check — reused verbatim rather than re-derived,
+            // including its inherited limitation: once ANY shopping-list
+            // row exists for this crop (even a since-used-up purchased
+            // one), no new prompt fires. Crop-level, not variety-level —
+            // shoppingListItems has no varietyId (see docs/plan.md).
+            const [existingItem] = await tx
+              .select({ id: shoppingListItems.id })
+              .from(shoppingListItems)
+              .where(and(eq(shoppingListItems.userId, userId), eq(shoppingListItems.cropId, task.cropId)));
+            if (!existingItem) {
+              await tx.insert(shoppingListItems).values({
+                tenantId,
+                userId,
+                cropId: task.cropId,
+                quantityLabel: "1 packet",
+                source: "ai" as const,
+              });
+            }
           }
         }
-        if (totalAfter === 0) {
-          // Exact same dedup check generateGrowPlan.ts's shopping-list insert
-          // uses — no status/source filter, just a per-crop existence check —
-          // reused verbatim rather than re-derived, including its inherited
-          // limitation: once ANY shopping-list row exists for this crop
-          // (even a since-used-up purchased one), no new prompt fires.
-          const [existingItem] = await tx
-            .select({ id: shoppingListItems.id })
-            .from(shoppingListItems)
-            .where(and(eq(shoppingListItems.userId, userId), eq(shoppingListItems.cropId, task.cropId)));
-          if (!existingItem) {
-            await tx.insert(shoppingListItems).values({
-              tenantId,
-              userId,
-              cropId: task.cropId,
-              quantityLabel: "1 packet",
-              source: "ai" as const,
-            });
+      } else {
+        // Un-completing: restore to the exact bucket seedDeductionVarietyId
+        // recorded at completion time (not a fresh variety-vs-agnostic
+        // decision — see the comment above). Gated on the boolean flag, not
+        // just "seedDeductionVarietyId is set" — a null id there is itself
+        // ambiguous (agnostic bucket vs. never deducted), and only the flag
+        // tells them apart. seedDeductionApplied: false means the task was
+        // completed but never actually had matching stock to deduct from —
+        // nothing to restore.
+        if (task.seedDeductionApplied) {
+          const bucketFilter = task.seedDeductionVarietyId
+            ? eq(seedInventory.varietyId, task.seedDeductionVarietyId)
+            : isNull(seedInventory.varietyId);
+          const seedRows = await tx
+            .select({ id: seedInventory.id, seedCount: seedInventory.seedCount })
+            .from(seedInventory)
+            .where(
+              and(
+                eq(seedInventory.userId, userId),
+                eq(seedInventory.cropId, task.cropId),
+                bucketFilter,
+                isNotNull(seedInventory.seedCount),
+              ),
+            )
+            .orderBy(asc(seedInventory.createdAt))
+            .limit(1);
+          // Add the nominal amount back to a single row (the oldest in the
+          // bucket) rather than trying to reverse the exact per-row split
+          // the original deduction made — simpler, and the split itself was
+          // never meant to be precise across rows, just to consume oldest
+          // stock first. Guarded against the bucket's rows having vanished
+          // entirely since completion (edge case) — silently skip rather
+          // than crash or credit the wrong bucket.
+          if (seedRows.length > 0) {
+            const oldest = seedRows[0];
+            await tx
+              .update(seedInventory)
+              .set({ seedCount: (oldest.seedCount ?? 0) + task.estimatedSeedsUsed })
+              .where(eq(seedInventory.id, oldest.id));
           }
         }
-      } else if (!completed && seedRows.length > 0) {
-        // Un-completing: add the nominal amount back to a single row (the
-        // oldest) rather than trying to reverse the exact per-row split the
-        // original deduction made — simpler, and the split itself was never
-        // meant to be precise across rows, just to consume oldest stock first.
-        const oldest = seedRows[0];
         await tx
-          .update(seedInventory)
-          .set({ seedCount: (oldest.seedCount ?? 0) + task.estimatedSeedsUsed })
-          .where(eq(seedInventory.id, oldest.id));
+          .update(tasks)
+          .set({ seedDeductionApplied: false, seedDeductionVarietyId: null })
+          .where(eq(tasks.id, taskId));
       }
     }
 

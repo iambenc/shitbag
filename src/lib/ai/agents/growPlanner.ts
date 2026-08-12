@@ -17,6 +17,18 @@ export const GrowPlanOutputSchema = z.object({
           .describe(
             "Set only when cropSlug isn't in the provided catalog: the crop's real display name, e.g. \"Swiss Chard\" for cropSlug \"swiss-chard\". Null for catalog crops.",
           ),
+        varietySlug: z
+          .string()
+          .nullable()
+          .describe(
+            "Set only when you're recommending a SPECIFIC cultivar of this crop (e.g. \"moneymaker\" for a tomato), for a genuine reason — see the VARIETIES instruction below. Null for a plain species-level recommendation, which is entirely normal and the default; don't force a variety pick just to fill this field.",
+          ),
+        newVarietyName: z
+          .string()
+          .nullable()
+          .describe(
+            "Set only when varietySlug isn't in that crop's known varieties list (or the crop has none listed): the cultivar's real display name, e.g. \"Moneymaker\". Null whenever varietySlug is null, and null when varietySlug matches a variety already listed for that crop.",
+          ),
         stages: z
           .array(z.object({ growingAreaId: z.string() }))
           .min(1)
@@ -91,6 +103,23 @@ export const GrowPlanOutputSchema = z.object({
 });
 export type GrowPlanOutput = z.infer<typeof GrowPlanOutputSchema>;
 
+export type AvailableVariety = {
+  slug: string;
+  name: string;
+  // Every field here is already resolved to inherit the parent crop's own
+  // value when the variety's own override was null — done once where this
+  // array is built (generateGrowPlan.ts/regenerateRecommendation.ts), so
+  // that fallback logic lives in exactly one place rather than being
+  // re-derived in the prompt template or the mock.
+  daysToHarvestMin: number;
+  daysToHarvestMax: number;
+  spacingCm: number;
+  growthHabit: string | null;
+  diseaseResistanceNotes: string | null;
+  characteristics: string | null;
+  estimatedRetailPricePerKgGbp: number;
+};
+
 export type AvailableCrop = {
   slug: string;
   name: string;
@@ -106,6 +135,7 @@ export type AvailableCrop = {
   supportsSuccessionSowing: boolean;
   estimatedRetailPricePerKgGbp: number;
   feedingNotes: string | null;
+  varieties: AvailableVariety[];
 };
 
 export type GrowPlannerInput = {
@@ -130,7 +160,10 @@ export type GrowPlannerInput = {
     depthCm: number | null;
   }[];
   unplacedEquipment: { type: string; count: number }[];
-  ownedSeedCropSlugs: string[];
+  // varietySlug null means "owns this crop's seeds but no specific variety
+  // recorded" — still a valid, common case (e.g. onboarding's crop-only
+  // picker never asks for a variety).
+  ownedSeeds: { cropSlug: string; varietySlug: string | null }[];
   favoriteCropSlugs: string[];
   dislikedCropSlugs: string[];
   harvestHistory: { cropSlug: string; quantity: number; unit: string; harvestedAt: string }[];
@@ -172,6 +205,7 @@ function buildInstructions(input: GrowPlannerInput): string[] {
     "Use prior harvest history to judge whether a crop is worth recommending again.",
     'Write a short overall "summary" explaining the plan at a level matching the user\'s expertise. If EQUIPMENT OWNED BUT NOT YET PLACED lists anything, mention in the summary that placing it (via the garden page) would let the user grow more.',
     'If a crop you\'d genuinely recommend isn\'t in the catalog above, you may propose it: set newCropName to its common name (e.g. "Swiss Chard") and give it a lowercase-hyphenated cropSlug (e.g. "swiss-chard"), used identically in this recommendation and in any of its tasks. Only propose well-established, common home-garden crops you\'re confident about — never an obscure or fictional one. Leave newCropName null for every crop already in the catalog.',
+    'VARIETIES: picking a specific cultivar (varietySlug) is entirely optional — leave it null for a plain species-level recommendation, which is fine and the normal case. Only pick one when you have a genuine reason: the user already owns seeds for that specific variety (see SEEDS ALREADY OWNED), a listed variety\'s growthHabit genuinely fits the target area better (e.g. a compact/bush cultivar for a small pot), it has notable disease resistance worth calling out, or it\'s a well-established, clearly superior choice you\'re confident about. If you pick a variety not in that crop\'s listed varieties, propose it via newVarietyName (its real name, e.g. "Moneymaker") the same way newCropName works for a new crop — only for well-established, real cultivars, never invented ones. Never set newVarietyName without varietySlug also set, and never set either when the recommendation is for a newCropName crop not yet in the catalog (a variety can\'t be resolved against a crop that doesn\'t exist yet).',
     "Every recommendation must set isUnusualSuggestion — false unless it's the one exception described below.",
   ];
 
@@ -185,7 +219,7 @@ function buildInstructions(input: GrowPlannerInput): string[] {
 }
 
 function buildPrompt(input: GrowPlannerInput): string {
-  const { profile, growingAreas, unplacedEquipment, ownedSeedCropSlugs, favoriteCropSlugs, dislikedCropSlugs, harvestHistory } =
+  const { profile, growingAreas, unplacedEquipment, ownedSeeds, favoriteCropSlugs, dislikedCropSlugs, harvestHistory } =
     input;
 
   return `You are an expert UK fruit-and-vegetable gardening advisor. Today's date is ${input.today}.
@@ -205,8 +239,8 @@ ${growingAreas.length ? growingAreas.map((a) => `- id ${a.id}: ${a.type}, ${area
 EQUIPMENT OWNED BUT NOT YET PLACED AS GROWING SPACE (mention in the summary if placing it would let the user grow more — don't assign recommendations to it, it isn't a growing area yet)
 ${unplacedEquipment.length ? unplacedEquipment.map((e) => `- ${e.count}x ${e.type}`).join("\n") : "- none"}
 
-SEEDS ALREADY OWNED (prioritise these; anything else needed should be flagged requiresPurchase)
-${ownedSeedCropSlugs.length ? ownedSeedCropSlugs.join(", ") : "none"}
+SEEDS ALREADY OWNED (prioritise these; anything else needed should be flagged requiresPurchase — a variety in parentheses means that specific cultivar is owned, no parentheses means the crop is owned with no specific variety recorded)
+${ownedSeeds.length ? ownedSeeds.map((s) => (s.varietySlug ? `${s.cropSlug} (${s.varietySlug})` : s.cropSlug)).join(", ") : "none"}
 
 FAVOURITE CROPS (prefer these where they fit the space/season)
 ${favoriteCropSlugs.length ? favoriteCropSlugs.join(", ") : "none specified"}
@@ -217,12 +251,16 @@ ${dislikedCropSlugs.length ? dislikedCropSlugs.join(", ") : "none"}
 PRIOR HARVEST HISTORY (use to judge whether to recommend the same crop again)
 ${harvestHistory.length ? harvestHistory.map((h) => `- ${h.cropSlug}: ${h.quantity}${h.unit} on ${h.harvestedAt}`).join("\n") : "- no history yet"}
 
-AVAILABLE CROP CATALOG (prefer these, referenced by slug)
+AVAILABLE CROP CATALOG (prefer these, referenced by slug; varieties listed beneath a crop, if any, are optional cultivar picks — see the VARIETIES instruction below)
 ${input.availableCrops
-  .map(
-    (c) =>
-      `- ${c.slug}: spacing ${c.spacingCm}cm, soil depth ${c.soilDepthCm}cm, indoor sow months ${c.sowIndoorFromMonth ?? "-"}-${c.sowIndoorToMonth ?? "-"}, outdoor sow months ${c.sowOutdoorFromMonth ?? "-"}-${c.sowOutdoorToMonth ?? "-"}, days to harvest ${c.daysToHarvestMin}-${c.daysToHarvestMax}, succession sowing: ${c.supportsSuccessionSowing}, est. retail £${c.estimatedRetailPricePerKgGbp.toFixed(2)}/kg, feeding: ${c.feedingNotes ?? "none"}`,
-  )
+  .map((c) => {
+    const base = `- ${c.slug}: spacing ${c.spacingCm}cm, soil depth ${c.soilDepthCm}cm, indoor sow months ${c.sowIndoorFromMonth ?? "-"}-${c.sowIndoorToMonth ?? "-"}, outdoor sow months ${c.sowOutdoorFromMonth ?? "-"}-${c.sowOutdoorToMonth ?? "-"}, days to harvest ${c.daysToHarvestMin}-${c.daysToHarvestMax}, succession sowing: ${c.supportsSuccessionSowing}, est. retail £${c.estimatedRetailPricePerKgGbp.toFixed(2)}/kg, feeding: ${c.feedingNotes ?? "none"}`;
+    const varietyLines = c.varieties.map(
+      (v) =>
+        `    - ${v.slug}: "${v.name}"${v.growthHabit ? `, ${v.growthHabit}` : ""}, days to harvest ${v.daysToHarvestMin}-${v.daysToHarvestMax}${v.spacingCm !== c.spacingCm ? `, spacing ${v.spacingCm}cm` : ""}${v.diseaseResistanceNotes ? `, disease resistance: ${v.diseaseResistanceNotes}` : ""}${v.characteristics ? `, ${v.characteristics}` : ""}`,
+    );
+    return varietyLines.length > 0 ? `${base}\n  varieties:\n${varietyLines.join("\n")}` : base;
+  })
   .join("\n")}
 
 INSTRUCTIONS
@@ -254,7 +292,7 @@ export async function generateGrowPlan(
  * the UI and data flow are genuinely tested end to end.
  */
 function buildMockPlan(input: GrowPlannerInput): GrowPlanOutput {
-  const owned = new Set(input.ownedSeedCropSlugs);
+  const owned = new Set(input.ownedSeeds.map((s) => s.cropSlug));
   const disliked = new Set(input.dislikedCropSlugs);
   const favorites = input.availableCrops.filter(
     (c) => input.favoriteCropSlugs.includes(c.slug) && !disliked.has(c.slug),
@@ -339,6 +377,8 @@ function buildMockPlan(input: GrowPlannerInput): GrowPlanOutput {
       recommendations.push({
         cropSlug: crop.slug,
         newCropName: null,
+        varietySlug: null,
+        newVarietyName: null,
         stages,
         reasoning: reasoningFor(crop, requiresPurchase),
         requiresPurchase,
@@ -398,13 +438,25 @@ function buildMockPlan(input: GrowPlannerInput): GrowPlanOutput {
   const reservedForDemos = 1 + (input.wantsUnusualCrop ? 1 : 0);
   const singleStageSlots = Math.max(0, remainingAreas.length - reservedForDemos);
   const singleStagePicked = candidates.slice(candidateIndex, candidateIndex + Math.min(5, singleStageSlots));
+  // Demonstrates the "pick an existing known variety" pathway once, for the
+  // first candidate that has any — every mock path in this app should be
+  // exercised, not just the crop-only default. Proposing a brand-new
+  // variety (newVarietyName) isn't demoed here: unlike Swiss Chard/Oca's
+  // fixed synthetic names, a plausible-sounding cultivar name can't be
+  // hardcoded for an arbitrary catalog crop — that pathway is verified via
+  // a real live AI trigger instead.
+  let varietyDemoed = false;
   for (const crop of singleStagePicked) {
     const area = remainingAreas.shift()!;
     const requiresPurchase = !owned.has(crop.slug);
     const recIndex = recommendations.length;
+    const demoVariety = !varietyDemoed && crop.varieties.length > 0 ? crop.varieties[0] : null;
+    if (demoVariety) varietyDemoed = true;
     recommendations.push({
       cropSlug: crop.slug,
       newCropName: null,
+      varietySlug: demoVariety?.slug ?? null,
+      newVarietyName: null,
       stages: [{ growingAreaId: area.id }],
       reasoning: reasoningFor(crop, requiresPurchase),
       requiresPurchase,
@@ -468,6 +520,10 @@ function buildMockPlan(input: GrowPlannerInput): GrowPlanOutput {
     recommendations.push({
       cropSlug: "swiss-chard",
       newCropName: "Swiss Chard",
+      // A newCropName recommendation can't also carry a variety — the crop
+      // itself doesn't exist yet to resolve one against.
+      varietySlug: null,
+      newVarietyName: null,
       stages: [{ growingAreaId: area.id }],
       reasoning: `Swiss Chard isn't in your usual catalog yet, but it's a reliable, colourful leafy green that suits a ${input.profile.plotSize ?? "small"} plot. [Mock plan — connect a Gemini API key for real AI-generated recommendations.]`,
       requiresPurchase: true,
@@ -503,6 +559,8 @@ function buildMockPlan(input: GrowPlannerInput): GrowPlanOutput {
     recommendations.push({
       cropSlug: "oca",
       newCropName: "Oca",
+      varietySlug: null,
+      newVarietyName: null,
       stages: [{ growingAreaId: area.id }],
       reasoning: `You asked to try something new — Oca (Oxalis tuberosa) is an unusual South American tuber that's rarely grown in UK gardens but does well in the UK climate, cropping in a single growing area like a regular potato. [Mock plan — connect a Gemini API key for real AI-generated recommendations.]`,
       requiresPurchase: true,

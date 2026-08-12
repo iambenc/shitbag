@@ -8,13 +8,15 @@ type Harvest = {
   cropId: string;
   cropName: string;
   cropEmoji: string;
+  varietyName: string | null;
   quantity: number;
   unit: string;
   harvestedAt: string;
   notes: string | null;
 };
 
-type CropOption = { id: string; name: string; emoji: string };
+type VarietyOption = { id: string; name: string };
+type CropOption = { id: string; name: string; emoji: string; varieties: VarietyOption[] };
 
 const initialState: AddHarvestState = {};
 
@@ -23,18 +25,64 @@ function todayIso() {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 }
 
+// Crop select drives which varieties the dependent variety select offers —
+// only ever picks from crop_varieties rows that already exist (no AI
+// resolution here, unlike /seeds' free-text variety field), so a plain
+// dependent <select> is enough.
+function CropAndVarietyFields({ crops }: { crops: CropOption[] }) {
+  const [selectedCropId, setSelectedCropId] = useState(crops[0]?.id ?? "");
+  const selectedCrop = crops.find((c) => c.id === selectedCropId);
+
+  return (
+    <>
+      <select
+        name="cropId"
+        required
+        value={selectedCropId}
+        onChange={(e) => setSelectedCropId(e.target.value)}
+        className="rounded-md border border-black/15 px-3 py-2 text-sm"
+      >
+        {crops.map((c) => (
+          <option key={c.id} value={c.id}>
+            {c.emoji} {c.name}
+          </option>
+        ))}
+      </select>
+      {selectedCrop && selectedCrop.varieties.length > 0 && (
+        <select name="varietyId" className="rounded-md border border-black/15 px-3 py-2 text-sm">
+          <option value="">No specific variety</option>
+          {selectedCrop.varieties.map((v) => (
+            <option key={v.id} value={v.id}>
+              {v.name}
+            </option>
+          ))}
+        </select>
+      )}
+    </>
+  );
+}
+
 export function HarvestsView({ harvests, crops }: { harvests: Harvest[]; crops: CropOption[] }) {
   const [list, setList] = useState(harvests);
+  // CropAndVarietyFields' crop select is controlled (needed to drive the
+  // dependent variety options), so — unlike the plain quantity/unit/date
+  // inputs — it won't reset itself via React 19's automatic uncontrolled-
+  // field form reset after a successful submit. Remounting it via a
+  // changing `key` on each success resets it back to the first crop, no
+  // variety selected.
+  const [resetToken, setResetToken] = useState(0);
   const [state, formAction] = useActionState(async (prev: AddHarvestState, formData: FormData) => {
     const result = await addHarvestAction(prev, formData);
     if (result.harvest) {
       const crop = crops.find((c) => c.id === result.harvest!.cropId);
+      const variety = crop?.varieties.find((v) => v.id === result.harvest!.varietyId);
       setList((hs) => [
         {
           id: result.harvest!.id,
           cropId: result.harvest!.cropId,
           cropName: crop?.name ?? "",
           cropEmoji: crop?.emoji ?? "",
+          varietyName: variety?.name ?? null,
           quantity: result.harvest!.quantity,
           unit: result.harvest!.unit,
           harvestedAt: result.harvest!.harvestedAt,
@@ -42,6 +90,7 @@ export function HarvestsView({ harvests, crops }: { harvests: Harvest[]; crops: 
         },
         ...hs,
       ]);
+      setResetToken((t) => t + 1);
     }
     return result;
   }, initialState);
@@ -55,13 +104,7 @@ export function HarvestsView({ harvests, crops }: { harvests: Harvest[]; crops: 
     <div className="flex flex-col gap-8">
       <form action={formAction} className="flex flex-col gap-3 rounded-lg border border-black/10 bg-white p-4 shadow-card">
         <div className="flex flex-wrap gap-2">
-          <select name="cropId" required className="rounded-md border border-black/15 px-3 py-2 text-sm">
-            {crops.map((c) => (
-              <option key={c.id} value={c.id}>
-                {c.emoji} {c.name}
-              </option>
-            ))}
-          </select>
+          <CropAndVarietyFields key={resetToken} crops={crops} />
           <input
             name="quantity"
             type="number"
@@ -111,7 +154,8 @@ export function HarvestsView({ harvests, crops }: { harvests: Harvest[]; crops: 
           >
             <div>
               <span>
-                {h.cropEmoji} {h.cropName} — {h.quantity}
+                {h.cropEmoji} {h.cropName}
+                {h.varietyName ? ` (${h.varietyName})` : ""} — {h.quantity}
                 {h.unit} on {h.harvestedAt}
               </span>
               {h.notes && <p className="text-xs text-(--text-muted)">{h.notes}</p>}

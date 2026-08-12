@@ -10,3 +10,9 @@ export const MAX_ESTIMATION_PHOTOS = 5;
 // adds resolve to an existing crop for free and this is a genuine "catch up
 // my whole inventory in one sitting" action, not a per-generation one.
 export const MAX_DAILY_SEED_ADDITIONS = 10;
+// A real vision call every time, unlike addSeedAction's cropFacts lookup
+// which only fires for an unrecognized crop — every scan costs, so this
+// stays in the same 3-5/day range as the other vision agents
+// (MAX_DAILY_PLANT_DIAGNOSES, MAX_DAILY_GROWING_AREA_ESTIMATIONS) rather
+// than MAX_DAILY_SEED_ADDITIONS' higher "most adds are free" allowance.
+export const MAX_DAILY_SEED_PACKET_SCANS = 5;

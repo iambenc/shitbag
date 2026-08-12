@@ -12,6 +12,18 @@ export const RecommendationReplacementOutputSchema = z.object({
     .describe(
       "Set only when cropSlug isn't in the provided catalog: the crop's real display name, e.g. \"Swiss Chard\" for cropSlug \"swiss-chard\". Null for catalog crops.",
     ),
+  varietySlug: z
+    .string()
+    .nullable()
+    .describe(
+      "Set only when recommending a SPECIFIC cultivar of this crop, for a genuine reason — see the VARIETIES instruction below. Null for a plain species-level recommendation, which is fine and the default. Never set when newCropName is also set (a variety can't be resolved against a crop that doesn't exist yet).",
+    ),
+  newVarietyName: z
+    .string()
+    .nullable()
+    .describe(
+      "Set only when varietySlug isn't in that crop's known varieties list: the cultivar's real display name, e.g. \"Moneymaker\". Null whenever varietySlug is null.",
+    ),
   reasoning: z.string(),
   requiresPurchase: z.boolean(),
   estimatedHarvestStart: z.string(),
@@ -84,7 +96,7 @@ export type RecommendationReplacementInput = {
   stageShape: StageShape[];
   instanceCount: number;
   excludedCropSlugs: string[];
-  ownedSeedCropSlugs: string[];
+  ownedSeeds: { cropSlug: string; varietySlug: string | null }[];
   favoriteCropSlugs: string[];
   dislikedCropSlugs: string[];
   harvestHistory: { cropSlug: string; quantity: number; unit: string; harvestedAt: string }[];
@@ -111,7 +123,7 @@ function stageShapeText(stages: StageShape[]): string {
 }
 
 function buildPrompt(input: RecommendationReplacementInput): string {
-  const { profile, stageShape, instanceCount, excludedCropSlugs, ownedSeedCropSlugs, favoriteCropSlugs, dislikedCropSlugs, harvestHistory } =
+  const { profile, stageShape, instanceCount, excludedCropSlugs, ownedSeeds, favoriteCropSlugs, dislikedCropSlugs, harvestHistory } =
     input;
 
   return `You are an expert UK fruit-and-vegetable gardening advisor. Today's date is ${input.today}. The user rejected a previous recommendation and wants a replacement.
@@ -132,8 +144,8 @@ ${instanceCount > 1 ? `\nThere are ${instanceCount} identical instances of this 
 DO NOT RECOMMEND (already rejected, or already growing elsewhere in this plan)
 ${excludedCropSlugs.length ? excludedCropSlugs.join(", ") : "none"}
 
-SEEDS ALREADY OWNED (prioritise these; anything else needed should be flagged requiresPurchase)
-${ownedSeedCropSlugs.length ? ownedSeedCropSlugs.join(", ") : "none"}
+SEEDS ALREADY OWNED (prioritise these; anything else needed should be flagged requiresPurchase — a variety in parentheses means that specific cultivar is owned, no parentheses means the crop is owned with no specific variety recorded)
+${ownedSeeds.length ? ownedSeeds.map((s) => (s.varietySlug ? `${s.cropSlug} (${s.varietySlug})` : s.cropSlug)).join(", ") : "none"}
 
 FAVOURITE CROPS (prefer these where they fit the space/season)
 ${favoriteCropSlugs.length ? favoriteCropSlugs.join(", ") : "none specified"}
@@ -144,12 +156,16 @@ ${dislikedCropSlugs.length ? dislikedCropSlugs.join(", ") : "none"}
 PRIOR HARVEST HISTORY (use to judge whether to recommend the same crop again)
 ${harvestHistory.length ? harvestHistory.map((h) => `- ${h.cropSlug}: ${h.quantity}${h.unit} on ${h.harvestedAt}`).join("\n") : "- no history yet"}
 
-AVAILABLE CROP CATALOG (prefer these, referenced by slug)
+AVAILABLE CROP CATALOG (prefer these, referenced by slug; varieties listed beneath a crop, if any, are optional cultivar picks — see the VARIETIES instruction below)
 ${input.availableCrops
-  .map(
-    (c) =>
-      `- ${c.slug}: spacing ${c.spacingCm}cm, soil depth ${c.soilDepthCm}cm, indoor sow months ${c.sowIndoorFromMonth ?? "-"}-${c.sowIndoorToMonth ?? "-"}, outdoor sow months ${c.sowOutdoorFromMonth ?? "-"}-${c.sowOutdoorToMonth ?? "-"}, days to harvest ${c.daysToHarvestMin}-${c.daysToHarvestMax}, succession sowing: ${c.supportsSuccessionSowing}, est. retail £${c.estimatedRetailPricePerKgGbp.toFixed(2)}/kg, feeding: ${c.feedingNotes ?? "none"}`,
-  )
+  .map((c) => {
+    const base = `- ${c.slug}: spacing ${c.spacingCm}cm, soil depth ${c.soilDepthCm}cm, indoor sow months ${c.sowIndoorFromMonth ?? "-"}-${c.sowIndoorToMonth ?? "-"}, outdoor sow months ${c.sowOutdoorFromMonth ?? "-"}-${c.sowOutdoorToMonth ?? "-"}, days to harvest ${c.daysToHarvestMin}-${c.daysToHarvestMax}, succession sowing: ${c.supportsSuccessionSowing}, est. retail £${c.estimatedRetailPricePerKgGbp.toFixed(2)}/kg, feeding: ${c.feedingNotes ?? "none"}`;
+    const varietyLines = c.varieties.map(
+      (v) =>
+        `    - ${v.slug}: "${v.name}"${v.growthHabit ? `, ${v.growthHabit}` : ""}, days to harvest ${v.daysToHarvestMin}-${v.daysToHarvestMax}${v.spacingCm !== c.spacingCm ? `, spacing ${v.spacingCm}cm` : ""}${v.diseaseResistanceNotes ? `, disease resistance: ${v.diseaseResistanceNotes}` : ""}${v.characteristics ? `, ${v.characteristics}` : ""}`,
+    );
+    return varietyLines.length > 0 ? `${base}\n  varieties:\n${varietyLines.join("\n")}` : base;
+  })
   .join("\n")}
 
 INSTRUCTIONS
@@ -160,7 +176,8 @@ INSTRUCTIONS
 5. If this crop supports succession sowing, ALWAYS generate at least 2 re-sow tasks — never just one, a single re-sow defeats the point of succession sowing. Use up to 5 for a crop with a long outdoor sowing window (4+ months, e.g. radish, carrot), and at least 2-3 even for a shorter window (~2 months). Space them roughly 2-3 weeks apart, each still falling within that crop's outdoor sowing window and before the growing season realistically ends. Mark isSuccessionResow: true on every one of these re-sow tasks, and false on every other task (including this crop's own first/original sowing).
 6. Use prior harvest history to judge whether a crop is worth recommending again.
 7. On every task that sows or plants seeds (the crop's first sowing and any succession re-sow), set estimatedSeedsUsed to your best-guess seed count for that specific sowing — stage 1's size divided by the crop's spacingCm, plus a 20-30% margin for germination failure. Leave it null on every other task (feeding, transplanting).
-8. If a crop you'd genuinely recommend isn't in the catalog above, you may propose it: set newCropName to its common name and give it a lowercase-hyphenated cropSlug, used identically in this recommendation and its tasks. Only propose well-established, common home-garden crops you're confident about. Leave newCropName null for every crop already in the catalog.`;
+8. If a crop you'd genuinely recommend isn't in the catalog above, you may propose it: set newCropName to its common name and give it a lowercase-hyphenated cropSlug, used identically in this recommendation and its tasks. Only propose well-established, common home-garden crops you're confident about. Leave newCropName null for every crop already in the catalog.
+9. VARIETIES: picking a specific cultivar (varietySlug) is entirely optional — leave it null for a plain species-level recommendation, which is fine and the normal case. Only pick one when you have a genuine reason: the user already owns seeds for that specific variety (see SEEDS ALREADY OWNED), a listed variety's growth habit genuinely fits STAGE SHAPE better, it has notable disease resistance worth calling out, or it's a well-established, clearly superior choice you're confident about. If you pick a variety not in that crop's listed varieties, propose it via newVarietyName the same way newCropName works for a new crop — only for well-established, real cultivars. Never set varietySlug/newVarietyName when newCropName is also set.`;
 }
 
 export async function generateRecommendationReplacement(
@@ -190,7 +207,7 @@ export async function generateRecommendationReplacement(
  */
 function buildMockReplacement(input: RecommendationReplacementInput): RecommendationReplacementOutput {
   const excluded = new Set(input.excludedCropSlugs);
-  const owned = new Set(input.ownedSeedCropSlugs);
+  const owned = new Set(input.ownedSeeds.map((s) => s.cropSlug));
   const disliked = new Set(input.dislikedCropSlugs);
   const favorites = input.availableCrops.filter(
     (c) => input.favoriteCropSlugs.includes(c.slug) && !disliked.has(c.slug) && !excluded.has(c.slug),
@@ -259,6 +276,9 @@ function buildMockReplacement(input: RecommendationReplacementInput): Recommenda
     return {
       cropSlug: "swiss-chard",
       newCropName: "Swiss Chard",
+      // A newCropName recommendation can't also carry a variety.
+      varietySlug: null,
+      newVarietyName: null,
       reasoning: `Swiss Chard isn't in your usual catalog yet, but it's a reliable, colourful leafy green that suits a ${input.profile.plotSize ?? "small"} plot. [Mock plan — connect a Gemini API key for real AI-generated recommendations.]`,
       requiresPurchase: true,
       estimatedHarvestStart: addDays(55),
@@ -322,9 +342,17 @@ function buildMockReplacement(input: RecommendationReplacementInput): Recommenda
     }
   }
 
+  // Demonstrates the "pick an existing known variety" pathway when the
+  // chosen crop has one — same reasoning as growPlanner.ts's own mock;
+  // proposing a brand-new variety isn't demoed here for the same reason
+  // (no plausible cultivar name to hardcode for an arbitrary crop).
+  const demoVariety = crop.varieties[0] ?? null;
+
   return {
     cropSlug: crop.slug,
     newCropName: null,
+    varietySlug: demoVariety?.slug ?? null,
+    newVarietyName: null,
     reasoning: `${crop.name} suits a ${input.profile.plotSize ?? "small"} plot with your ${expertise} experience level. ${
       requiresPurchase
         ? "You'll need to add seeds to your shopping list for this one."

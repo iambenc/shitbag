@@ -1,17 +1,41 @@
 "use client";
 
-import { useActionState, useEffect, useMemo, useRef, useState } from "react";
-import { addSeedAction, deleteSeedAction, type AddSeedState } from "@/lib/actions/seeds";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { useActionState } from "react";
+import {
+  addSeedAction,
+  deleteSeedAction,
+  scanSeedPacketAction,
+  type AddSeedState,
+  type SeedPacketScanClientResult,
+} from "@/lib/actions/seeds";
 import { LeafAccent } from "@/components/LeafAccent";
 
 const MAX_SUGGESTIONS = 8;
 
-// Replaces the native <datalist> dropdown (which some browsers render as a
+// Replaces a native <datalist> dropdown (which some browsers render as a
 // full unstyled list of every option, unfiltered, rather than narrowing as
-// you type) with a small in-input autocomplete: filters cropNames against
-// the current text, shows a short styled dropdown below the field.
-function CropNameField({ cropNames }: { cropNames: string[] }) {
-  const [value, setValue] = useState("");
+// you type) with a small in-input autocomplete: filters `options` against
+// the current text, shows a short styled dropdown below the field. Used for
+// both the crop name (required) and the variety name (optional) inputs.
+// `initialValue` (only read once, on mount) is what lets a packet scan
+// pre-fill this field — see ScanPacketButton / SeedsView's resetToken.
+function AutocompleteTextField({
+  name,
+  options,
+  required,
+  placeholder,
+  className,
+  initialValue,
+}: {
+  name: string;
+  options: string[];
+  required?: boolean;
+  placeholder: string;
+  className?: string;
+  initialValue?: string;
+}) {
+  const [value, setValue] = useState(initialValue ?? "");
   const [open, setOpen] = useState(false);
   const [highlighted, setHighlighted] = useState(0);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -19,8 +43,8 @@ function CropNameField({ cropNames }: { cropNames: string[] }) {
   const matches = useMemo(() => {
     const query = value.trim().toLowerCase();
     if (!query) return [];
-    return cropNames.filter((name) => name.toLowerCase().includes(query)).slice(0, MAX_SUGGESTIONS);
-  }, [value, cropNames]);
+    return options.filter((name) => name.toLowerCase().includes(query)).slice(0, MAX_SUGGESTIONS);
+  }, [value, options]);
 
   useEffect(() => {
     function handleClickOutside(e: MouseEvent) {
@@ -38,14 +62,14 @@ function CropNameField({ cropNames }: { cropNames: string[] }) {
   }
 
   return (
-    <div ref={containerRef} className="relative min-w-[16rem] flex-1">
+    <div ref={containerRef} className={`relative ${className ?? ""}`}>
       <input
-        name="cropName"
+        name={name}
         type="text"
-        required
+        required={required}
         maxLength={100}
         autoComplete="off"
-        placeholder="What did you buy? e.g. Tomato, or something unusual"
+        placeholder={placeholder}
         className="w-full rounded-md border border-black/15 px-3 py-2 text-sm"
         value={value}
         onChange={(e) => {
@@ -92,12 +116,86 @@ function CropNameField({ cropNames }: { cropNames: string[] }) {
   );
 }
 
+// Uploads a photo straight to scanSeedPacketAction and hands the extracted
+// fields back to the parent to pre-fill the form below — nothing is saved
+// here, this is purely an autofill step (see scanSeedPacketAction's own
+// comment: the user reviews/edits everything before addSeedAction ever
+// writes anything). `capture="environment"` hints mobile browsers to open
+// the camera directly rather than a file picker, matching "photo of a
+// packet you're holding" rather than "a file already on disk".
+function ScanPacketButton({
+  onScanned,
+  remainingToday,
+}: {
+  onScanned: (result: SeedPacketScanClientResult) => void;
+  remainingToday: number;
+}) {
+  const [pending, setPending] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  async function handleFile(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setPending(true);
+    setError(null);
+    const formData = new FormData();
+    formData.append("photo", file);
+    const result = await scanSeedPacketAction(formData);
+    setPending(false);
+    if (inputRef.current) inputRef.current.value = "";
+    if (result.error) {
+      setError(result.error);
+      return;
+    }
+    if (result.scan) onScanned(result.scan);
+  }
+
+  if (remainingToday <= 0) {
+    return <p className="text-xs text-(--text-muted)">You&rsquo;ve scanned the most packets you can for today.</p>;
+  }
+
+  return (
+    <div className="flex flex-col gap-1">
+      <input
+        ref={inputRef}
+        id="seed-packet-photo"
+        type="file"
+        accept="image/*"
+        capture="environment"
+        onChange={handleFile}
+        disabled={pending}
+        className="hidden"
+      />
+      <label
+        htmlFor="seed-packet-photo"
+        className={`inline-flex w-fit items-center gap-2 self-start rounded-full border border-(--brand-primary)/40 px-4 py-2 text-sm text-(--brand-primary) transition ${
+          pending ? "opacity-60" : "cursor-pointer hover:bg-(--surface-tint) active:scale-95"
+        }`}
+      >
+        📷 {pending ? "Reading packet…" : "Scan a seed packet"}
+      </label>
+      {error && <p className="text-sm text-red-700">{error}</p>}
+      <p className="text-xs text-(--text-muted)">{remainingToday} scans left today</p>
+    </div>
+  );
+}
+
 type Seed = {
   id: string;
   cropName: string;
   cropEmoji: string;
+  varietyName: string | null;
   quantityLabel: string;
   source: "onboarding" | "purchased";
+};
+
+type ScanValues = {
+  cropName: string;
+  varietyName: string;
+  seedCount: string;
+  seedCountIsEstimate: boolean;
+  notes: string | null;
 };
 
 const initialState: AddSeedState = {};
@@ -105,18 +203,24 @@ const initialState: AddSeedState = {};
 export function SeedsView({
   seeds,
   remainingToday,
+  scansRemainingToday,
   cropNames,
+  varietyNames,
 }: {
   seeds: Seed[];
   remainingToday: number;
+  scansRemainingToday: number;
   cropNames: string[];
+  varietyNames: string[];
 }) {
   const [list, setList] = useState(seeds);
-  // CropNameField's input is controlled (needed for the filtered dropdown),
-  // so — unlike the plain seedCount input next to it — it won't clear itself
-  // via React 19's automatic uncontrolled-field form reset after a
-  // successful submit. Remounting it via a changing `key` on each success is
-  // the simplest way to reset its internal state along with the rest of the form.
+  const [scanValues, setScanValues] = useState<ScanValues | null>(null);
+  // Both autocomplete inputs (and, once scanned, the seed-count input too)
+  // are either controlled or need a fresh initial value, so — unlike a
+  // plain uncontrolled input — they won't reset/refill themselves via
+  // React's automatic form-reset behaviour. Remounting them via a changing
+  // `key` is the simplest way to reset (after a successful add) or refill
+  // (after a successful scan) their initial state together.
   const [resetToken, setResetToken] = useState(0);
   const [state, formAction] = useActionState(async (prev: AddSeedState, formData: FormData) => {
     const result = await addSeedAction(prev, formData);
@@ -126,11 +230,13 @@ export function SeedsView({
           id: result.seed!.id,
           cropName: result.seed!.cropName,
           cropEmoji: result.seed!.cropEmoji,
+          varietyName: result.seed!.varietyName,
           quantityLabel: result.seed!.quantityLabel,
           source: "purchased",
         },
         ...ss,
       ]);
+      setScanValues(null);
       setResetToken((t) => t + 1);
     }
     return result;
@@ -139,6 +245,17 @@ export function SeedsView({
   async function handleDelete(id: string) {
     setList((ss) => ss.filter((s) => s.id !== id));
     await deleteSeedAction(id);
+  }
+
+  function handleScanned(scan: SeedPacketScanClientResult) {
+    setScanValues({
+      cropName: scan.cropName,
+      varietyName: scan.varietyName ?? "",
+      seedCount: scan.seedCount != null ? String(scan.seedCount) : "",
+      seedCountIsEstimate: scan.seedCountIsEstimate,
+      notes: scan.notes,
+    });
+    setResetToken((t) => t + 1);
   }
 
   return (
@@ -156,7 +273,8 @@ export function SeedsView({
             className="flex items-center justify-between gap-3 rounded-lg border border-black/10 bg-white p-3 shadow-card"
           >
             <span className="text-sm">
-              {seed.cropEmoji} {seed.cropName} · {seed.quantityLabel}
+              {seed.cropEmoji} {seed.cropName}
+              {seed.varietyName ? ` (${seed.varietyName})` : ""} · {seed.quantityLabel}
             </span>
             <button
               type="button"
@@ -171,9 +289,34 @@ export function SeedsView({
       </section>
 
       <form action={formAction} className="flex flex-col gap-3 rounded-lg border border-black/10 bg-white p-4 shadow-card">
+        <ScanPacketButton onScanned={handleScanned} remainingToday={scansRemainingToday} />
+        {scanValues && (
+          <p className="text-sm text-(--brand-primary)">
+            Filled in from your photo — check these before adding.
+            {scanValues.seedCountIsEstimate && scanValues.seedCount ? " Seed count is an estimate." : ""}
+            {scanValues.notes ? ` ${scanValues.notes}` : ""}
+          </p>
+        )}
         <div className="flex flex-wrap gap-2">
-          <CropNameField key={resetToken} cropNames={cropNames} />
+          <AutocompleteTextField
+            key={resetToken}
+            name="cropName"
+            options={cropNames}
+            required
+            placeholder="What did you buy? e.g. Tomato, or something unusual"
+            className="min-w-[16rem] flex-1"
+            initialValue={scanValues?.cropName}
+          />
+          <AutocompleteTextField
+            key={`variety-${resetToken}`}
+            name="varietyName"
+            options={varietyNames}
+            placeholder="Variety, e.g. Moneymaker (optional)"
+            className="min-w-48 flex-1"
+            initialValue={scanValues?.varietyName}
+          />
           <input
+            key={`count-${resetToken}`}
             name="seedCount"
             type="number"
             required
@@ -181,6 +324,7 @@ export function SeedsView({
             max={100000}
             step={1}
             placeholder="How many seeds?"
+            defaultValue={scanValues?.seedCount}
             className="w-40 rounded-md border border-black/15 px-3 py-2 text-sm"
           />
         </div>
@@ -189,6 +333,12 @@ export function SeedsView({
           <p className="text-sm text-(--brand-primary)">
             {state.seed.cropEmoji} {state.seed.cropName} wasn&rsquo;t in our catalog — added it using an
             AI-estimated best guess at its growing facts.
+          </p>
+        )}
+        {state.seed?.varietyIsNew && (
+          <p className="text-sm text-(--brand-primary)">
+            {state.seed.varietyName} wasn&rsquo;t a variety we knew about for {state.seed.cropName} — added it
+            using an AI-estimated best guess too.
           </p>
         )}
         {remainingToday > 0 ? (

@@ -1,0 +1,1 @@
+ALTER TABLE "tasks" ADD COLUMN "seed_deduction_applied" boolean DEFAULT false NOT NULL;

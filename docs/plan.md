@@ -3521,3 +3521,244 @@ budget; disclosing this rather than claiming a live re-verification that didn't 
 Purslane's `sourceModel` stamp as `"gemini-3.5-flash"` rather than editing it after the fact — it
 accurately reflects what model actually generated that row, and rewriting history there would be
 misleading in the other direction. Confirmed no leftover test scripts.
+
+## Feature — crop varieties (e.g. "Moneymaker" for Tomato)
+
+Requested: "Can we introduce varieties for fruit and vegetables, like Moneymaker for tomatoes etc."
+Offered two designs — a lightweight free-text `variety` field with no catalog, versus a full
+relational model with its own AI-backfilled facts feeding into the grow planner's actual reasoning —
+and the user chose the full model ("it's more valuable long term"). This is the largest schema-
+touching change this session: a new global reference table plus five nullable FK columns threaded
+through both AI agents, both Inngest generation pipelines, the seed-deduction action, two UI pages,
+and the grow-plan grouping logic. Per this session's established practice for changes at this scale,
+drafted the full design and ran it through a Plan-agent review against the real code before
+implementing — the review confirmed the core schema/resolution design was sound but surfaced two
+genuine bugs that would have shipped broken, both fixed before/during implementation (detailed below),
+plus several smaller findings incorporated as explicit scope decisions.
+
+**Schema** (`src/db/schema/crop.ts`): new `crop_varieties` table — global/un-tenanted like `crops`
+itself (no `tenant_id`, no RLS; confirmed via the Plan review that `crops` genuinely has neither,
+verified against its own migration file, so mirroring it is safe and matches precedent exactly).
+`cropId` (FK to `crops`, cascade), `slug`+`name` (unique per `(cropId, slug)`, not globally — two
+different crops can each have their own "Moneymaker"-slugged variety without colliding), and nullable
+*override* fields for only the traits that genuinely vary by cultivar rather than the whole crop-facts
+shape: `daysToHarvestMin/Max`, `spacingCm` (compact/dwarf cultivars), `growthHabit` (free text, not an
+enum — what's meaningful varies by crop type), `diseaseResistanceNotes`, `characteristics` (a short
+"what's distinct" blurb), `estimatedRetailPricePerKgGbp` (heirloom premium). Null on any override means
+"same as the parent crop," never zero/unknown — resolved once wherever the AI-facing catalog is built,
+not re-derived ad hoc. Same `verified`/`sourceProvider`/`sourceModel` provenance stamping as `crops`.
+Nullable `varietyId` FKs (all `onDelete: "set null"`, deliberately not cascade — a variety row
+disappearing shouldn't take a user's real seed/task/harvest history with it) added to `seedInventory`,
+`planRecommendations`, `harvestLog`, and `tasks` (which also gained a second, purpose-built column —
+see the seed-deduction fix below). Two migrations (`0027_sparkling_morph.sql` for the main schema,
+`0028_shocking_wilson_fisk.sql` for a follow-up column found necessary mid-implementation), both plain
+additive, both applied cleanly.
+
+**New agent** `src/lib/ai/agents/varietyFacts.ts`, mirroring `cropFacts.ts`'s exact shape
+(`getVarietyFacts(tenantId, cropName, varietyName, parentCropFacts)`) — reuses the existing
+`"crop_facts"` tenant-config agent slot rather than adding a new one (the Plan review confirmed this
+is architecturally safe: the agent enum is purely a per-tenant model/key lookup, completely decoupled
+from the Zod schema passed to `generateObject`, so nothing else keys off the enum value). Prompt gives
+the parent crop's own species-level facts as context and asks the model to only fill an override field
+when the cultivar genuinely differs from that baseline — leave it null otherwise, so the dataset never
+manufactures false precision. Mock fallback (no live key): title-cased name, every override null (the
+always-safe answer, since a mock can't actually judge whether a cultivar differs from its species).
+
+**Resolution + dedupe**, mirroring the crop-resolution pattern fixed twice earlier this session
+(typed-slug fast path → AI call → re-slugify from the AI-*corrected* name → dedupe-check under the
+corrected slug → insert if still missing) at three call sites: `seeds.ts`'s `addSeedAction` (new
+optional "variety" input, resolved only after the crop itself resolves, scoped additionally by
+`cropId` since the unique constraint is per-crop not global), `generateGrowPlan.ts`'s
+`resolve-new-crops` step, and `regenerateRecommendation.ts`'s `resolve-new-crop` step.
+
+**Bug #1 caught by the Plan review — cross-recommendation grouping.** `grow-plan/page.tsx`'s
+`groupRecommendations` collapses recommendations sharing crop+area-type+size+status+regenerationCount
+into one card (e.g. "3 x 20cm pots of Spring Onion"). Without `variety` in that key, two sibling
+recommendations of the *same crop but different cultivars* (a Moneymaker tomato pot and a Gardener's
+Delight tomato pot, same size, same status) would silently merge into one card — hiding that they're
+different picks, blending their harvest windows, and — more seriously — a reject on the merged card
+flows into `regenerateRecommendationFn`, which applies **one** AI-picked replacement crop/variety
+uniformly across every instance in the group, discarding both distinct variety choices. Fixed by
+adding `variety.id` to the grouping key (mirroring the existing rationale for why `status`/
+`regenerationCount`/`isUnusualSuggestion` are already in it), threading a resolved `variety` object
+through the query/rows/group shape, folding the variety name into `groupHeading`, and adding a
+`varietyName` prop to `RegeneratingCard`.
+
+**Bug #2 caught by the Plan review — seed-restoration ambiguity, a genuine correctness bug (not just a
+missed case).** The seed-deduction feature (built two sessions ago) already had toggleTaskCompleteAction
+prefer variety-matched `seedInventory` stock over variety-agnostic stock, falling back when a task's
+variety had none. My first draft made un-completing re-run that same "prefer variety-matched, else
+agnostic" decision fresh — the review caught that this breaks the moment inventory changes between
+complete and un-complete: if a task fell back to the agnostic bucket (no Moneymaker stock existed yet)
+and the user later buys Moneymaker seeds before un-completing, a freshly-re-decided restore would find
+the *new* Moneymaker stock and wrongly credit it, permanently leaving the agnostic bucket short by
+seeds it never actually got back. Fixed by recording, at completion time, exactly which bucket was
+debited — but a single nullable `seedDeductionVarietyId` column turned out to be ambiguous on its own:
+`null` there means EITHER "debited from the agnostic bucket" OR "no deduction fired at all" (e.g. the
+crop had zero numeric stock in *either* bucket), and those two cases must be handled completely
+differently on restore (credit the agnostic bucket vs. credit nothing). Caught this while implementing
+the review's fix, not by the review itself — added a second column, `seedDeductionApplied: boolean`,
+specifically to disambiguate the two. Restoration now: if `seedDeductionApplied` is false, nothing to
+restore (the task was completed but never had matching stock); if true, credit back to exactly the
+bucket `seedDeductionVarietyId` recorded (null = agnostic, an id = that specific variety) — never a
+fresh preference decision.
+
+**growPlanner.ts / recommendationReplacement.ts**: `AvailableCrop` gained a nested `varieties[]` array
+(each override field pre-resolved to inherit the parent crop's value when null, computed once in the
+Inngest gather-context step, not in the prompt template or the mock). Recommendation schema gained
+`varietySlug`/`newVarietyName` (exact mirror of `cropSlug`/`newCropName`) — optional on every
+recommendation, with a new VARIETIES instruction telling the model to only pick a specific cultivar for
+a genuine reason (an owned seed's variety, a growth-habit fit, disease resistance, a well-established
+better choice), never to fill the field just because it exists. `ownedSeedCropSlugs: string[]` became
+`ownedSeeds: {cropSlug, varietySlug}[]` so "SEEDS ALREADY OWNED" can show `tomato (Moneymaker)` when
+known. Tasks deliberately do **not** carry their own variety field — a recommendation's variety choice
+applies uniformly to every task it produces, exactly like `cropId` already does, so it's inherited at
+persist time rather than asked of the AI redundantly per task. Both mock fallbacks updated to exercise
+the "pick an existing known variety" pathway once (for the first candidate that has one); proposing a
+*new* variety isn't mocked (no plausible cultivar name to hardcode for an arbitrary catalog crop) —
+verified live instead.
+
+**generateGrowPlan.ts / regenerateRecommendation.ts**: gather-context now fetches `crop_varieties`
+globally (same un-tenanted pattern as `crops`), builds the nested catalog, variety-aware owned-seeds
+list, and a `${cropSlug}|${varietySlug}` → id seed map mirroring `cropIdBySlug`. The resolve step folds
+crop-then-variety resolution into **one sequential step per recommendation** rather than two separate
+steps — the Plan review flagged a real ordering risk here: a variety can only be resolved against its
+crop's *final* id, and for a crop that's itself newly created in the same run, that id doesn't exist
+until the crop-resolution branch completes. Doing both within one sequential loop iteration (not
+`Promise.all`, not a separate step boundary) makes this ordering automatic rather than something that
+has to be coordinated across steps. Resolved `varietyId` is persisted on `planRecommendations` and
+propagated down to each recommendation's own tasks via the same `recommendationIndex →
+planRecommendationId` resolution tasks already use for `successionSeriesId`.
+
+**Deliberately out of scope, each an explicit decision** (per the Plan review's "missed entirely"
+findings): `shoppingListItems.varietyId` — the existing `groupShoppingItems` groups by crop only, and
+`weeklyShoppingList.ts`'s own crop-level matching is already-existing precedent for this granularity;
+adding variety would raise a genuinely ambiguous "do two cultivars of one crop group together" question
+nobody asked for. `partnerLinks` (admin/crops affiliate links) stays crop-level — a tenant admin
+wanting a "buy Moneymaker seeds here" link is a reasonable future ask, not this one. No admin UI for
+managing varieties (same organic AI-backfill bootstrap the crop catalog itself started with). No
+separate admin-AI line item/cost control for variety lookups specifically (they're folded into the
+existing "Crop facts lookup" `crop_facts` slot, invisible as a separate cost center — acceptable given
+the `crop_facts` model default already applies). `userFavoriteCrops` stays species-level (not asked
+for). `MAX_DAILY_SEED_ADDITIONS`'s comment updated to reflect that one add can now trigger up to two AI
+calls (crop + variety resolution) — cap value left at 10, not re-tuned.
+
+**UI**: `/seeds` gained a second optional autocomplete text field (variety name, same custom
+in-input-filtered-dropdown component as the crop-name field, generalized into a shared
+`AutocompleteTextField`), autocompleting against every `crop_varieties.name` globally (same
+not-scoped-to-the-typed-crop simplification the crop-name autocomplete already makes, since the crop
+field is itself unresolved free text). `/harvests`' crop `<select>` gained a dependent variety
+`<select>` (only ever picks from existing `crop_varieties` rows — no AI resolution in this flow, since
+harvest logging was already dropdown-based). `/grow-plan` cards show the variety name inline
+(`Tomato (Moneymaker)`) via the fixed `groupHeading`.
+
+**Verification**: `tsc --noEmit`/`eslint` clean across the whole project (not just touched files) after
+every step. Two direct-SQL replication test suites (server actions/agents can't be invoked from plain
+scripts): (1) variety resolution/dedupe — 12 assertions, confirming two differently-misspelled inputs
+for the same crop converge on one AI-corrected row, and confirming `crop_varieties`' uniqueness is
+correctly scoped per-crop (the same variety name under two different crops creates two independent
+rows, not a collision). (2) seed-deduction bucket-correctness — 10 assertions, specifically targeting
+the two scenarios the Plan review's finding described: variety-matched stock is preferred and restored
+symmetrically when present throughout; when a task falls back to the agnostic bucket and new
+variety-matched stock arrives before un-completing, restoration correctly credits the bucket that was
+*actually* debited (agnostic) and leaves the new variety stock untouched — the exact drift the fix
+targets; and when zero stock exists in either bucket at completion time, `seedDeductionApplied` stays
+false and a later un-complete doesn't phantom-credit stock that arrived after the fact. One test-design
+artifact along the way (a scenario reused a crop from an earlier scenario, so FIFO correctly hit an
+older leftover row instead of the one the assertion expected) was caught, diagnosed as a test bug not
+an implementation bug, fixed by isolating the scenario onto its own crop, and re-run clean.
+
+Also ran a real, live Inngest-triggered generation (Gemini, not mock) with a pre-seeded owned
+"Moneymaker" tomato variety to bias the model toward exercising the pathway live. The model didn't
+pick Tomato at all this run — it chose Spring Cabbage, Spinach, Winter Purslane, and Radish instead,
+correctly prioritizing seasonal fit over owned seeds (mid-August is past the UK tomato sowing window,
+so this was the right call, not a bug). This proved the full pipeline runs cleanly end-to-end with
+every new code path exercised (gather-context's variety-aware catalog/owned-seeds building, the folded
+resolve step, variety-aware persistence) and correctly resolves to null throughout when no variety is
+chosen, but didn't exercise the live AI variety-selection pathway itself — that's covered by the
+SQL-level resolution/dedupe test and code review instead, disclosed rather than claimed as live-proven.
+Synthetic test data (the pre-seeded variety + owned seed row) removed afterward; the real plan
+generated this run was left in place per this session's established practice (deleting a plan detaches
+the *previous* plan's growing-area claims too, since every generation unconditionally frees prior
+claims first). Confirmed no leftover test scripts.
+
+## Feature — AI seed packet scanner (photo → autofill /seeds)
+
+Requested: "Can we add another agent to identify the key information from a photo of a packet of
+seeds for the user to review and approve?" Offered two designs — a lightweight one-shot autofill of
+the existing `/seeds` add form vs. a full persistent proposal-review flow mirroring
+`growingAreaEstimation` — and the user picked the lightweight option, adding: "the onus isn't on the
+user to get that information," meaning the agent should do real work extracting fields (especially
+seed count, which packets don't always print an exact number for) rather than just reading whatever's
+plainly printed and leaving gaps for the user to fill in.
+
+Researched the two closest existing precedents before building (`plantHealth.ts`'s single-photo
+diagnosis flow, `growingAreaEstimation`'s multi-photo flow) to confirm the lightweight design was
+actually viable: both existing flows are Inngest-async specifically because they're durable review
+records with their own pages; a one-shot autofill has no such requirement — the photo only ever needs
+to become a `Buffer` for one `generateObject` call and can be discarded immediately after, no
+`PhotoStorage` upload needed at all. This meant the whole feature could be a single synchronous server
+action, not a new Inngest function/polling page/photo-storage integration.
+
+**New agent** `src/lib/ai/agents/seedPacketScanner.ts`, mirroring `growingAreaEstimator.ts`'s vision-
+call shape (single image, `generateObject` with a `{type:"file"}` message part, own mock fallback).
+Output: `cropName` (nullable — see the live-testing finding below), `varietyName` (nullable),
+`seedCount` (the field the "onus isn't on the user" instruction is really about — the prompt explicitly
+tells the model to convert a printed weight to an estimated count, or fall back to a typical-packet-
+size estimate, rather than leaving it blank whenever a field is merely not printed), `seedCountIsEstimate`
+(so the UI can honestly flag when a number is a guess vs. read directly off the packet), and `notes`
+(a place for any caveat, kept separate from the structured fields so it never contaminates them).
+
+**New agent slot** `"seed_packet_scanner"` added to `tenantAIConfigAgentEnum`, `DEFAULT_MODEL_BY_AGENT`
+(full vision tier `gemini-3.5-flash`, same tier as `growing_area_estimator`/`plant_health` — the lite
+tier used for `crop_facts` is text-only), and `admin/ai/page.tsx`'s `AGENT_LABELS`. Confirmed first
+(don't assume) that `tenant_ai_configs.agent` is plain `text` with the enum enforced only at the
+TypeScript level — no `CHECK` constraint, no Postgres enum type — so adding a new value here needed no
+migration at all, only the schema/provider/admin-label code changes.
+
+**Rate limiting**: a new minimal table, `seedPacketScans` (tenantId, userId, createdAt — no photo, no
+result columns, purely a counter row), backs `MAX_DAILY_SEED_PACKET_SCANS = 5` — the same "a cap needs
+a real row to count" convention every other AI-cost action in this app follows, kept deliberately
+separate from `MAX_DAILY_SEED_ADDITIONS` (scanning doesn't itself add inventory; only a subsequent form
+submit does, and that already has its own cap). Set in the same 3-5/day range as the other vision
+agents (`MAX_DAILY_PLANT_DIAGNOSES`, `MAX_DAILY_GROWING_AREA_ESTIMATIONS`) rather than
+`MAX_DAILY_SEED_ADDITIONS`' more generous allowance, since — unlike that action, where most real adds
+resolve to an existing crop for free — every single scan is a real vision call.
+
+**Action** `scanSeedPacketAction` (`src/lib/actions/seeds.ts`): validates the upload with the exact
+same `ALLOWED_IMAGE_TYPES`/`MAX_PHOTO_BYTES` checks `uploadAndDiagnoseAction` already uses, converts
+straight to a `Buffer`, calls the agent, inserts one counter row, and returns the extracted fields to
+the client — nothing else is persisted. A **real finding from live testing** (not theorized): the
+model, when shown a photo with no seed packet in it at all, correctly refused to invent a crop rather
+than hallucinating one — but since `cropName` was initially a *required* field, it had no honest way
+to express "there's nothing here," and stuffed an explanation string into that field instead
+(`"Not applicable (no seed packet visible)"`). Fixed by making `cropName` nullable with an explicit
+prompt instruction to use it that way and put any explanation in `notes` instead; `scanSeedPacketAction`
+now returns a normal error state when `cropName` comes back null, rather than passing a bad value
+through to the form. Re-tested live against the same photo and confirmed the fix: `cropName: null`,
+`notes` correctly explaining what was actually in frame.
+
+**UI** (`src/app/seeds/SeedsView.tsx`): a new "📷 Scan a seed packet" button (`capture="environment"`
+hints mobile browsers to open the camera directly, not a file picker, matching "photograph a packet
+you're holding") uploads immediately on file selection — no separate submit step. On success, the
+three form fields (crop name, variety name, seed count) are pre-filled and a banner explains they came
+from the photo and should be checked, including an "estimate, not printed" caveat when relevant. Since
+the crop-name/variety-name fields are already controlled (needed for their autocomplete dropdowns —
+see the earlier crop-varieties feature), pre-filling them from an async result required generalizing
+`AutocompleteTextField` to accept an `initialValue`, and extending the existing post-submit
+`resetToken` remount pattern to also fire after a successful scan (not just after a successful add),
+so all three fields — including the previously-uncontrolled seed-count `<input>`, which also needed a
+`key`+`defaultValue` — pick up the new values together. The user still submits through the exact same
+`addSeedAction` as manual entry; scanning only ever changes what's already in the fields when they
+submit.
+
+**Verification**: `tsc --noEmit`/`eslint` clean across the whole project. A direct-SQL replication test
+(3 assertions) confirmed the daily-cap counting and block-at-the-cap logic exactly mirrors
+`scanSeedPacketAction`'s real checks, run inside a rolled-back transaction with zero leftover rows
+(pre-confirmed the table was genuinely empty before the test, not just assumed). Two **real, live**
+Gemini vision calls (not mocked) against an existing real photo already in `public/uploads` from
+earlier `growingAreaEstimation` testing — explicitly not a real seed packet, disclosed as testing the
+vision-call/schema-validation *wiring*, not extraction *accuracy* (no seed packet photo was available
+to test against) — the first surfaced the `cropName`-nullability bug above, the second confirmed the
+fix. Extraction accuracy against a genuine seed packet photo remains unverified pending the user trying
+it with a real one. Confirmed no leftover test scripts.
