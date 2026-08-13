@@ -332,3 +332,39 @@ export async function deleteSeedAction(seedId: string): Promise<void> {
     await tx.delete(seedInventory).where(and(eq(seedInventory.id, seedId), eq(seedInventory.userId, userId)));
   });
 }
+
+const updateSeedCountSchema = z.coerce.number().int().min(0, "Enter how many seeds are left").max(100000);
+
+export type UpdateSeedCountResult = { error?: string; quantityLabel?: string };
+
+// Lets the user correct the running count themselves — e.g. after using some
+// seeds outside the app, or converting an onboarding row's vague "1 packet"
+// into a real number. Deliberately separate from toggleTaskCompleteAction's
+// own automatic deduction (src/lib/actions/tasks.ts): that's the grow
+// planner's estimate debiting stock as tasks are completed; this is the user
+// directly asserting what's actually left, which simply overwrites whatever
+// the running total currently is — no bucket/variety reconciliation needed,
+// since the user is stating the real number, not adjusting it incrementally.
+// 0 is a valid, meaningful value (matches the floor the automatic deduction
+// already clamps to) — not treated as "delete this row".
+export async function updateSeedCountAction(seedId: string, newCount: number): Promise<UpdateSeedCountResult> {
+  const parsed = updateSeedCountSchema.safeParse(newCount);
+  if (!parsed.success) {
+    return { error: parsed.error.issues[0]?.message ?? "Enter how many seeds are left." };
+  }
+
+  const { userId, tenantId } = await requireSessionAndTenant();
+  const quantityLabel = `${parsed.data} seed${parsed.data === 1 ? "" : "s"}`;
+  const updated = await withTenant(tenantId, async (tx) => {
+    return tx
+      .update(seedInventory)
+      .set({ seedCount: parsed.data, quantityLabel })
+      .where(and(eq(seedInventory.id, seedId), eq(seedInventory.userId, userId)))
+      .returning({ id: seedInventory.id });
+  });
+  if (updated.length === 0) {
+    return { error: "Couldn't find that seed entry." };
+  }
+
+  return { quantityLabel };
+}

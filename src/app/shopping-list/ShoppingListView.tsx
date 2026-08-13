@@ -127,7 +127,6 @@ export function ShoppingListView({
         )}
         {[...pendingGroups, ...purchasedGroups].map((group) => {
           const item = group.items[0];
-          const anyAi = group.items.some((i) => i.source === "ai");
           return (
             <div
               key={group.key}
@@ -143,11 +142,6 @@ export function ShoppingListView({
                 <span className={item.status === "purchased" ? "line-through text-(--text-muted)" : ""}>
                   {itemLabel(item)} · {group.quantitySummary}
                 </span>
-                {anyAi && (
-                  <span className="rounded-full bg-(--brand-secondary)/40 px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide">
-                    AI
-                  </span>
-                )}
               </label>
               {item.partnerLink && (
                 <a

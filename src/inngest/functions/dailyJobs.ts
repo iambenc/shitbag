@@ -1,10 +1,11 @@
-import { eq, and, lt, isNotNull } from "drizzle-orm";
+import { eq, and, lte, isNotNull } from "drizzle-orm";
 import { inngest } from "@/inngest/client";
 import { db } from "@/db/client";
 import { withTenant } from "@/lib/tenant/withTenant";
-import { tenants, userProfiles, tasks, taskRescheduleEvents, subscriptions } from "@/db/schema";
+import { tenants, userProfiles, tasks, taskRescheduleEvents, shoppingListItems, subscriptions } from "@/db/schema";
 import type { WeatherScenario } from "@/lib/weather";
-import { todayIso } from "@/lib/dates";
+import { todayIso, addDaysIso } from "@/lib/dates";
+import { getSeedStock } from "@/lib/seeds/stock";
 
 type DevRunJobsEvent = {
   name: "dev/run-jobs";
@@ -66,21 +67,70 @@ export const dailyJobsFn = inngest.createFunction(
       );
     }
 
+    // Broadened to dueDate <= today (not just strictly overdue) so a
+    // seed-gated sow task is checked the moment it becomes due, not one day
+    // late — a task due today that the user can't act on yet shouldn't sit
+    // there implying it's actionable. Per task, in priority order: (a) a
+    // passed hard deadline always wins and marks it missed, regardless of
+    // seed stock — that's an absolute AI-set cutoff, not something seed
+    // availability should override; (b) a seed-gated task due today or
+    // overdue with known-insufficient stock gets pushed to tomorrow instead
+    // of today, so it never falsely reads as "due now," plus a shopping-list
+    // nudge; unknown stock (onboarding-only rows with no numeric count) is
+    // never treated as insufficient, matching toggleTaskCompleteAction's own
+    // no-op-on-unknown-stock behavior; (c) anything else strictly overdue
+    // gets the original generic slip-to-today treatment. A task exactly due
+    // today that isn't seed-blocked hits none of these branches, unchanged.
     await step.run("task-slippage", async () => {
       const allTenants = await db.select().from(tenants);
       const today = todayIso();
+      const tomorrow = addDaysIso(1);
 
       for (const tenant of allTenants) {
         await withTenant(tenant.id, async (tx) => {
-          const overdue = await tx
+          const due = await tx
             .select()
             .from(tasks)
-            .where(and(eq(tasks.status, "pending"), lt(tasks.dueDate, today)));
+            .where(and(eq(tasks.status, "pending"), lte(tasks.dueDate, today)));
 
-          for (const task of overdue) {
-            if (task.hardDeadlineDate && task.hardDeadlineDate < today) {
+          for (const task of due) {
+            const isOverdue = task.dueDate < today;
+
+            if (isOverdue && task.hardDeadlineDate && task.hardDeadlineDate < today) {
               await tx.update(tasks).set({ status: "missed" }).where(eq(tasks.id, task.id));
-            } else {
+              continue;
+            }
+
+            if (task.cropId && task.estimatedSeedsUsed) {
+              const stock = await getSeedStock(tx, task.userId, task.cropId, task.varietyId);
+              if (stock.known && stock.total < task.estimatedSeedsUsed) {
+                await tx.insert(taskRescheduleEvents).values({
+                  tenantId: tenant.id,
+                  taskId: task.id,
+                  oldDueDate: task.dueDate,
+                  newDueDate: tomorrow,
+                  reason: "seeds",
+                });
+                await tx.update(tasks).set({ dueDate: tomorrow }).where(eq(tasks.id, task.id));
+
+                const [existingItem] = await tx
+                  .select({ id: shoppingListItems.id })
+                  .from(shoppingListItems)
+                  .where(and(eq(shoppingListItems.userId, task.userId), eq(shoppingListItems.cropId, task.cropId)));
+                if (!existingItem) {
+                  await tx.insert(shoppingListItems).values({
+                    tenantId: tenant.id,
+                    userId: task.userId,
+                    cropId: task.cropId,
+                    quantityLabel: "1 packet",
+                    source: "ai" as const,
+                  });
+                }
+                continue;
+              }
+            }
+
+            if (isOverdue) {
               await tx.insert(taskRescheduleEvents).values({
                 tenantId: tenant.id,
                 taskId: task.id,

@@ -6,10 +6,12 @@ import {
   addSeedAction,
   deleteSeedAction,
   scanSeedPacketAction,
+  updateSeedCountAction,
   type AddSeedState,
   type SeedPacketScanClientResult,
 } from "@/lib/actions/seeds";
 import { LeafAccent } from "@/components/LeafAccent";
+import { LoadingInterstitial } from "@/components/LoadingInterstitial";
 
 const MAX_SUGGESTIONS = 8;
 
@@ -157,6 +159,7 @@ function ScanPacketButton({
 
   return (
     <div className="flex flex-col gap-1">
+      {pending && <LoadingInterstitial message="Reading your seed packet…" />}
       <input
         ref={inputRef}
         id="seed-packet-photo"
@@ -181,13 +184,106 @@ function ScanPacketButton({
   );
 }
 
+// Click-to-edit quantity, inline in the row rather than a separate form —
+// this is a quick correction (used some seeds outside the app, or turning
+// an onboarding row's vague "1 packet" into a real count), not a full
+// re-add. 0 is a valid, submittable value (see updateSeedCountAction's own
+// comment on why it isn't treated as "delete this row").
+function EditableQuantity({
+  seedId,
+  quantityLabel,
+  seedCount,
+  onUpdated,
+}: {
+  seedId: string;
+  quantityLabel: string;
+  seedCount: number | null;
+  onUpdated: (quantityLabel: string, seedCount: number) => void;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [value, setValue] = useState(seedCount != null ? String(seedCount) : "");
+  const [pending, setPending] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  function cancel() {
+    setEditing(false);
+    setValue(seedCount != null ? String(seedCount) : "");
+    setError(null);
+  }
+
+  async function save() {
+    const parsedValue = Number(value);
+    setPending(true);
+    setError(null);
+    const result = await updateSeedCountAction(seedId, parsedValue);
+    setPending(false);
+    if (result.error) {
+      setError(result.error);
+      return;
+    }
+    if (result.quantityLabel) {
+      onUpdated(result.quantityLabel, parsedValue);
+      setEditing(false);
+    }
+  }
+
+  if (!editing) {
+    return (
+      <button
+        type="button"
+        onClick={() => setEditing(true)}
+        className="underline decoration-dotted underline-offset-2 hover:text-(--brand-primary)"
+        aria-label={`Edit quantity: ${quantityLabel}`}
+      >
+        {quantityLabel}
+      </button>
+    );
+  }
+
+  return (
+    <span className="inline-flex items-center gap-1 align-middle">
+      <input
+        type="number"
+        min={0}
+        max={100000}
+        step={1}
+        autoFocus
+        value={value}
+        onChange={(e) => setValue(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === "Enter") {
+            e.preventDefault();
+            save();
+          } else if (e.key === "Escape") {
+            cancel();
+          }
+        }}
+        className="w-20 rounded-md border border-black/15 px-2 py-0.5 text-sm"
+      />
+      <button
+        type="button"
+        onClick={save}
+        disabled={pending}
+        className="text-xs text-(--brand-primary) underline disabled:opacity-60"
+      >
+        {pending ? "Saving…" : "Save"}
+      </button>
+      <button type="button" onClick={cancel} className="text-xs text-(--text-muted) underline">
+        Cancel
+      </button>
+      {error && <span className="text-xs text-red-700">{error}</span>}
+    </span>
+  );
+}
+
 type Seed = {
   id: string;
   cropName: string;
   cropEmoji: string;
   varietyName: string | null;
   quantityLabel: string;
-  source: "onboarding" | "purchased";
+  seedCount: number | null;
+  source: "onboarding" | "purchased" | "shopping_list";
 };
 
 type ScanValues = {
@@ -232,6 +328,7 @@ export function SeedsView({
           cropEmoji: result.seed!.cropEmoji,
           varietyName: result.seed!.varietyName,
           quantityLabel: result.seed!.quantityLabel,
+          seedCount: result.seed!.seedCount,
           source: "purchased",
         },
         ...ss,
@@ -245,6 +342,10 @@ export function SeedsView({
   async function handleDelete(id: string) {
     setList((ss) => ss.filter((s) => s.id !== id));
     await deleteSeedAction(id);
+  }
+
+  function handleQuantityUpdated(id: string, quantityLabel: string, seedCount: number) {
+    setList((ss) => ss.map((s) => (s.id === id ? { ...s, quantityLabel, seedCount } : s)));
   }
 
   function handleScanned(scan: SeedPacketScanClientResult) {
@@ -274,7 +375,13 @@ export function SeedsView({
           >
             <span className="text-sm">
               {seed.cropEmoji} {seed.cropName}
-              {seed.varietyName ? ` (${seed.varietyName})` : ""} · {seed.quantityLabel}
+              {seed.varietyName ? ` (${seed.varietyName})` : ""} ·{" "}
+              <EditableQuantity
+                seedId={seed.id}
+                quantityLabel={seed.quantityLabel}
+                seedCount={seed.seedCount}
+                onUpdated={(quantityLabel, seedCount) => handleQuantityUpdated(seed.id, quantityLabel, seedCount)}
+              />
             </span>
             <button
               type="button"

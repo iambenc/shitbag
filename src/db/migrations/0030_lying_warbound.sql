@@ -1,0 +1,2 @@
+ALTER TABLE "shopping_list_items" ADD COLUMN "seed_inventory_id" uuid;--> statement-breakpoint
+ALTER TABLE "shopping_list_items" ADD CONSTRAINT "shopping_list_items_seed_inventory_id_seed_inventory_id_fk" FOREIGN KEY ("seed_inventory_id") REFERENCES "public"."seed_inventory"("id") ON DELETE set null ON UPDATE no action;

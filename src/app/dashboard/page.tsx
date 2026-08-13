@@ -3,7 +3,9 @@ import Link from "next/link";
 import { eq, and, desc, asc } from "drizzle-orm";
 import { auth } from "@/lib/auth";
 import { withTenant } from "@/lib/tenant/withTenant";
-import { userFavoriteCrops, tasks, shoppingListItems, crops, equipmentTypes, plantDiagnoses } from "@/db/schema";
+import { userFavoriteCrops, tasks, shoppingListItems, crops, equipmentTypes, plantDiagnoses, seedInventory } from "@/db/schema";
+import { resolveSeedStock, type SeedStockRow } from "@/lib/seeds/stock";
+import { todayIso } from "@/lib/dates";
 import { getCurrentTenant } from "@/lib/tenant/resolve";
 import { getUserProfile } from "@/lib/onboarding/profile";
 import { plotSizeLabels, expertiseLevelLabels } from "@/lib/onboarding/labels";
@@ -100,9 +102,9 @@ export default async function DashboardPage() {
       ? getWeeklyForecast(profile.latitude, profile.longitude)
       : Promise.resolve(null);
 
-  const [{ favoriteCount, allTasks, shoppingItems, latestDiagnosis }, weeklyForecast] = await Promise.all([
+  const [{ favoriteCount, allTasks, shoppingItems, latestDiagnosis, seedRows }, weeklyForecast] = await Promise.all([
     withTenant(tenant.id, async (tx) => {
-      const [favorites, allTasks, shoppingItems, diagnoses] = await Promise.all([
+      const [favorites, allTasks, shoppingItems, diagnoses, seedRows] = await Promise.all([
         tx
           .select({ liked: userFavoriteCrops.liked })
           .from(userFavoriteCrops)
@@ -122,17 +124,38 @@ export default async function DashboardPage() {
           .where(eq(plantDiagnoses.userId, session.user.id))
           .orderBy(desc(plantDiagnoses.createdAt))
           .limit(1),
+        tx
+          .select({ cropId: seedInventory.cropId, varietyId: seedInventory.varietyId, seedCount: seedInventory.seedCount })
+          .from(seedInventory)
+          .where(eq(seedInventory.userId, session.user.id)),
       ]);
       return {
         favoriteCount: favorites.filter((r) => r.liked).length,
         allTasks,
         shoppingItems,
         latestDiagnosis: diagnoses[0] ?? null,
+        seedRows,
       };
     }),
     forecastPromise,
   ]);
   const paid = isPaidTier(await getSubscription(session.user.id, tenant.id));
+
+  // Same batched-once approach as /calendar's page — see its comment for why
+  // this mustn't be recomputed per-task or diverge from the daily push-back
+  // job's own tri-state stock semantics.
+  const seedRowsByCrop = new Map<string, SeedStockRow[]>();
+  for (const row of seedRows) {
+    const list = seedRowsByCrop.get(row.cropId) ?? [];
+    list.push({ varietyId: row.varietyId, seedCount: row.seedCount });
+    seedRowsByCrop.set(row.cropId, list);
+  }
+  const today = todayIso();
+  function isSeedBlocked(t: (typeof allTasks)[number]): boolean {
+    if (t.status !== "pending" || !t.cropId || !t.estimatedSeedsUsed || t.dueDate > today) return false;
+    const stock = resolveSeedStock(seedRowsByCrop.get(t.cropId) ?? [], t.varietyId);
+    return stock.known && stock.total < t.estimatedSeedsUsed;
+  }
 
   // Same combining behavior as the full /shopping-list page — see
   // src/lib/shopping/grouping.ts. Grouped from the already-limit(6)'d raw
@@ -222,6 +245,7 @@ export default async function DashboardPage() {
                   source: t.source,
                   isIndoor: t.isIndoor,
                   successionSeriesId: t.successionSeriesId,
+                  seedBlocked: isSeedBlocked(t),
                 }))}
               />
             </div>

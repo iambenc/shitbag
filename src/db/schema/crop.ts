@@ -119,7 +119,13 @@ export const userFavoriteCrops = pgTable(
   ],
 ).enableRLS();
 
-export const seedSourceEnum = ["onboarding", "purchased"] as const;
+// "shopping_list" is distinct from "purchased" deliberately — the latter is
+// counted by getSeedAdditionsToday to cap addSeedAction's own AI-cost
+// exposure (an unrecognized crop/variety name triggers real AI calls); a
+// shopping-list confirmation never calls AI at all (its cropId is already
+// resolved), so folding it into "purchased" would falsely eat into that
+// unrelated daily cap.
+export const seedSourceEnum = ["onboarding", "purchased", "shopping_list"] as const;
 export type SeedSource = (typeof seedSourceEnum)[number];
 
 export const seedInventory = pgTable(

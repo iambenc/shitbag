@@ -59,6 +59,7 @@ export default async function SeedsPage() {
             cropEmoji: r.crop.emoji,
             varietyName: r.variety?.name ?? null,
             quantityLabel: r.seed.quantityLabel,
+            seedCount: r.seed.seedCount,
             source: r.seed.source,
           }))}
           remainingToday={remainingToday}

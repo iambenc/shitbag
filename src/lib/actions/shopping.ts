@@ -3,7 +3,7 @@
 import { z } from "zod";
 import { eq, and, inArray } from "drizzle-orm";
 import { withTenant } from "@/lib/tenant/withTenant";
-import { shoppingListItems } from "@/db/schema";
+import { shoppingListItems, seedInventory } from "@/db/schema";
 import { requireSessionAndTenant } from "@/lib/actions/shared";
 
 const addItemSchema = z
@@ -75,14 +75,49 @@ export async function addShoppingItemAction(
 // groupItems()) so checking off one merged "order" checks off every
 // underlying row it represents, not just the first — same
 // array-of-ids-in-one-scoped-update shape as rejectRecommendationAction.
+//
+// Confirming a crop item as purchased also adds it to the seed inventory —
+// the whole point of buying seeds off this list. Deliberately one-way: un-
+// checking a mis-click flips status back to "pending" but never removes the
+// seed-inventory row it created (you didn't un-buy the seeds; nothing this
+// codebase does elsewhere destroys owned seed-inventory data on a status
+// change either). seedInventoryId is the idempotency guard — toggling
+// purchased → pending → purchased again must not insert a second row for
+// the same real-world purchase. Equipment and free-text items are
+// unaffected (only cropId-bearing rows can map to a seed).
 export async function toggleShoppingItemAction(itemIds: string[], purchased: boolean): Promise<void> {
   if (itemIds.length === 0) return;
   const { userId, tenantId } = await requireSessionAndTenant();
   await withTenant(tenantId, async (tx) => {
-    await tx
+    const updated = await tx
       .update(shoppingListItems)
       .set({ status: purchased ? "purchased" : "pending" })
-      .where(and(inArray(shoppingListItems.id, itemIds), eq(shoppingListItems.userId, userId)));
+      .where(and(inArray(shoppingListItems.id, itemIds), eq(shoppingListItems.userId, userId)))
+      .returning({
+        id: shoppingListItems.id,
+        cropId: shoppingListItems.cropId,
+        seedInventoryId: shoppingListItems.seedInventoryId,
+        quantityLabel: shoppingListItems.quantityLabel,
+      });
+    if (!purchased) return;
+
+    for (const item of updated) {
+      if (!item.cropId || item.seedInventoryId) continue;
+      const [seed] = await tx
+        .insert(seedInventory)
+        .values({
+          tenantId,
+          userId,
+          cropId: item.cropId,
+          quantityLabel: item.quantityLabel,
+          // Not "purchased" — see seedSourceEnum's comment: that value is
+          // counted toward addSeedAction's AI-cost daily cap, which this
+          // path never triggers.
+          source: "shopping_list",
+        })
+        .returning({ id: seedInventory.id });
+      await tx.update(shoppingListItems).set({ seedInventoryId: seed.id }).where(eq(shoppingListItems.id, item.id));
+    }
   });
 }
 

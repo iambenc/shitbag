@@ -2,7 +2,7 @@ import { pgTable, uuid, text, timestamp, check } from "drizzle-orm/pg-core";
 import { sql } from "drizzle-orm";
 import { tenants } from "./tenant";
 import { users } from "./user";
-import { crops } from "./crop";
+import { crops, seedInventory } from "./crop";
 import { equipmentTypes } from "./equipment";
 import { tenantIsolationPolicy } from "./_rls";
 
@@ -30,6 +30,14 @@ export const shoppingListItems = pgTable(
     quantityLabel: text("quantity_label").notNull(),
     status: text("status", { enum: shoppingItemStatusEnum }).notNull().default("pending"),
     source: text("source", { enum: shoppingItemSourceEnum }).notNull().default("manual"),
+    // Set the first time this item is confirmed purchased and it's a crop
+    // (toggleShoppingItemAction inserts a seedInventory row and links back
+    // here) — both an idempotency guard (toggling purchased on/off/on again
+    // must not insert a second row) and a record of what that confirmation
+    // produced. "set null" not "cascade": deleting the seed-inventory row
+    // later (e.g. the user removes it from /seeds) shouldn't take this
+    // already-purchased shopping item with it.
+    seedInventoryId: uuid("seed_inventory_id").references(() => seedInventory.id, { onDelete: "set null" }),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (table) => [

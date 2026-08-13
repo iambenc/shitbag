@@ -7,8 +7,16 @@ const initialState: ActionState = {};
 
 type Crop = { id: string; slug: string; name: string; emoji: string };
 type PartnerLink = { id: string; cropId: string; label: string; url: string };
+export type Variety = {
+  id: string;
+  name: string;
+  growthHabit: string | null;
+  diseaseResistanceNotes: string | null;
+  characteristics: string | null;
+  verified: boolean;
+};
 
-export function CropLinkRow({ crop, links }: { crop: Crop; links: PartnerLink[] }) {
+export function CropLinkRow({ crop, links, varieties }: { crop: Crop; links: PartnerLink[]; varieties: Variety[] }) {
   const [linkState, linkAction, linkPending] = useActionState(createCropPartnerLinkAction, initialState);
 
   return (
@@ -16,6 +24,40 @@ export function CropLinkRow({ crop, links }: { crop: Crop; links: PartnerLink[] 
       <p className="font-medium">
         {crop.emoji} {crop.name} <span className="text-xs text-(--text-muted)">({crop.slug})</span>
       </p>
+
+      {/* Read-only: same "the shared catalog can't be edited here" boundary
+          the page's own intro copy already draws for crops themselves —
+          varieties are the same shared, cross-tenant table (see
+          crop_varieties' own schema comment), populated organically via user
+          input / AI backfill / the curated seed data, not managed from this
+          admin page. */}
+      <div className="mt-3 border-t border-black/10 pt-3">
+        <p className="text-xs font-medium text-(--text-muted)">Varieties ({varieties.length})</p>
+        {varieties.length === 0 ? (
+          <p className="mt-2 text-sm text-(--text-muted)">None recorded yet.</p>
+        ) : (
+          <ul className="mt-2 flex flex-col gap-1.5">
+            {varieties.map((v) => (
+              <li key={v.id} className="text-sm">
+                <span className="font-medium">{v.name}</span>
+                {!v.verified && (
+                  <span
+                    className="ml-2 rounded-full bg-(--color-terracotta)/15 px-2 py-0.5 text-xs text-(--color-terracotta)"
+                    title="Added by AI and hasn't been reviewed yet."
+                  >
+                    Unverified
+                  </span>
+                )}
+                {(v.growthHabit || v.diseaseResistanceNotes || v.characteristics) && (
+                  <p className="text-xs text-(--text-muted)">
+                    {[v.growthHabit, v.diseaseResistanceNotes, v.characteristics].filter(Boolean).join(" — ")}
+                  </p>
+                )}
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
 
       <div className="mt-3 border-t border-black/10 pt-3">
         <p className="text-xs font-medium text-(--text-muted)">Partner links</p>

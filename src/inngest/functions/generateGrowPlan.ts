@@ -23,6 +23,7 @@ import { generateGrowPlan, type GrowPlannerInput } from "@/lib/ai/agents/growPla
 import { getCropFacts } from "@/lib/ai/agents/cropFacts";
 import { getVarietyFacts, type ParentCropFacts } from "@/lib/ai/agents/varietyFacts";
 import { PURCHASABLE_GROWING_SPACE_SLUGS, SLUG_TO_GROWING_AREA_TYPE } from "@/lib/garden/equipmentMapping";
+import { getSeedStock } from "@/lib/seeds/stock";
 
 function slugify(value: string): string {
   return value
@@ -514,59 +515,58 @@ export const generateGrowPlanFn = inngest.createFunction(
           }
 
           const validTasks = result.output.tasks.filter((t) => t.dueDate);
-          if (validTasks.length > 0) {
-            // First succession-resow task seen for a given (real, resolved)
-            // recommendation generates the group's id; every later resow for
-            // that same recommendation reuses it. Keyed by the resolved
-            // planRecommendationId, not recommendationIndex directly, so a
-            // task whose owning recommendation didn't survive validation
-            // above naturally gets no series (can't reliably group an
-            // orphaned task).
-            const successionSeriesIdByRecommendationId = new Map<string, string>();
-            await tx.insert(tasks).values(
-              validTasks.map((t) => {
-                const planRecommendationId = recommendationIdByOriginalIndex.get(t.recommendationIndex) ?? null;
-                let successionSeriesId: string | null = null;
-                if (t.isSuccessionResow && planRecommendationId) {
-                  successionSeriesId = successionSeriesIdByRecommendationId.get(planRecommendationId) ?? null;
-                  if (!successionSeriesId) {
-                    successionSeriesId = randomUUID();
-                    successionSeriesIdByRecommendationId.set(planRecommendationId, successionSeriesId);
-                  }
-                }
-                return {
-                  tenantId,
-                  userId,
-                  title: t.title,
-                  notes: t.explanation,
-                  dueDate: t.dueDate,
-                  hardDeadlineDate: t.hardDeadlineDate,
-                  // Lets the Phase 6 weekly shopping-list job find "the sow
-                  // task for this crop" without a separate link table.
-                  cropId: t.cropSlug ? (cropIdBySlug[t.cropSlug] ?? null) : null,
-                  // Which specific recommendation this task belongs to —
-                  // needed for reject cleanup (regenerateRecommendation.ts
-                  // matches on this) and for succession-series grouping
-                  // above; previously always left null here, which silently
-                  // broke reject cleanup for any never-yet-regenerated
-                  // recommendation's tasks.
-                  planRecommendationId,
-                  // Inherited from the owning recommendation's own resolved
-                  // variety — never asked of the AI per-task.
-                  varietyId: planRecommendationId ? (varietyIdByRecommendationId.get(planRecommendationId) ?? null) : null,
-                  successionSeriesId,
-                  estimatedSeedsUsed: t.estimatedSeedsUsed,
-                  // Completing this task releases the preceding stage's area
-                  // and claims this one — see toggleTaskCompleteAction. Left
-                  // null if the AI referenced an area that didn't survive
-                  // validation above, same silent-drop tolerance as everywhere
-                  // else in this function.
-                  activatesStageId: t.activatesGrowingAreaId ? (stageIdByAreaId.get(t.activatesGrowingAreaId) ?? null) : null,
-                  isIndoor: t.isIndoor,
-                  source: "ai" as const,
-                };
-              }),
-            );
+          // First succession-resow task seen for a given (real, resolved)
+          // recommendation generates the group's id; every later resow for
+          // that same recommendation reuses it. Keyed by the resolved
+          // planRecommendationId, not recommendationIndex directly, so a
+          // task whose owning recommendation didn't survive validation
+          // above naturally gets no series (can't reliably group an
+          // orphaned task).
+          const successionSeriesIdByRecommendationId = new Map<string, string>();
+          const taskRows = validTasks.map((t) => {
+            const planRecommendationId = recommendationIdByOriginalIndex.get(t.recommendationIndex) ?? null;
+            let successionSeriesId: string | null = null;
+            if (t.isSuccessionResow && planRecommendationId) {
+              successionSeriesId = successionSeriesIdByRecommendationId.get(planRecommendationId) ?? null;
+              if (!successionSeriesId) {
+                successionSeriesId = randomUUID();
+                successionSeriesIdByRecommendationId.set(planRecommendationId, successionSeriesId);
+              }
+            }
+            return {
+              tenantId,
+              userId,
+              title: t.title,
+              notes: t.explanation,
+              dueDate: t.dueDate,
+              hardDeadlineDate: t.hardDeadlineDate,
+              // Lets the Phase 6 weekly shopping-list job find "the sow
+              // task for this crop" without a separate link table.
+              cropId: t.cropSlug ? (cropIdBySlug[t.cropSlug] ?? null) : null,
+              // Which specific recommendation this task belongs to —
+              // needed for reject cleanup (regenerateRecommendation.ts
+              // matches on this) and for succession-series grouping
+              // above; previously always left null here, which silently
+              // broke reject cleanup for any never-yet-regenerated
+              // recommendation's tasks.
+              planRecommendationId,
+              // Inherited from the owning recommendation's own resolved
+              // variety — never asked of the AI per-task.
+              varietyId: planRecommendationId ? (varietyIdByRecommendationId.get(planRecommendationId) ?? null) : null,
+              successionSeriesId,
+              estimatedSeedsUsed: t.estimatedSeedsUsed,
+              // Completing this task releases the preceding stage's area
+              // and claims this one — see toggleTaskCompleteAction. Left
+              // null if the AI referenced an area that didn't survive
+              // validation above, same silent-drop tolerance as everywhere
+              // else in this function.
+              activatesStageId: t.activatesGrowingAreaId ? (stageIdByAreaId.get(t.activatesGrowingAreaId) ?? null) : null,
+              isIndoor: t.isIndoor,
+              source: "ai" as const,
+            };
+          });
+          if (taskRows.length > 0) {
+            await tx.insert(tasks).values(taskRows);
           }
 
           // Add shopping-list items immediately rather than waiting on the
@@ -575,30 +575,53 @@ export const generateGrowPlanFn = inngest.createFunction(
           // this existed, not the primary path). Both inserts below land in
           // this same transaction, so the weekly job can never observe a
           // recommendation without also observing its shopping-list item.
-          const cropsNeedingPurchase = validRecommendations.filter(({ r }) => r.requiresPurchase);
-          if (cropsNeedingPurchase.length > 0) {
+          //
+          // Two independent signals feed this, unioned together: the AI's
+          // own presence-based requiresPurchase flag (crop owned at all?),
+          // and a code-computed quantity check — sum each (cropId, varietyId)
+          // pair's estimatedSeedsUsed across every sow/resow task in this
+          // plan and compare against actual stock via getSeedStock (the same
+          // tri-state helper the daily push-back job uses). A crop the user
+          // owns *some* seeds of can still fall short once the real
+          // per-sowing estimate is known — e.g. three succession batches of
+          // Carrot each needing ~15 seeds against a packet with 20 left —
+          // and requiresPurchase alone (AI-guessed at prompt time, before
+          // estimatedSeedsUsed exists) can't catch that. Unknown stock
+          // (onboarding-only rows with no numeric count) is never treated as
+          // a shortfall, matching the same tri-state convention used
+          // everywhere else this session.
+          const seedsNeededByCropVariety = new Map<string, number>();
+          for (const t of taskRows) {
+            if (!t.cropId || !t.estimatedSeedsUsed) continue;
+            const key = `${t.cropId}|${t.varietyId ?? ""}`;
+            seedsNeededByCropVariety.set(key, (seedsNeededByCropVariety.get(key) ?? 0) + t.estimatedSeedsUsed);
+          }
+          const quantityShortfallCropIds = new Set<string>();
+          for (const [key, needed] of seedsNeededByCropVariety) {
+            const separatorIndex = key.indexOf("|");
+            const cropId = key.slice(0, separatorIndex);
+            const varietyId = key.slice(separatorIndex + 1) || null;
+            const stock = await getSeedStock(tx, userId, cropId, varietyId);
+            if (stock.known && stock.total < needed) quantityShortfallCropIds.add(cropId);
+          }
+
+          const cropIdsNeedingPurchase = new Set<string>(quantityShortfallCropIds);
+          for (const { r } of validRecommendations) {
+            if (r.requiresPurchase) cropIdsNeedingPurchase.add(cropIdBySlug[r.cropSlug]);
+          }
+          if (cropIdsNeedingPurchase.size > 0) {
             const existingCropItems = await tx
               .select({ cropId: shoppingListItems.cropId })
               .from(shoppingListItems)
-              .where(
-                and(
-                  eq(shoppingListItems.userId, userId),
-                  inArray(
-                    shoppingListItems.cropId,
-                    cropsNeedingPurchase.map(({ r }) => cropIdBySlug[r.cropSlug]),
-                  ),
-                ),
-              );
+              .where(and(eq(shoppingListItems.userId, userId), inArray(shoppingListItems.cropId, [...cropIdsNeedingPurchase])));
             const alreadyListedCropIds = new Set(existingCropItems.map((i) => i.cropId));
-            const newCropItems = cropsNeedingPurchase.filter(
-              ({ r }) => !alreadyListedCropIds.has(cropIdBySlug[r.cropSlug]),
-            );
-            if (newCropItems.length > 0) {
+            const newCropIds = [...cropIdsNeedingPurchase].filter((id) => !alreadyListedCropIds.has(id));
+            if (newCropIds.length > 0) {
               await tx.insert(shoppingListItems).values(
-                newCropItems.map(({ r }) => ({
+                newCropIds.map((cropId) => ({
                   tenantId,
                   userId,
-                  cropId: cropIdBySlug[r.cropSlug],
+                  cropId,
                   quantityLabel: "1 packet",
                   source: "ai" as const,
                 })),

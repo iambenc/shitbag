@@ -2,8 +2,9 @@ import { config } from "dotenv";
 import { drizzle } from "drizzle-orm/postgres-js";
 import postgres from "postgres";
 import { eq } from "drizzle-orm";
-import { tenants, tenantPlans, crops, equipmentTypes, partnerLinks } from "./schema";
+import { tenants, tenantPlans, crops, cropVarieties, equipmentTypes, partnerLinks } from "./schema";
 import { cropSeeds } from "./seed-data/crops";
+import { cropVarietySeeds } from "./seed-data/crop-varieties";
 import { equipmentTypeSeeds } from "./seed-data/equipment";
 
 config({ path: ".env.local" });
@@ -51,6 +52,44 @@ async function main() {
     await db.insert(crops).values(newCrops);
   }
 
+  // crop_varieties' uniqueness is per-crop (cropId, slug), not global — see
+  // its own schema comment — so "already exists" has to be checked as a
+  // cropId+slug pair, not slug alone (unlike crops.slug, which is globally
+  // unique). Resolves cropSlug against the FULL current crop list (not just
+  // newCrops above), since a variety can reference a crop that already
+  // existed before this run.
+  const allCrops = await db.select({ id: crops.id, slug: crops.slug }).from(crops);
+  const cropIdBySlug = new Map(allCrops.map((c) => [c.slug, c.id]));
+  const existingVarieties = await db.select({ cropId: cropVarieties.cropId, slug: cropVarieties.slug }).from(cropVarieties);
+  const existingVarietyKeys = new Set(existingVarieties.map((v) => `${v.cropId}|${v.slug}`));
+  const newVarieties = cropVarietySeeds
+    .map((v) => {
+      const cropId = cropIdBySlug.get(v.cropSlug);
+      if (!cropId) {
+        console.warn(`Skipping variety seed "${v.slug}" — unknown crop slug "${v.cropSlug}"`);
+        return null;
+      }
+      return { ...v, cropId };
+    })
+    .filter((v): v is NonNullable<typeof v> => v !== null)
+    .filter((v) => !existingVarietyKeys.has(`${v.cropId}|${v.slug}`));
+  if (newVarieties.length > 0) {
+    await db.insert(cropVarieties).values(
+      newVarieties.map((v) => ({
+        cropId: v.cropId,
+        slug: v.slug,
+        name: v.name,
+        daysToHarvestMin: v.daysToHarvestMin,
+        daysToHarvestMax: v.daysToHarvestMax,
+        spacingCm: v.spacingCm,
+        growthHabit: v.growthHabit,
+        diseaseResistanceNotes: v.diseaseResistanceNotes,
+        characteristics: v.characteristics,
+        estimatedRetailPricePerKgGbp: v.estimatedRetailPricePerKgGbp,
+      })),
+    );
+  }
+
   const existingTypes = await db
     .select({ slug: equipmentTypes.slug })
     .from(equipmentTypes)
@@ -79,7 +118,7 @@ async function main() {
   }
 
   console.log(
-    `Seeded platform tenant "edurnity" (${tenant.id}) — ${newCrops.length} new crops, ${newTypeCount} new equipment types`,
+    `Seeded platform tenant "edurnity" (${tenant.id}) — ${newCrops.length} new crops, ${newVarieties.length} new crop varieties, ${newTypeCount} new equipment types`,
   );
   await sql.end();
 }

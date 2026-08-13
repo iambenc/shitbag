@@ -23,6 +23,7 @@ import {
 } from "@/lib/ai/agents/recommendationReplacement";
 import { getCropFacts } from "@/lib/ai/agents/cropFacts";
 import { getVarietyFacts, type ParentCropFacts } from "@/lib/ai/agents/varietyFacts";
+import { getSeedStock } from "@/lib/seeds/stock";
 
 function slugify(value: string): string {
   return value
@@ -435,7 +436,23 @@ export const regenerateRecommendationFn = inngest.createFunction(
             );
           }
 
-          if (result.output.requiresPurchase) {
+          // Two independent signals, unioned — see generateGrowPlan.ts's
+          // persist step for the full rationale. requiresPurchase is the
+          // AI's own presence-based guess; the quantity check sums this
+          // replacement's estimatedSeedsUsed across every instance (each
+          // instance gets the full task set duplicated, so the real total
+          // need is per-instance need × instance count) and compares against
+          // actual stock, catching a crop the user owns *some* seeds of but
+          // not enough for what this replacement actually needs.
+          const perInstanceSeedsNeeded = validTasks.reduce((sum, t) => sum + (t.estimatedSeedsUsed ?? 0), 0);
+          const totalSeedsNeeded = perInstanceSeedsNeeded * instances.length;
+          let quantityShortfall = false;
+          if (totalSeedsNeeded > 0) {
+            const stock = await getSeedStock(tx, userId, replacementCropId, replacementVarietyId);
+            quantityShortfall = stock.known && stock.total < totalSeedsNeeded;
+          }
+
+          if (result.output.requiresPurchase || quantityShortfall) {
             const [existingItem] = await tx
               .select({ id: shoppingListItems.id })
               .from(shoppingListItems)

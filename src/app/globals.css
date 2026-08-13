@@ -46,9 +46,11 @@
   outline-offset: 2px;
 }
 
-/* Gentle "still growing" pulse for the job interstitial (JobInterstitial.tsx)
+/* Gentle "still growing" pulse for the loading interstitial
+   (LoadingInterstitial.tsx, wrapped by JobInterstitial.tsx for polling jobs)
    — a slow scale breathe, not a spin, to read as organic growth rather than
-   a generic loading spinner. */
+   a generic loading spinner. Also used for RegeneratingCard's small inline
+   version of the same pulse. */
 @keyframes grow-pulse {
   0%,
   100% {

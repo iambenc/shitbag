@@ -3,7 +3,7 @@ import { tenants } from "./tenant";
 import { tasks } from "./tasks";
 import { tenantIsolationPolicy } from "./_rls";
 
-export const taskRescheduleReasonEnum = ["slipped", "weather"] as const;
+export const taskRescheduleReasonEnum = ["slipped", "weather", "seeds"] as const;
 export type TaskRescheduleReason = (typeof taskRescheduleReasonEnum)[number];
 
 // Audit trail only — nothing in the spec asks users to see reschedule

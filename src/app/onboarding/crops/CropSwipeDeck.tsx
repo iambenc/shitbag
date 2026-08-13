@@ -99,6 +99,9 @@ export function CropSwipeDeck({ crops }: { crops: CropCard[] }) {
           ♥
         </button>
       </div>
+      <Link href={nextOnboardingStep("crops")} className="text-sm text-(--text-muted) underline">
+        Skip for now
+      </Link>
     </div>
   );
 }

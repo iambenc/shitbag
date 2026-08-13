@@ -29,6 +29,7 @@ export type CreatedTask = {
   source: TaskSource;
   isIndoor: boolean;
   successionSeriesId: string | null;
+  seedBlocked: boolean;
 };
 
 export type CreateTaskState = { error?: string; task?: CreatedTask };
@@ -72,6 +73,7 @@ export async function createTaskAction(
       source: task.source,
       isIndoor: task.isIndoor,
       successionSeriesId: null,
+      seedBlocked: false,
     },
   };
 }
