@@ -74,17 +74,21 @@ export const dailyJobsFn = inngest.createFunction(
     // passed hard deadline always wins and marks it missed, regardless of
     // seed stock — that's an absolute AI-set cutoff, not something seed
     // availability should override; (b) a seed-gated task due today or
-    // overdue with known-insufficient stock gets pushed to tomorrow instead
-    // of today, so it never falsely reads as "due now," plus a shopping-list
-    // nudge; unknown stock (onboarding-only rows with no numeric count) is
-    // never treated as insufficient, matching toggleTaskCompleteAction's own
-    // no-op-on-unknown-stock behavior; (c) anything else strictly overdue
-    // gets the original generic slip-to-today treatment. A task exactly due
-    // today that isn't seed-blocked hits none of these branches, unchanged.
+    // overdue with known-insufficient stock gets pushed a full week forward
+    // instead of today — not just one day, since seeds realistically take
+    // longer than a day to arrive once ordered, and re-checking daily would
+    // just be repeated no-op churn (a reschedule event logged every day for
+    // no behavioral change) — so it never falsely reads as "due now," plus a
+    // shopping-list nudge; unknown stock (onboarding-only rows with no
+    // numeric count) is never treated as insufficient, matching
+    // toggleTaskCompleteAction's own no-op-on-unknown-stock behavior; (c)
+    // anything else strictly overdue gets the original generic slip-to-today
+    // treatment. A task exactly due today that isn't seed-blocked hits none
+    // of these branches, unchanged.
     await step.run("task-slippage", async () => {
       const allTenants = await db.select().from(tenants);
       const today = todayIso();
-      const tomorrow = addDaysIso(1);
+      const nextWeek = addDaysIso(7);
 
       for (const tenant of allTenants) {
         await withTenant(tenant.id, async (tx) => {
@@ -108,10 +112,10 @@ export const dailyJobsFn = inngest.createFunction(
                   tenantId: tenant.id,
                   taskId: task.id,
                   oldDueDate: task.dueDate,
-                  newDueDate: tomorrow,
+                  newDueDate: nextWeek,
                   reason: "seeds",
                 });
-                await tx.update(tasks).set({ dueDate: tomorrow }).where(eq(tasks.id, task.id));
+                await tx.update(tasks).set({ dueDate: nextWeek }).where(eq(tasks.id, task.id));
 
                 const [existingItem] = await tx
                   .select({ id: shoppingListItems.id })

@@ -4268,3 +4268,29 @@ union doesn't drop a requiresPurchase-true crop just because stock happens to be
 matched. Transaction rollback confirmed via Postgres to have left zero residual rows. Script deleted
 afterward. Not verified: the real AI pipeline actually producing sane `estimatedSeedsUsed` sums across
 a full generation (unchanged from this session's existing, already-disclosed limitation on that field).
+
+## Change — seed-gated tasks push back a week at a time, relabeled "Requires seeds"
+
+Requested: "For the tasks, if a seed type is NOT in the inventory move the task forward a week and mark
+it as 'Requires seeds'." Tunes two parameters of the existing seed-gated push-back mechanic
+(`dailyJobs.ts`'s `task-slippage` step, see the earlier "push a task back when the user doesn't have
+enough seeds" entry) rather than changing its trigger condition — a seed-gated task with known-
+insufficient stock still gets caught the same way, just handled differently once caught. Pushing by a
+single day, as it originally did, meant the daily job re-triggered on the exact same still-blocked task
+every day: a `taskRescheduleEvents` row logged and the due date nudged forward for no real behavioral
+change, since seeds ordered today realistically don't arrive by tomorrow. A week is a far more realistic
+minimum gap before re-checking is worth doing.
+
+**Changes**: `dailyJobs.ts` — `tomorrow = addDaysIso(1)` became `nextWeek = addDaysIso(7)`, used for both
+the reschedule-event's `newDueDate` and the task's own `dueDate` update in the seed-gated branch. Same
+"always retarget to a fixed offset from server-today" semantic as before (not the task's own due date +
+7), for the same reason: a task overdue by several days shouldn't stack up catch-up delay on top of
+being blocked. `CalendarView.tsx`'s badge text changed from "Waiting on seeds" to "Requires seeds" (and
+its tooltip updated to say "a week at a time" instead of "a day at a time") — same amber styling, same
+`seedBlocked`-gated condition, no other logic touched.
+
+**Verification**: `tsc --noEmit`/`eslint` clean. Real Inngest-triggered run (`dev/run-jobs`, `job:
+"daily"`) against the demo account: inserted a pending sow task due today for a crop with no owned seed
+stock, triggered the job, confirmed via Postgres the due date moved from today to exactly 7 days out
+(`2026-08-13` → `2026-08-20`) with a `task_reschedule_events` row recording the same jump. Test task,
+its reschedule event, and the shopping-list item it triggered all deleted afterward.

@@ -258,9 +258,9 @@ export function CalendarView({ initialTasks }: { initialTasks: Task[] }) {
                     {task.seedBlocked && (
                       <span
                         className="ml-2 rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide text-amber-800"
-                        title="Not enough seeds in your inventory — pushed back a day at a time until you have enough or order more"
+                        title="Not enough seeds in your inventory — pushed back a week at a time until you have enough or order more"
                       >
-                        Waiting on seeds
+                        Requires seeds
                       </span>
                     )}
                     {task.notes && <p className="text-xs text-(--text-muted)">{task.notes}</p>}
