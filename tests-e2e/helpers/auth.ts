@@ -18,15 +18,18 @@ export function uniqueTestEmail(label: string): string {
 const TEST_POSTCODE = "SW1A 1AA";
 
 export type OnboardOptions = {
-  /** Add one pot of growing space during the equipment step — needed by
-   * tests that require an available growing area (e.g. grow-plan
-   * generation). Defaults to false (equipment step is skipped, matching the
-   * app's own "equipment ownership is optional" design). */
+  /** Add one pot of growing space via /garden after onboarding finishes —
+   * needed by tests that require an available growing area (e.g. grow-plan
+   * generation). Defaults to false. Garden equipment isn't part of the
+   * onboarding flow itself (see src/lib/onboarding/steps.ts's comment — it
+   * was pulled out in favor of SetupBanner nudging the user post-onboarding
+   * instead), so this drives the real, separate /garden page, same as
+   * garden.spec.ts's own tests do. */
   addPotEquipment?: boolean;
 };
 
 /**
- * Signs up a brand-new, uniquely-emailed user and drives it through all six
+ * Signs up a brand-new, uniquely-emailed user and drives it through all four
  * onboarding steps (see src/lib/onboarding/steps.ts for the canonical
  * order), landing on /dashboard. Every test file that needs a logged-in,
  * onboarded user should create its OWN user via this helper (once per file,
@@ -60,20 +63,6 @@ export async function signUpAndOnboard(
   await page.getByLabel("People in your household").fill("2");
   await page.getByRole("button", { name: "Continue" }).click();
 
-  await page.waitForURL("**/onboarding/equipment");
-  if (addPotEquipment) {
-    await page.getByRole("button", { name: "+ Add pots" }).click();
-    // getByLabel("Size") would be ambiguous — that <label> wraps both the
-    // number input and the cm/litres <select>, so it's scoped by
-    // placeholder instead.
-    await page.getByPlaceholder("e.g. 20").fill("30");
-    await page.getByLabel("Quantity").fill("1");
-  }
-  await page.getByRole("button", { name: "Continue" }).click();
-
-  await page.waitForURL("**/onboarding/seeds");
-  await page.getByRole("link", { name: "Skip for now" }).click();
-
   await page.waitForURL("**/onboarding/experience");
   await page.getByLabel("Beginner").check();
   await page.getByLabel("Hours you can spend gardening on a weekday").fill("1");
@@ -81,6 +70,19 @@ export async function signUpAndOnboard(
   await page.getByRole("button", { name: "Finish setup" }).click();
 
   await page.waitForURL("**/dashboard");
+
+  if (addPotEquipment) {
+    await page.goto("/garden");
+    await page.getByRole("button", { name: "+ Add pots" }).click();
+    // getByLabel("Size") would be ambiguous — that <label> wraps both the
+    // number input and the cm/litres <select>, so it's scoped by
+    // placeholder instead.
+    await page.getByPlaceholder("e.g. 20").fill("30");
+    await page.getByLabel("Quantity").fill("1");
+    await page.getByRole("button", { name: "Save equipment" }).click();
+    await page.getByText("Saved.").waitFor();
+    await page.goto("/dashboard");
+  }
 
   return { email, password };
 }

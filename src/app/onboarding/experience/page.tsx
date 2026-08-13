@@ -11,7 +11,7 @@ export default async function ExperienceStepPage() {
   return (
     <div className="flex flex-col gap-2">
       <h1 className="font-display text-3xl font-semibold text-(--brand-primary)">Last thing</h1>
-      <p className="text-sm text-(--text-muted)">Step 6 of 6</p>
+      <p className="text-sm text-(--text-muted)">Step 4 of 4</p>
       <div className="mt-4">
         <ExperienceForm
           initial={{

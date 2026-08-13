@@ -41,6 +41,7 @@ export const tenantAIConfigAgentEnum = [
   "growing_area_estimator",
   "weather_advisor",
   "seed_packet_scanner",
+  "maintenance_tasks",
 ] as const;
 export type TenantAIConfigAgent = (typeof tenantAIConfigAgentEnum)[number];
 

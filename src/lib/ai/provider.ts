@@ -31,6 +31,7 @@ export const DEFAULT_MODEL_BY_AGENT: Record<AgentName, string> = {
   // requirement as growing_area_estimator/plant_health — the lite tier is
   // reserved for text-only lookups like crop_facts.
   seed_packet_scanner: "gemini-3.5-flash",
+  maintenance_tasks: "gemini-3.5-flash",
 };
 
 /**

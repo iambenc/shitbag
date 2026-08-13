@@ -1,0 +1,1 @@
+ALTER TABLE "user_profiles" ADD COLUMN "last_maintenance_tasks_generated_at" timestamp with time zone;

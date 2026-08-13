@@ -58,6 +58,10 @@ export const userProfiles = pgTable(
     weekdayHoursAvailable: real("weekday_hours_available"),
     weekendHoursAvailable: real("weekend_hours_available"),
     onboardingCompletedAt: timestamp("onboarding_completed_at", { withTimezone: true }),
+    // Tracks the once-a-calendar-month cadence for generateMaintenanceTasksFn
+    // — null means "never run." Checked against startOfMonthLocal() by
+    // dailyJobsFn's own eligibility query, not by this table itself.
+    lastMaintenanceTasksGeneratedAt: timestamp("last_maintenance_tasks_generated_at", { withTimezone: true }),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   },

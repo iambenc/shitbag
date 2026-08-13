@@ -23,3 +23,12 @@ export function startOfTodayLocal(): Date {
   d.setHours(0, 0, 0, 0);
   return d;
 }
+
+/** Start of the current calendar month on the server's own clock — same
+ * caveat as todayIso(). Used for the maintenance-tasks monthly cadence. */
+export function startOfMonthLocal(): Date {
+  const d = new Date();
+  d.setDate(1);
+  d.setHours(0, 0, 0, 0);
+  return d;
+}

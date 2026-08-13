@@ -2,7 +2,7 @@
 
 import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
-import { eq, and, desc, gte, count } from "drizzle-orm";
+import { eq, and, desc, gte, count, ne } from "drizzle-orm";
 import { withTenant } from "@/lib/tenant/withTenant";
 import { growPlans, growingAreas, planRecommendations } from "@/db/schema";
 import { requireSessionAndTenant } from "@/lib/actions/shared";
@@ -11,16 +11,28 @@ import { inngest } from "@/inngest/client";
 import { startOfTodayLocal } from "@/lib/dates";
 import { MAX_DAILY_GROW_PLAN_GENERATIONS } from "@/lib/ai/limits";
 
-// Counts all growPlans rows regardless of status — the row is inserted (and
-// the Inngest job dispatched) before success/failure is known, so a retry
-// after a failure still consumes a slot. Shared between the action's
-// backstop and the page's displayed "N left today" so they can't drift.
+// Shared between the action's backstop and the page's displayed "N left
+// today" so they can't drift.
 export async function getGrowPlanGenerationsToday(tenantId: string, userId: string): Promise<number> {
   return withTenant(tenantId, async (tx) => {
     const [row] = await tx
       .select({ count: count() })
       .from(growPlans)
-      .where(and(eq(growPlans.userId, userId), gte(growPlans.createdAt, startOfTodayLocal())));
+      .where(
+        and(
+          eq(growPlans.userId, userId),
+          gte(growPlans.createdAt, startOfTodayLocal()),
+          // A "failed" row means the AI call itself never delivered a
+          // result (Gemini rate-limited, timed out, etc.) — not something
+          // the user did, so it shouldn't eat into their daily allowance.
+          // Deliberately reverses this function's original design (see
+          // docs/plan.md's "AI rate limiting on grow-plan generation"
+          // entry, which counted every status specifically so a retry
+          // after a failure still consumed a slot) at the user's explicit
+          // request.
+          ne(growPlans.status, "failed"),
+        ),
+      );
     return row.count;
   });
 }
@@ -79,8 +91,7 @@ export async function generateGrowPlanAction(wantsUnusualCrop: boolean = false):
 
   // Defensive backstop — /grow-plan hides every generate/try-again button
   // once the daily count is exhausted, but a server action must never trust
-  // the UI alone (see getGrowPlanGenerationsToday's own comment on why all
-  // statuses count).
+  // the UI alone.
   const generationsToday = await getGrowPlanGenerationsToday(tenantId, userId);
   if (generationsToday >= MAX_DAILY_GROW_PLAN_GENERATIONS) {
     redirect("/grow-plan");

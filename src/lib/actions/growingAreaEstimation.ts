@@ -2,7 +2,7 @@
 
 import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
-import { eq, and, gte, count, isNull, inArray } from "drizzle-orm";
+import { eq, and, gte, count, isNull, inArray, ne } from "drizzle-orm";
 import { withTenant } from "@/lib/tenant/withTenant";
 import {
   growingAreaEstimations,
@@ -24,10 +24,10 @@ import { z } from "zod";
 
 export type UploadPhotosForEstimationState = { error?: string };
 
-// Counts all rows regardless of status (pending/complete/failed) — the slot
-// is consumed at insert time, before the Inngest job even runs, so a failed
-// run still uses up a slot for today. Same rule and rationale as
-// getPlantDiagnosesToday.
+// Counts rows created today, excluding "failed" ones — a failed row means
+// the AI call itself never delivered a result (Gemini rate-limited, timed
+// out, etc.), not something the user did, so it shouldn't eat into their
+// daily allowance. Same rule and rationale as getPlantDiagnosesToday.
 export async function getGrowingAreaEstimationsToday(tenantId: string, userId: string): Promise<number> {
   return withTenant(tenantId, async (tx) => {
     const [row] = await tx
@@ -37,6 +37,7 @@ export async function getGrowingAreaEstimationsToday(tenantId: string, userId: s
         and(
           eq(growingAreaEstimations.userId, userId),
           gte(growingAreaEstimations.createdAt, startOfTodayLocal()),
+          ne(growingAreaEstimations.status, "failed"),
         ),
       );
     return row.count;

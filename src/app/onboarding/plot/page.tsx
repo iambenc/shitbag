@@ -11,7 +11,7 @@ export default async function PlotStepPage() {
   return (
     <div className="flex flex-col gap-2">
       <h1 className="font-display text-3xl font-semibold text-(--brand-primary)">Tell us about your plot</h1>
-      <p className="text-sm text-(--text-muted)">Step 3 of 6</p>
+      <p className="text-sm text-(--text-muted)">Step 3 of 4</p>
       <div className="mt-4">
         <PlotForm
           initial={{

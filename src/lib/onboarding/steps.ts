@@ -1,9 +1,11 @@
+// Garden equipment and seed inventory used to be steps here — pulled out so
+// a new user reaches the dashboard faster; SetupBanner.tsx nudges them to
+// finish both afterward instead, and keeps nudging until they have (see
+// dashboard/page.tsx).
 export const ONBOARDING_STEPS = [
   { path: "location", label: "Location" },
   { path: "crops", label: "Favourites" },
   { path: "plot", label: "Your Plot" },
-  { path: "equipment", label: "Equipment" },
-  { path: "seeds", label: "Seeds" },
   { path: "experience", label: "Experience" },
 ] as const;
 

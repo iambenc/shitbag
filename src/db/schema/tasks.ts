@@ -8,7 +8,7 @@ import { tenantIsolationPolicy } from "./_rls";
 export const taskStatusEnum = ["pending", "completed", "missed"] as const;
 export type TaskStatus = (typeof taskStatusEnum)[number];
 
-export const taskSourceEnum = ["manual", "ai", "weather"] as const;
+export const taskSourceEnum = ["manual", "ai", "weather", "maintenance"] as const;
 export type TaskSource = (typeof taskSourceEnum)[number];
 
 export const tasks = pgTable(

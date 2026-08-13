@@ -234,6 +234,14 @@ export function CalendarView({ initialTasks }: { initialTasks: Task[] }) {
                         Weather
                       </span>
                     )}
+                    {task.source === "maintenance" && (
+                      <span
+                        className="ml-2 rounded-full bg-emerald-100 px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide text-emerald-800"
+                        title="Seasonal plot upkeep, suggested automatically"
+                      >
+                        Maintenance
+                      </span>
+                    )}
                     {task.isIndoor && (
                       <span
                         className="ml-2 rounded-full bg-(--brand-primary)/15 px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide text-(--brand-primary)"

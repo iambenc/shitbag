@@ -89,6 +89,24 @@ function VisualizationCard({
 
 export function GrowingAreaManager({ equipment }: { equipment: EquipmentRow[] }) {
   const [rows, setRows] = useState(equipment);
+  // useState(equipment) only seeds the initial value — it never re-runs on
+  // its own when the parent Server Component (GardenPage) re-renders with a
+  // fresh `equipment` prop (e.g. after EquipmentPicker's save action calls
+  // revalidatePath). Without correcting for that, adding a pot auto-places
+  // it correctly in the database immediately, but this component kept
+  // showing the stale pre-save state until a full page reload — the actual
+  // bug behind "newly added equipment should immediately show as placed."
+  // Resetting during render (React's documented "adjusting state when a
+  // prop changes" pattern — react.dev/learn/you-might-not-need-an-effect)
+  // rather than in a useEffect avoids an extra render showing stale content
+  // before the correction lands. The one place this component owns a
+  // genuine optimistic edit (changeCount below) already reconciles against
+  // the server's own response, independent of this.
+  const [prevEquipment, setPrevEquipment] = useState(equipment);
+  if (equipment !== prevEquipment) {
+    setPrevEquipment(equipment);
+    setRows(equipment);
+  }
   const [pending, setPending] = useState<string | null>(null);
 
   async function changeCount(userEquipmentId: string, desired: number) {

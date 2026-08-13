@@ -2,7 +2,7 @@
 
 import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
-import { eq, and, gte, count } from "drizzle-orm";
+import { eq, and, gte, count, ne } from "drizzle-orm";
 import { withTenant } from "@/lib/tenant/withTenant";
 import { plantDiagnoses, photoJournalEntries, photoReports } from "@/db/schema";
 import { requireSessionAndTenant } from "@/lib/actions/shared";
@@ -14,18 +14,24 @@ import { MAX_DAILY_PLANT_DIAGNOSES } from "@/lib/ai/limits";
 
 export type UploadAndDiagnoseState = { error?: string };
 
-// Counts all plantDiagnoses rows regardless of status (pending/complete/
-// failed) — the row is inserted, and the Inngest job dispatched, before
-// success/failure is known, so a retry after a failure still consumes a
-// slot. Shared between both diagnosis-creating actions' guards and the
-// two pages that display "N left today", same pattern as
-// getGrowPlanGenerationsToday.
+// Counts plantDiagnoses rows created today, excluding "failed" ones — a
+// failed row means the AI call itself never delivered a result (Gemini
+// rate-limited, timed out, etc.), not something the user did, so it
+// shouldn't eat into their daily allowance. Shared between both
+// diagnosis-creating actions' guards and the two pages that display "N left
+// today", same pattern as getGrowPlanGenerationsToday.
 export async function getPlantDiagnosesToday(tenantId: string, userId: string): Promise<number> {
   return withTenant(tenantId, async (tx) => {
     const [row] = await tx
       .select({ count: count() })
       .from(plantDiagnoses)
-      .where(and(eq(plantDiagnoses.userId, userId), gte(plantDiagnoses.createdAt, startOfTodayLocal())));
+      .where(
+        and(
+          eq(plantDiagnoses.userId, userId),
+          gte(plantDiagnoses.createdAt, startOfTodayLocal()),
+          ne(plantDiagnoses.status, "failed"),
+        ),
+      );
     return row.count;
   });
 }

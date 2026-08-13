@@ -1,10 +1,10 @@
-import { eq, and, lte, isNotNull } from "drizzle-orm";
+import { eq, and, lte, isNotNull, inArray } from "drizzle-orm";
 import { inngest } from "@/inngest/client";
 import { db } from "@/db/client";
 import { withTenant } from "@/lib/tenant/withTenant";
-import { tenants, userProfiles, tasks, taskRescheduleEvents, shoppingListItems, subscriptions } from "@/db/schema";
+import { tenants, userProfiles, tasks, taskRescheduleEvents, shoppingListItems, subscriptions, growingAreas } from "@/db/schema";
 import type { WeatherScenario } from "@/lib/weather";
-import { todayIso, addDaysIso } from "@/lib/dates";
+import { todayIso, addDaysIso, startOfMonthLocal } from "@/lib/dates";
 import { getSeedStock } from "@/lib/seeds/stock";
 
 type DevRunJobsEvent = {
@@ -63,6 +63,66 @@ export const dailyJobsFn = inngest.createFunction(
         eligibleUsers.map((u) => ({
           name: "weather-advice/requested" as const,
           data: { userId: u.userId, tenantId: u.tenantId, weatherScenario },
+        })),
+      );
+    }
+
+    // A deliberately separate query from find-eligible-users above, not a
+    // filter over its result — that list requires latitude/longitude
+    // (needed for weather, irrelevant here), and coupling maintenance
+    // eligibility to an invariant that has nothing to do with it would be a
+    // fragile, easy-to-break dependency. Eligible = paid tier + at least
+    // one growing area actually in_use (an available/reserved pot has
+    // nothing growing in it yet to weed or mulch) + not already run this
+    // calendar month (lastMaintenanceTasksGeneratedAt null, or before the
+    // start of this month).
+    const maintenanceEligibleUsers = await step.run("find-eligible-maintenance-users", async () => {
+      const allTenants = await db.select().from(tenants);
+      const users: { userId: string; tenantId: string }[] = [];
+      const monthStart = startOfMonthLocal();
+
+      for (const tenant of allTenants) {
+        await withTenant(tenant.id, async (tx) => {
+          const rows = await tx
+            .select({ profile: userProfiles, subscription: subscriptions })
+            .from(userProfiles)
+            .innerJoin(subscriptions, eq(subscriptions.userId, userProfiles.userId));
+
+          const paidAndDue = rows.filter((row) => {
+            const paid = row.subscription.tier === "paid" && row.subscription.status === "active";
+            if (!paid) return false;
+            const last = row.profile.lastMaintenanceTasksGeneratedAt;
+            return !last || last < monthStart;
+          });
+          if (paidAndDue.length === 0) return;
+
+          const inUseAreas = await tx
+            .select({ userId: growingAreas.userId })
+            .from(growingAreas)
+            .where(
+              and(
+                inArray(growingAreas.userId, paidAndDue.map((r) => r.profile.userId)),
+                eq(growingAreas.status, "in_use"),
+              ),
+            );
+          const usersWithGrowingSpace = new Set(inUseAreas.map((r) => r.userId));
+
+          for (const row of paidAndDue) {
+            if (usersWithGrowingSpace.has(row.profile.userId)) {
+              users.push({ userId: row.profile.userId, tenantId: tenant.id });
+            }
+          }
+        });
+      }
+      return users;
+    });
+
+    if (maintenanceEligibleUsers.length > 0) {
+      await step.sendEvent(
+        "notify-maintenance-tasks",
+        maintenanceEligibleUsers.map((u) => ({
+          name: "maintenance-tasks/requested" as const,
+          data: { userId: u.userId, tenantId: u.tenantId },
         })),
       );
     }

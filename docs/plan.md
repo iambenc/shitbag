@@ -4294,3 +4294,281 @@ its tooltip updated to say "a week at a time" instead of "a day at a time") — 
 stock, triggered the job, confirmed via Postgres the due date moved from today to exactly 7 days out
 (`2026-08-13` → `2026-08-20`) with a `task_reschedule_events` row recording the same jump. Test task,
 its reschedule event, and the shopping-list item it triggered all deleted afterward.
+
+## Feature — garden equipment and seed inventory pulled out of onboarding, replaced by a persistent dashboard banner
+
+Requested: "Let's take out the garden equipment and seed inventory from the initial user onboarding and
+put a banner on the dashboard - if a user has NOT completed their initial garden equipment and seed
+inventory the banner should remain until they have." Onboarding shrinks from six steps to four
+(location, favourites, plot, experience); a new user reaches the dashboard faster and gets nudged to
+finish garden equipment and seed inventory there instead — a nudge that keeps showing up on every visit
+until both are genuinely done, computed fresh from real data each time rather than a one-time
+onboarding checkbox.
+
+**Changes**:
+- `src/lib/onboarding/steps.ts`: `ONBOARDING_STEPS` drops the `equipment` and `seeds` entries.
+  `StepProgress.tsx` (the step-dots header) needed no change — it's already fully data-driven off this
+  array. `nextOnboardingStep` needed no change either — same array-index chain logic, now just shorter.
+- Deleted `src/app/onboarding/equipment/` and `src/app/onboarding/seeds/` (pages + their form
+  components) and their dedicated server actions, `src/lib/actions/onboarding/equipment.ts` and
+  `.../seeds.ts` — both were onboarding-only wrappers around shared logic (`applyEquipmentRows` for
+  equipment; a plain insert for seeds) with no other callers, confirmed by grep before deleting. Garden
+  equipment and seed inventory management still exist exactly as before at `/garden` and `/seeds` —
+  only the onboarding-specific copies of these steps are gone.
+- Hardcoded "Step N of 6" text on the four remaining step pages updated to "Step N of 4" (location:
+  1, favourites: 2, plot: 3, experience: now 4th instead of 6th) — these are literal strings per page,
+  not derived from the steps array, so needed individual edits.
+- New `src/components/SetupBanner.tsx` — a plain server component (no client state, unlike
+  `UpgradeBanner`'s sessionStorage-backed dismiss): takes `hasEquipment`/`hasSeeds` booleans, renders
+  nothing once both are true, otherwise shows whichever of "Add equipment →" (`/garden`) / "Add seeds
+  →" (`/seeds`) is still missing. Deliberately **not dismissible** — the request is explicit that it
+  "should remain until they have" done both, so there's no dismiss mechanism to build or reason about.
+- `dashboard/page.tsx`: added a cheap existence-only query (`SELECT id FROM user_equipment WHERE
+  user_id = ? LIMIT 1`) for `hasEquipment` — any owned equipment row counts, matching how permissive
+  the old onboarding equipment step itself was (adding even a single tool satisfied "Continue", no
+  growing-space-specific minimum). `hasSeeds` needed no new query at all — reused the `seedRows` array
+  the page already fetches for the seed-blocked-task badge computation (`seedRows.length > 0`).
+  `<SetupBanner>` renders directly under the page heading, above `<UpgradeBanner>`.
+
+**Verification**: `tsc --noEmit`/`eslint` clean. Updated the Playwright regression pack for the new
+flow rather than leaving it broken: `helpers/auth.ts`'s `signUpAndOnboard` no longer drives through the
+removed steps (four steps now, not six); its `addPotEquipment` option still exists for callers that
+need a growing area, now implemented as a real post-onboarding visit to `/garden` instead of an
+onboarding-step field-fill, landing back on `/dashboard` as its contract promises.
+`onboarding.spec.ts` updated to the new four-step flow and step-count text, plus a new assertion that
+`/onboarding/equipment` now 404s (confirms the step was actually removed, not just skipped over).
+`dashboard.spec.ts` gained two tests: a freshly onboarded user sees both SetupBanner prompts, and a
+full walk-through (add equipment → only the seeds prompt remains → add seeds → banner gone entirely) —
+confirming the "remain until both are done, not just one" requirement genuinely holds, not just that
+the banner can be dismissed. Full suite: **18/18 passing**. Confirmed via Postgres that teardown left
+zero leftover `pw-test-%` users and the demo account's data untouched. Dev server stopped for the test
+run (per this session's established convention) and restarted afterward in its original configuration.
+
+## Fix — `/onboarding/*` 404ing for new signups (stale Turbopack route manifest)
+
+Reported: "when signing up a new user /onboarding/location/ is 404ing." Not a code bug — diagnosed by
+noticing `/onboarding` itself still redirected correctly (its `layout.tsx` auth check ran fine), but
+every child route under it (`/onboarding/location`, `/crops`, `/plot`, `/experience`) 404'd instead of
+hitting that same layout. A routing/build-manifest problem, not application logic: this dev server had
+been through several rapid stop/start cycles while the `/onboarding/equipment` and `/onboarding/seeds`
+folders were deleted (see the "take out garden equipment and seed inventory from onboarding" entry
+above), and Turbopack's cached route manifest never picked up the new file layout for the *remaining*
+sibling routes either.
+
+**Fix**: `rm -rf .next` + restart. No source changes. Verified via a real Playwright-driven signup
+against a running instance: fresh browser, real signup, lands on `/onboarding/location` with the page
+actually rendering (`Where's your garden?` heading visible), not a 404. Cross-checked every onboarding
+route directly (`/onboarding/location`, `/crops`, `/plot`, `/experience`) now correctly 307-redirects an
+unauthenticated request to `/login` instead of 404ing. Test account cleaned up afterward.
+
+## Change — split planting equipment/garden tools, affiliate links only for equipment the user lacks
+
+Requested: "Let's split planting equipment and garden tools into two separate sections. On the garden
+equipment, the affiliate links for the tools should appear only if the user has NOT got that piece of
+equipment." Investigated `EquipmentPicker.tsx` (shared by `/garden` and, previously, onboarding's
+equipment step) before touching anything: the Planting equipment/Garden tools section split **already
+existed** — built in an earlier session, unrelated to anything from today. What didn't match the
+request: partner (affiliate) links showed **inline next to the type name only once the user already
+owned it** (with a comment explaining this was deliberate, to avoid showing the same link twice — once
+inline, once in a separate flat "You might also want" block listing every not-yet-owned type
+regardless of section). That's the exact opposite of "only if the user has NOT got that piece of
+equipment."
+
+**Changes** (`src/components/EquipmentPicker.tsx`): flipped the inline condition from
+`ownedTypeIds.has(type.id)` to `!ownedTypeIds.has(type.id)` — since every equipment type (owned or not)
+already gets its own fieldset rendered in its correct section (Planting equipment or Garden tools), the
+link now naturally appears in the right place without needing a separate catch-all list. Removed the
+now-redundant "You might also want" block and its `notOwned` variable entirely — it existed specifically
+to show not-owned types' links somewhere, which the inline fix now does directly, and keeping both would
+have shown every not-owned type's link twice.
+
+**Verification**: `tsc --noEmit`/`eslint` clean. Real Playwright-driven end-to-end check against a fresh
+signup: confirmed both section headings render, confirmed "You might also want" no longer appears at
+all, confirmed the Pots partner link ("Shop plant pots") is visible before owning any, added one pot via
+the real form, reloaded, and confirmed that same link disappeared while an unrelated not-owned type's
+link (Watering Can) stayed visible — the per-type ownership check isn't accidentally global. Full
+Playwright suite re-run afterward (this component is exercised heavily by `garden.spec.ts`,
+`dashboard.spec.ts`'s SetupBanner test, and `grow-plan.spec.ts`'s `addPotEquipment` setup path):
+**18/18 passing**. Dev server stopped for the run and restarted afterward, test account cleaned up.
+
+## Fix — newly added planting equipment didn't immediately show as placed on the plot
+
+Requested: "when a piece of planting equipment is added it should be immediately added to the user's
+plot." The auto-placement itself already existed and was already instant at the database layer
+(confirmed via a fresh full-page navigation showing correct data) — the bug was purely client-side.
+Diagnosed by first suspecting a Next.js caching/revalidation issue given this repo's "not the Next.js
+you know" warning: read the bundled docs (`node_modules/next/dist/docs`), found a new `refresh()`
+primitive from `next/cache` (a breaking-change API specific to this Next version, documented as the
+dedicated way to "refresh the client router from within a Server Action"), and tried it in
+`updateEquipmentAction` — it didn't fix anything. Tested against a real **production build**
+(`pnpm build && next start`, not just dev/Turbopack) to rule out a dev-mode-only quirk — still broken,
+proving it wasn't Next.js/caching-related at all.
+
+The real cause: `GrowingAreaManager.tsx`'s `const [rows, setRows] = useState(equipment)` — a plain React
+staleness bug. `useState`'s initializer only runs once, on mount; it never re-syncs when the parent
+Server Component (`GardenPage`) re-renders with a fresh `equipment` prop after `revalidatePath("/garden")`
+(already present, already firing correctly). No amount of server-side refresh machinery could have fixed
+this, since the fresh props were arriving fine — this component just never looked at them again after
+its first render.
+
+**Changes**: reverted the `refresh()` experiment (`src/lib/actions/garden/equipment.ts`) — unnecessary
+once the real bug was found, and `revalidatePath` alone was already sufficient. Fixed
+`GrowingAreaManager.tsx` using React's documented "adjusting state when a prop changes" pattern (a
+`prevEquipment` reference-comparison reset **during render**, not inside a `useEffect` — the project's
+ESLint rules correctly flagged an effect-based version as the discouraged pattern, since a `useEffect`
+fix would render once with stale content, then correct itself a tick later, a visible flash the render-
+time version avoids entirely). The one place this component already owns genuine local state (the +/−
+placed-count steppers' optimistic update) is unaffected — it already reconciles against the server's own
+response independently of this reset.
+
+**Verification**: `tsc --noEmit`/`eslint` clean (the lint step itself caught the initial `useEffect`
+attempt as wrong). Re-verified against a **second fresh production build** with the real fix: signed up,
+added 2 pots via the real form, and — with no reload of any kind — "You own 2" / "2 placed" and the two
+visualization cards appeared immediately in "Place your equipment" and "Your plot right now." Full
+Playwright suite re-run: **18/18 passing**. Test accounts and production server process cleaned up; dev
+server restarted in its normal configuration afterward.
+
+## Feature — automatic seasonal plot-maintenance tasks (new agent)
+
+Requested: "Let's add another agent to supply vegetable/fruit plot maintenance tasks based on the time
+of year to the user's growing area; such as weeding - it should also suggest the correct tool for the
+job and check if the user has the right equipment in their garden equipment inventory, if the tool is
+not found in the inventory a link for the item of equipment should be shown in the shopping list. Garden
+maintenance tasks should also be added to the calendar with a 'Maintenance' label attached." Two design
+decisions confirmed directly with the user before building: (1) automatic/periodic generation (not a
+button the user clicks), matching how weather-advice tasks already get generated automatically; (2)
+paid-tier only, matching every other AI-cost-incurring feature in this app.
+
+Design was validated in a review pass against the actual code before implementing. It confirmed the
+overall shape (mirror `applyWeatherAdviceFn`'s per-user fan-out pattern, reuse `generateGrowPlan.ts`'s
+equipment-shopping-list dedupe pattern) and caught real issues, all incorporated: `AgentName` isn't
+defined where expected — it's `TenantAIConfigAgent`, sourced from `tenantAIConfigAgentEnum` in
+`src/db/schema/tenant.ts`, not just `provider.ts`; a genuinely missed call site,
+`src/app/admin/ai/page.tsx`'s hardcoded `AGENT_LABELS` map, which would have rendered the new agent as
+a raw snake_case slug instead of a friendly label; a real atomicity gap in the original draft (the
+`userProfiles` cadence-timestamp update was going to be a step separate from the tasks/shopping-list
+insert — if that update step failed after the insert step already succeeded and got memoized by
+Inngest, the **daily** cron would keep re-flagging the user as eligible and re-running the AI call and
+re-inserting tasks every day for the rest of the month, since nothing recorded that generation had
+already happened); a missing guard against the AI hallucinating a tool slug that doesn't exist (needed
+the same silent-drop-on-invalid-reference treatment `growPlanner.ts` already gives `cropSlug`); a
+growing-area scoping gap (an `available`/`reserved` pot has nothing planted in it yet — eligibility and
+context should only count `status: "in_use"` areas, not everything the user owns); a fragile-coupling
+risk in deriving maintenance eligibility from the *same* query weather-advice uses (that query requires
+`latitude`/`longitude`, irrelevant here — building a genuinely separate query keeps the two features
+from becoming accidentally coupled to an invariant that has nothing to do with maintenance); and a
+prompt-injection hardening gap — `equipmentTypes.name` is free text a tenant admin typed into a form
+with no format validation (confirmed via `src/lib/actions/admin.ts`), so it needed the same
+`<user-text>` treatment this session's earlier hardening pass gave every other genuine free-text agent
+input, which the first draft omitted for this new agent.
+
+**Changes**:
+- **Schema**: `tasks.taskSourceEnum` gains `"maintenance"`; `tenantAIConfigAgentEnum`
+  (`src/db/schema/tenant.ts`) gains `"maintenance_tasks"` — both plain `text` enums with no Postgres
+  `check()` constraint, so no migration needed for either (confirmed against this exact enum's own git
+  history: an earlier sibling addition needed zero generated `.sql` file). `userProfiles` gains
+  `lastMaintenanceTasksGeneratedAt: timestamp | null` — a real column, one plain additive migration
+  (`0031_lucky_swordsman.sql`). `src/lib/dates.ts` gains `startOfMonthLocal()` alongside the existing
+  `startOfTodayLocal()`, same server-clock caveat.
+- **New agent** `src/lib/ai/agents/maintenanceTasks.ts`: input is today's date, the user's `in_use`
+  growing areas grouped by type+count, the tenant's tool-only equipment catalog (growing-space types
+  filtered out via the existing `SLUG_TO_GROWING_AREA_TYPE` map — the same filter `EquipmentPicker.tsx`
+  already uses), which of those tools the user already owns, and expertise level. Output: 0-8 tasks,
+  each with a title, explanation, an in-month `dueDate`, and a `requiredToolSlug` that must be one of
+  the given tool slugs or null. Tool-catalog names wrapped in `<user-text>` per the hardening
+  convention above. Deterministic mock fallback keyed by calendar month (every agent in this codebase
+  must have one), correctly returning zero tasks when the user has no `in_use` growing areas at all.
+- **New Inngest function** `src/inngest/functions/generateMaintenanceTasks.ts`
+  (`generateMaintenanceTasksFn`), triggered by a new fanned-out event `maintenance-tasks/requested`,
+  `retries: 2` — same shape as `applyWeatherAdviceFn`: `gather-context` (in_use areas grouped by type,
+  tool catalog, owned tool slugs, expertise level) → `call-agent` → **one** `persist-results` step
+  doing all of: insert the `tasks` rows (`source: "maintenance"`); validate each task's
+  `requiredToolSlug` against the real tool catalog (silently drops an unrecognized slug, mirroring
+  `growPlanner.ts`'s crop-slug guard) and, for the distinct set of missing (not-owned) tools across the
+  whole batch, insert one `shoppingListItems` row each using the exact existing dedupe pattern
+  (existence-check only, no status/source filter) from `generateGrowPlan.ts`'s purchasable-equipment
+  step; and update `userProfiles.lastMaintenanceTasksGeneratedAt = now()` — **all in the same
+  transaction**, closing the atomicity gap the review caught.
+- **`dailyJobsFn`** (`src/inngest/functions/dailyJobs.ts`): a new, deliberately independent
+  `find-eligible-maintenance-users` step (not derived from the existing weather-eligible list) —
+  paid tier + at least one `in_use` growing area + `lastMaintenanceTasksGeneratedAt` null or before
+  `startOfMonthLocal()` — fans out `maintenance-tasks/requested` events alongside the existing
+  weather-advice fan-out.
+- Registered `generateMaintenanceTasksFn` in `src/app/api/inngest/route.ts`'s `functions: []` array
+  (every function is hand-listed there, easy to forget — the review flagged this as a real risk).
+  Added `maintenance_tasks` to `provider.ts`'s `DEFAULT_MODEL_BY_AGENT` and to
+  `admin/ai/page.tsx`'s `AGENT_LABELS` (the missed call site the review caught).
+- **UI**: `CalendarView.tsx` gains a "Maintenance" badge (`task.source === "maintenance"`, emerald —
+  a new tone, distinct from the existing Weather/Indoor/Succession/Requires-seeds badges), following
+  the exact existing per-badge convention. No query changes needed in `calendar/page.tsx`/
+  `dashboard/page.tsx` — both already `SELECT *` on `tasks` and already map `source` through.
+- The "link should show in the shopping list" half of the request needed **no new UI work at all** —
+  `ShoppingListView.tsx` already renders a partner-link `<a>` for any equipment-type shopping item
+  that has one resolved, confirmed still working correctly by the equipment-links fix earlier this
+  session. Getting the backend to insert a correctly-`equipmentTypeId`-scoped row was the entire task.
+
+**Verification**: `tsc --noEmit`/`eslint` clean; `pnpm db:generate`/`pnpm db:migrate` applied cleanly.
+Real end-to-end test against a dedicated throwaway user (paid, one `in_use` pot, owns a Watering Can but
+not Secateurs) via a real `dev/run-jobs` daily-job trigger — hit the Gemini free-tier rate limit on the
+first attempt (expected: the same trigger also fans out weather-advice for every other currently-paid
+account, including the demo account), which Inngest's own `retries: 2` handled automatically; the retry
+succeeded with genuinely sensible, real AI-generated August tasks ("Water your container thoroughly,"
+"Trim dead foliage and spent stems," "Check for summer pests"), correctly added exactly one shopping-list
+item (Secateurs — the missing tool) and correctly did **not** add one for the already-owned Watering
+Can, and set `lastMaintenanceTasksGeneratedAt`. Re-triggered the daily job a second time and confirmed
+zero duplicate tasks/shopping-items — the monthly cadence guard holds. Verified the mock fallback's
+logic in isolation (zero growing areas → zero tasks; a growing area present → the month's mocked task
+with a correctly-resolved tool slug), since `"server-only"` blocks running the real agent file outside
+Next's runtime. Test user and all its rows deleted afterward; the demo account's own newly-generated
+weather/maintenance tasks from the shared trigger were left in place (real, correctly-generated output
+on a real paid account, not test pollution — same precedent as this session's earlier weather-advice
+verification). Full Playwright suite re-run afterward: **18/18 passing**. Dev server stopped for that
+run and restarted in its normal configuration afterward.
+
+## Change — a failed Gemini call no longer counts against the user's daily AI limit
+
+Prompted by a real failure: `ben.crumpton+test2@gmail.com` hit "Something went wrong generating your
+plan" twice in a row (confirmed via the dev server log as a genuine Gemini free-tier rate limit —
+`429 RESOURCE_EXHAUSTED`, `generativelanguage.googleapis.com/generate_content_free_tier_requests, limit:
+20` — not an app bug), and both failed attempts had already been counted against their "3 plan
+generations per day" allowance, leaving them with only 1 left. User then asked directly: "when any calls
+to Gemini fail the user's limiting shouldn't be affected."
+
+This reverses a previously **deliberate** design decision, not an oversight — `getGrowPlanGenerationsToday`
+(and, found by checking every other daily-limited AI feature for the same shape, `getPlantDiagnosesToday`
+and `getGrowingAreaEstimationsToday`) all explicitly counted every row regardless of status specifically
+so "a retry after a failure still consumes a slot," to bound worst-case AI spend. The user's request is a
+considered reversal of that tradeoff, not a bug fix to a broken invariant — worth being explicit that this
+was a real policy change, made at their direction. `getSeedAdditionsToday` and `getSeedPacketScansToday`
+(the two other daily-limited AI actions in this app) were checked too and did **not** need this fix: both
+are synchronous server actions where the counted row is only ever inserted *after* the AI call already
+succeeded, so a Gemini failure already never reached the database at all for those two — nothing to change.
+
+**Changes**: all three affected `get*Today` counting queries (`src/lib/actions/growPlan.ts`,
+`plantHealth.ts`, `growingAreaEstimation.ts`) gained `ne(table.status, "failed")` alongside their
+existing `userId`/`createdAt` filters. Each of the three underlying Inngest jobs
+(`generateGrowPlan.ts`/`diagnosePlant.ts`/`estimateGrowingAreas.ts`) already sets `status: "failed"` in
+a catch-all `mark-failed` step wrapping both the AI call and its immediate persist step — covering
+Gemini-side failures (rate limits, timeouts) and, in principle, a rare DB hiccup on the immediately-
+following write, both equally outside the user's control, so excluding the status wholesale (not trying
+to distinguish "was this specifically Gemini's fault") is the right-grained fix. Removed the now-stale
+"counts all statuses so a retry still consumes a slot" comments (including a duplicate of it inside
+`generateGrowPlanAction` itself) that described the old, now-reversed behavior.
+
+**Trade-off, disclosed rather than silently accepted**: this reopens the exact concern the original
+design existed to close — while Gemini is persistently failing (e.g. a sustained free-tier outage), a
+user can now retry an unlimited number of times today, each a real cost-incurring API call attempt, with
+no daily cap slowing them down. Not fixed here since the user's request was explicit and this app's
+current scale doesn't make retry-storm abuse a pressing concern, but worth knowing this is the traded-away
+protection if it ever needs revisiting.
+
+**Verification**: `tsc --noEmit`/`eslint` clean. Confirmed the fix directly resolves the reported
+account's actual state: `ben.crumpton+test2@gmail.com` had exactly 2 `failed` rows from today and 0
+non-failed ones — replicating the new query against Postgres directly confirmed it now returns 0
+(previously 2), meaning they're back to their full 3/3 allowance. Full end-to-end confirmation against a
+dedicated, fully-controlled throwaway account: signed up, upgraded to paid, seeded 3 `failed` grow-plan
+rows for today directly (simulating a triple Gemini failure that would previously have fully exhausted
+the daily cap), then loaded the real `/grow-plan` page and confirmed it displayed "3 of 3 plan
+generations left today" with the "Try again" button visible and enabled — not blocked. Full Playwright
+suite re-run: **18/18 passing**. Test account and scripts cleaned up; dev server stopped for the suite
+run and restarted in its normal configuration afterward.

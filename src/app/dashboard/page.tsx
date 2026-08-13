@@ -3,7 +3,7 @@ import Link from "next/link";
 import { eq, and, desc, asc } from "drizzle-orm";
 import { auth } from "@/lib/auth";
 import { withTenant } from "@/lib/tenant/withTenant";
-import { userFavoriteCrops, tasks, shoppingListItems, crops, equipmentTypes, plantDiagnoses, seedInventory } from "@/db/schema";
+import { userFavoriteCrops, tasks, shoppingListItems, crops, equipmentTypes, plantDiagnoses, seedInventory, userEquipment } from "@/db/schema";
 import { resolveSeedStock, type SeedStockRow } from "@/lib/seeds/stock";
 import { todayIso } from "@/lib/dates";
 import { getCurrentTenant } from "@/lib/tenant/resolve";
@@ -12,6 +12,7 @@ import { plotSizeLabels, expertiseLevelLabels } from "@/lib/onboarding/labels";
 import { getSubscription, isPaidTier } from "@/lib/billing/subscription";
 import { severityLabels, severityBadgeClasses } from "@/lib/plantHealth/labels";
 import { UpgradeBanner } from "@/components/UpgradeBanner";
+import { SetupBanner } from "@/components/SetupBanner";
 import { CalendarView } from "@/app/calendar/CalendarView";
 import { getWeeklyForecast } from "@/lib/weather";
 import { weatherCodeLabel, weatherCodeIcon } from "@/lib/weather/labels";
@@ -102,43 +103,50 @@ export default async function DashboardPage() {
       ? getWeeklyForecast(profile.latitude, profile.longitude)
       : Promise.resolve(null);
 
-  const [{ favoriteCount, allTasks, shoppingItems, latestDiagnosis, seedRows }, weeklyForecast] = await Promise.all([
-    withTenant(tenant.id, async (tx) => {
-      const [favorites, allTasks, shoppingItems, diagnoses, seedRows] = await Promise.all([
-        tx
-          .select({ liked: userFavoriteCrops.liked })
-          .from(userFavoriteCrops)
-          .where(eq(userFavoriteCrops.userId, session.user.id)),
-        tx.select().from(tasks).where(eq(tasks.userId, session.user.id)).orderBy(asc(tasks.dueDate)),
-        tx
-          .select({ item: shoppingListItems, crop: crops, equipmentType: equipmentTypes })
-          .from(shoppingListItems)
-          .leftJoin(crops, eq(shoppingListItems.cropId, crops.id))
-          .leftJoin(equipmentTypes, eq(shoppingListItems.equipmentTypeId, equipmentTypes.id))
-          .where(and(eq(shoppingListItems.userId, session.user.id), eq(shoppingListItems.status, "pending")))
-          .orderBy(asc(shoppingListItems.createdAt))
-          .limit(6),
-        tx
-          .select()
-          .from(plantDiagnoses)
-          .where(eq(plantDiagnoses.userId, session.user.id))
-          .orderBy(desc(plantDiagnoses.createdAt))
-          .limit(1),
-        tx
-          .select({ cropId: seedInventory.cropId, varietyId: seedInventory.varietyId, seedCount: seedInventory.seedCount })
-          .from(seedInventory)
-          .where(eq(seedInventory.userId, session.user.id)),
-      ]);
-      return {
-        favoriteCount: favorites.filter((r) => r.liked).length,
-        allTasks,
-        shoppingItems,
-        latestDiagnosis: diagnoses[0] ?? null,
-        seedRows,
-      };
-    }),
-    forecastPromise,
-  ]);
+  const [{ favoriteCount, allTasks, shoppingItems, latestDiagnosis, seedRows, hasEquipment }, weeklyForecast] =
+    await Promise.all([
+      withTenant(tenant.id, async (tx) => {
+        const [favorites, allTasks, shoppingItems, diagnoses, seedRows, equipmentRow] = await Promise.all([
+          tx
+            .select({ liked: userFavoriteCrops.liked })
+            .from(userFavoriteCrops)
+            .where(eq(userFavoriteCrops.userId, session.user.id)),
+          tx.select().from(tasks).where(eq(tasks.userId, session.user.id)).orderBy(asc(tasks.dueDate)),
+          tx
+            .select({ item: shoppingListItems, crop: crops, equipmentType: equipmentTypes })
+            .from(shoppingListItems)
+            .leftJoin(crops, eq(shoppingListItems.cropId, crops.id))
+            .leftJoin(equipmentTypes, eq(shoppingListItems.equipmentTypeId, equipmentTypes.id))
+            .where(and(eq(shoppingListItems.userId, session.user.id), eq(shoppingListItems.status, "pending")))
+            .orderBy(asc(shoppingListItems.createdAt))
+            .limit(6),
+          tx
+            .select()
+            .from(plantDiagnoses)
+            .where(eq(plantDiagnoses.userId, session.user.id))
+            .orderBy(desc(plantDiagnoses.createdAt))
+            .limit(1),
+          tx
+            .select({ cropId: seedInventory.cropId, varietyId: seedInventory.varietyId, seedCount: seedInventory.seedCount })
+            .from(seedInventory)
+            .where(eq(seedInventory.userId, session.user.id)),
+          // Existence-only check for SetupBanner — any owned equipment row
+          // counts (matches how permissive the old onboarding equipment
+          // step was: adding even a single tool satisfied "Continue", no
+          // growing-space-specific minimum).
+          tx.select({ id: userEquipment.id }).from(userEquipment).where(eq(userEquipment.userId, session.user.id)).limit(1),
+        ]);
+        return {
+          favoriteCount: favorites.filter((r) => r.liked).length,
+          allTasks,
+          shoppingItems,
+          latestDiagnosis: diagnoses[0] ?? null,
+          seedRows,
+          hasEquipment: equipmentRow.length > 0,
+        };
+      }),
+      forecastPromise,
+    ]);
   const paid = isPaidTier(await getSubscription(session.user.id, tenant.id));
 
   // Same batched-once approach as /calendar's page — see its comment for why
@@ -150,6 +158,7 @@ export default async function DashboardPage() {
     list.push({ varietyId: row.varietyId, seedCount: row.seedCount });
     seedRowsByCrop.set(row.cropId, list);
   }
+  const hasSeeds = seedRows.length > 0;
   const today = todayIso();
   function isSeedBlocked(t: (typeof allTasks)[number]): boolean {
     if (t.status !== "pending" || !t.cropId || !t.estimatedSeedsUsed || t.dueDate > today) return false;
@@ -183,8 +192,10 @@ export default async function DashboardPage() {
       </h1>
       <p className="mt-2 text-sm text-(--text-muted)">Tenant: {tenant.displayName}</p>
 
+      <SetupBanner hasEquipment={hasEquipment} hasSeeds={hasSeeds} />
+
       {!paid && (
-        <div className="mt-8">
+        <div className={hasEquipment && hasSeeds ? "mt-8" : "mt-4"}>
           <UpgradeBanner />
         </div>
       )}

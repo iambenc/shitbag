@@ -100,7 +100,6 @@ export function EquipmentPicker({
   }
 
   const ownedTypeIds = new Set(rows.filter((r) => r.quantity > 0).map((r) => r.equipmentTypeId));
-  const notOwned = types.filter((t) => !ownedTypeIds.has(t.id));
 
   // Planting equipment (pots/trays/planters/beds) automatically becomes
   // growing space when added — see applyEquipmentRows.ts — so it's kept
@@ -119,10 +118,12 @@ export function EquipmentPicker({
       >
         <legend className="text-sm font-medium">
           {type.name}
-          {/* Shown only once owned — a not-yet-owned type's link already
-              appears in "You might also want" below, and showing both would
-              duplicate the same link twice on the page. */}
-          {type.partnerLink && ownedTypeIds.has(type.id) && (
+          {/* Only while not yet owned — once the user has it, a "buy this"
+              link isn't relevant anymore. Every type (owned or not) already
+              gets its own fieldset here, in its correct Planting
+              equipment/Garden tools section, so this is the only place the
+              link needs to appear — no separate not-owned summary block. */}
+          {type.partnerLink && !ownedTypeIds.has(type.id) && (
             <>
               {" — "}
               <a
@@ -304,32 +305,6 @@ export function EquipmentPicker({
             </p>
           </div>
           {toolTypes.map(renderTypeFieldset)}
-        </div>
-      )}
-
-      {notOwned.length > 0 && (
-        <div className="rounded-lg bg-black/5 p-4 text-sm">
-          <p className="font-display text-lg font-semibold">You might also want</p>
-          <ul className="mt-2 flex flex-col gap-1">
-            {notOwned.map((t) => (
-              <li key={t.id}>
-                {t.name}
-                {t.partnerLink && (
-                  <>
-                    {" — "}
-                    <a
-                      href={t.partnerLink.url}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="text-(--brand-primary) underline"
-                    >
-                      {t.partnerLink.label}
-                    </a>
-                  </>
-                )}
-              </li>
-            ))}
-          </ul>
         </div>
       )}
 
