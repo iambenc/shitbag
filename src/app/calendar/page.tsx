@@ -7,6 +7,7 @@ import { tasks, seedInventory } from "@/db/schema";
 import { getUserProfile } from "@/lib/onboarding/profile";
 import { resolveSeedStock, type SeedStockRow } from "@/lib/seeds/stock";
 import { todayIso } from "@/lib/dates";
+import { getSubscription, getSubscriptionExpiredAt } from "@/lib/billing/subscription";
 import { CalendarView } from "./CalendarView";
 
 export default async function CalendarPage() {
@@ -45,6 +46,16 @@ export default async function CalendarPage() {
     return stock.known && stock.total < t.estimatedSeedsUsed;
   }
 
+  // Tasks are never deleted when a subscription lapses — just visually
+  // blurred once their due date falls past the date access actually ended,
+  // so a returning subscriber sees everything picked back up exactly where
+  // it left off.
+  const subscription = await getSubscription(session.user.id, tenant.id);
+  const subscriptionExpiredAt = getSubscriptionExpiredAt(subscription);
+  function isBlurred(t: (typeof userTasks)[number]): boolean {
+    return subscriptionExpiredAt !== null && t.dueDate > subscriptionExpiredAt;
+  }
+
   return (
     <div className="mx-auto max-w-4xl px-6 py-16">
       <h1 className="font-display text-3xl font-semibold text-(--brand-primary)">Calendar</h1>
@@ -62,6 +73,7 @@ export default async function CalendarPage() {
             isIndoor: t.isIndoor,
             successionSeriesId: t.successionSeriesId,
             seedBlocked: isSeedBlocked(t),
+            blurred: isBlurred(t),
           }))}
         />
       </div>

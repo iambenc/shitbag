@@ -9,7 +9,7 @@ import { todayIso } from "@/lib/dates";
 import { getCurrentTenant } from "@/lib/tenant/resolve";
 import { getUserProfile } from "@/lib/onboarding/profile";
 import { plotSizeLabels, expertiseLevelLabels } from "@/lib/onboarding/labels";
-import { getSubscription, isPaidTier } from "@/lib/billing/subscription";
+import { getSubscription, isPaidTier, getSubscriptionExpiredAt } from "@/lib/billing/subscription";
 import { severityLabels, severityBadgeClasses } from "@/lib/plantHealth/labels";
 import { UpgradeBanner } from "@/components/UpgradeBanner";
 import { SetupBanner } from "@/components/SetupBanner";
@@ -147,7 +147,15 @@ export default async function DashboardPage() {
       }),
       forecastPromise,
     ]);
-  const paid = isPaidTier(await getSubscription(session.user.id, tenant.id));
+  const subscription = await getSubscription(session.user.id, tenant.id);
+  const paid = isPaidTier(subscription);
+  // Tasks are never deleted when a subscription lapses — just visually
+  // blurred once their due date falls past the date access actually ended.
+  // See /calendar's page for the fuller comment.
+  const subscriptionExpiredAt = getSubscriptionExpiredAt(subscription);
+  function isBlurred(t: { dueDate: string }): boolean {
+    return subscriptionExpiredAt !== null && t.dueDate > subscriptionExpiredAt;
+  }
 
   // Same batched-once approach as /calendar's page — see its comment for why
   // this mustn't be recomputed per-task or diverge from the daily push-back
@@ -257,6 +265,7 @@ export default async function DashboardPage() {
                   isIndoor: t.isIndoor,
                   successionSeriesId: t.successionSeriesId,
                   seedBlocked: isSeedBlocked(t),
+                  blurred: isBlurred(t),
                 }))}
               />
             </div>

@@ -30,6 +30,7 @@ export type CreatedTask = {
   isIndoor: boolean;
   successionSeriesId: string | null;
   seedBlocked: boolean;
+  blurred: boolean;
 };
 
 export type CreateTaskState = { error?: string; task?: CreatedTask };
@@ -74,6 +75,11 @@ export async function createTaskAction(
       isIndoor: task.isIndoor,
       successionSeriesId: null,
       seedBlocked: false,
+      // Same reasoning as seedBlocked above: momentarily wrong only for a
+      // lapsed user manually creating a task past their own expiry date,
+      // self-corrects on the next real page load once
+      // calendar/dashboard's page.tsx recomputes it server-side.
+      blurred: false,
     },
   };
 }

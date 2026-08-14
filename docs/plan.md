@@ -4572,3 +4572,145 @@ the daily cap), then loaded the real `/grow-plan` page and confirmed it displaye
 generations left today" with the "Try again" button visible and enabled — not blocked. Full Playwright
 suite re-run: **18/18 passing**. Test account and scripts cleaned up; dev server stopped for the suite
 run and restarted in its normal configuration afterward.
+
+## Change — grow planner prompt restructured to unlock Gemini's automatic context caching
+
+Prompted by a question: "Is there any way to cache data so that calls to the garden planner agent
+don't take so long?" Investigated with real measurements before proposing anything, rather than
+guessing: the crop catalog embedded in `growPlanner.ts`'s prompt (49 crops, 75 varieties at the time
+of writing) is ~25,000 characters (~6,250 tokens) and byte-identical across every single call,
+regardless of tenant or user — confirmed by actually building the real catalog text from the live
+database, not estimating. The instructions block adds roughly another 1,300+ tokens, also static.
+Genuinely per-user content (profile, growing areas, seeds, favourites, harvest history) is only a few
+hundred tokens by comparison — so **over 95% of this prompt's input tokens are identical on every
+call.** Checked real completed generations in the database (not the schema's worst-case caps of 12
+recommendations/90 tasks) to confirm output size wasn't the bigger factor: actual plans produce 3-6
+recommendations and 9-16 tasks, ~1,500-2,800 output tokens — smaller than the static input.
+
+A second finding changed the implementation approach mid-flight: Google's Gemini API has **implicit
+caching enabled by default for Gemini 2.5+ models** (confirmed via a live web search, since this is
+beyond training-cutoff knowledge) — meaning no explicit cache-management code (creating/storing/
+invalidating a `cachedContent` resource via Gemini's cache API, which `@ai-sdk/google` v4.0.38 does
+expose via a `cachedContent` provider option) might even be necessary, *if* the static portion of the
+prompt forms a genuinely matching prefix across calls. It didn't: the existing prompt put USER PROFILE,
+GROWING AREAS, SEEDS, FAVOURITES, DISLIKED CROPS, and HARVEST HISTORY (all per-user, all variable)
+*before* the crop catalog and instructions — meaning the "static" content was buried mid-prompt, never
+forming a matching prefix, so implicit caching could never have engaged regardless of the underlying
+model's support for it, independent of whether explicit caching was ever built.
+
+**Changes** (`src/lib/ai/agents/growPlanner.ts` only — `recommendationReplacement.ts`, which has its
+own separate prompt, wasn't touched; the user's question was specifically about grow-plan generation):
+- `buildPrompt` split into `buildStaticPromptSection` (role framing, injection-hardening framing, the
+  full crop catalog, and a new `BASE_INSTRUCTIONS` constant — genuinely identical for every call, never
+  touches `input`) and `buildVariablePromptSection` (today's date, profile, growing areas, equipment,
+  seeds, favourites, dislikes, harvest history — appended after). `buildStaticPromptSection` is
+  exported so a future explicit-caching layer could hash/register it without reimplementing it, if
+  ever needed.
+- The one genuine complication: `BASE_INSTRUCTIONS` used to conditionally gain a 14th "try something
+  unusual" instruction when `wantsUnusualCrop` is set — a per-call variable that can't live in a
+  byte-identical prefix. Split out: `BASE_INSTRUCTIONS` is now always exactly the same 13 items, and
+  the unusual-crop instruction (when present) is appended as its own numbered "ADDITIONAL INSTRUCTION"
+  paragraph in the variable section instead, still numbered as if it followed the base list.
+  Deliberately did **not** move "today's date" into the static section even though it only changes
+  once every 24 hours — keeping it in the variable section means the cached prefix survives across day
+  boundaries too, not just within one calendar day.
+- `generateGrowPlan` now captures `providerMetadata.google.usageMetadata` and logs
+  `promptTokens=X cachedTokens=Y` after every real call — cheap, permanent visibility into whether
+  caching is actually engaging, not a one-off debugging hack.
+
+**Verification**: `tsc --noEmit`/`eslint` clean. Real end-to-end test against a dedicated throwaway
+paid account: triggered two separate real grow-plan generations back to back (the second via a direct
+Inngest event, after the browser-driven "Generate a new plan" button proved unreliable to script
+against reliably — confirmed via Postgres that both plans genuinely completed regardless). The new
+logging showed it working exactly as predicted: **first call `cachedTokens=0`** (nothing to cache
+yet), **second call `cachedTokens=6861` of `promptTokens=9284`** — about 74% of the prompt served from
+Google's cache, with zero explicit cache-management code written. Wall-clock timing on this specific
+pair (32.9s → 27.4s) wasn't treated as reliable evidence of the latency improvement on its own — both
+calls were unusually slow relative to earlier same-day samples (6.4-7.9s), almost certainly due to
+rate-limit backoff pressure from this session's own heavy testing today, not the caching change itself
+— but the token-level cache hit is Google's own measurement, not an inference from noisy timing, and
+reduced prefill is the documented mechanism by which caching reduces latency. Confirmed output quality
+wasn't degraded by the restructuring: inspected a real generated plan's `summary` and first
+recommendation directly from Postgres — coherent, correctly seasonal (mid-August → Rocket, a fast
+salad crop), correctly referenced the actual pot size and the value-ranking instruction (£/kg
+reasoning), no regression from moving content around in the prompt. Full Playwright suite re-run:
+**18/18 passing**, including the mock-AI-path test (confirms `buildMockPlan`, left untouched, still
+works correctly alongside the restructured real-path prompt). Test account and scripts cleaned up; dev
+server stopped for the suite run and restarted in its normal configuration afterward. **Not built**:
+explicit `cachedContent` cache-resource management — the simpler prompt-reordering fix already
+delivers a large, real, measured cache-hit rate, so the added complexity (a new table, exposing the
+raw API key out of `getModelForTenant`, TTL/invalidation logic, direct REST calls to Gemini's cache API
+bypassing the AI SDK) wasn't justified. Worth revisiting only if implicit caching's un-configurable TTL
+or hit-rate ever proves insufficient in practice.
+
+## Fix — task badges (Indoor/Succession/Requires seeds/etc.) could wrap onto two lines
+
+Reported: "The labels on tasks are breaking across two lines, make sure this doesn't happen." None of
+`CalendarView.tsx`'s six task badge `<span>`s (Weather, Maintenance, Indoor, Succession, Missed,
+Requires seeds) had `whitespace-nowrap` — a plain inline `<span>` lets the browser break text at any
+word boundary when the container is narrow, so a two-word label like "Requires seeds" could wrap
+inside its own pill, breaking the rounded-pill shape. Single-word badges were never affected; the
+two-word one was the actual bug.
+
+**Change**: added `whitespace-nowrap` to all six badge spans. Badges can still wrap as whole units onto
+a new line below the task title when space is tight (correct, expected behavior) — the fix only stops
+text from breaking *inside* a single badge.
+
+**Verification**: `tsc --noEmit`/`eslint` clean. Real browser check at a 360px (phone-width) viewport —
+deliberately the narrowest, worst-case scenario, and stacked three badges (Indoor, Succession, Requires
+seeds) on one task simultaneously to stress-test the tightest real layout. All three measured a
+consistent 17px bounding-box height (single line) via Playwright, and a screenshot confirmed it
+visually: three clean pills, wrapping as a group onto their own row beneath the title, none broken
+internally. (Incidentally hit a real environment quirk while setting this up: the sandboxed browser's
+clock reads one day ahead of the host Node/Postgres clock — had to date the test task to match the
+browser's `today`, not the server's, for it to appear under the calendar's default view. Not an app
+bug, just a note for any future test relying on "today" across that boundary.) Full Playwright suite
+re-run: **18/18 passing**. Test account and scripts cleaned up; dev server stopped for the suite run
+and restarted in its normal configuration afterward.
+
+## Feature — calendar tasks due after a lapsed subscription's expiry date are blurred, not deleted
+
+Requested: "let's blur the tasks that are due after the date a user's subscription has expired, tasks
+should still be stored." Checked the Stripe webhook (`src/app/api/webhooks/stripe/route.ts`) before
+designing anything: a true cancellation resets `tier` to `"free"` and `status` to `null`, but
+**`currentPeriodEnd` is left untouched** — meaning the real expiry date survives even after the
+subscription itself no longer looks "paid," which is exactly the reference point this feature needs.
+Deliberately did not special-case `"past_due"` — a past-due subscription whose `currentPeriodEnd` is
+still in the future correctly blurs nothing yet (still within the grace period they already paid for),
+purely from the date comparison, with no need to reason about the exact status value.
+
+**Changes**:
+- `src/lib/billing/subscription.ts` gains `getSubscriptionExpiredAt(subscription)`: returns `null` for
+  a currently-paid user (nothing lapsed) or a genuinely-never-paid user (no `currentPeriodEnd` to
+  compare against — this feature is about *expired* access, not absent access), otherwise the ISO date
+  the subscription actually ended.
+- `calendar/page.tsx` and `dashboard/page.tsx` both fetch the subscription once (dashboard already
+  did, for the existing `UpgradeBanner`; calendar didn't, now does) and compute a per-task
+  `blurred: boolean` the same way `seedBlocked` is already computed — `task.dueDate > expiredAt`.
+- `CalendarView.tsx`: a blurred task renders its title/notes inside a `blur-sm` + `pointer-events-none`
+  + `select-none` + `aria-hidden` block (kept out of the accessibility tree, not just visually hidden,
+  so a screen reader doesn't announce content the visible UI is obscuring) with a "Resubscribe to see
+  this" link overlaid, linking to `/upgrade`. The checkbox, Delete button, and "Cancel remaining"
+  button are all suppressed for a blurred task — nothing about it is interactive until the user
+  resubscribes. Explicitly a **pure CSS blur**, not server-side content redaction: the real title/notes
+  still reach the client in the page's HTML (inspectable via dev tools), same trust model this app
+  already uses everywhere else (e.g. the paid-gate on `/grow-plan` is a plain server-side check, not an
+  obfuscation exercise) — flagged here as a known, accepted limitation rather than something silently
+  glossed over.
+- `createTaskAction`'s `CreatedTask` type gains `blurred: false` (same reasoning already established
+  for `seedBlocked: false` there — a manually-created task could theoretically need `true` if a lapsed
+  user adds one far in the future, but that's a rare edge case that self-corrects on the next real page
+  load once the server recomputes it, not worth threading a subscription lookup into a plain manual-add
+  action for).
+
+**Verification**: `tsc --noEmit`/`eslint` clean. Real browser test against a dedicated throwaway
+account: set its subscription to a genuinely lapsed state (`tier: "free"`, `status: null`,
+`currentPeriodEnd` in the past) with one task due before that date and one after. Confirmed via
+screenshot: the before-expiry task rendered completely normally (checkbox, Delete button, fully
+legible). The after-expiry task's title was visually illegible (genuine blur, not just faded) with a
+working "Resubscribe to see this" link overlaid, and no checkbox/Delete/badges present at all. Full
+Playwright suite re-run: **18/18 passing**. Test account and scripts cleaned up; dev server stopped for
+the suite run and restarted in its normal configuration afterward. Not independently re-verified on
+`/dashboard`'s own `CalendarView` instance beyond code review — it computes `blurred` via the identical
+formula and renders through the same shared component already tested on `/calendar`, so this was
+treated as low-risk by construction rather than spending a second full test cycle on it.

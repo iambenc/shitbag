@@ -1,6 +1,7 @@
 "use client";
 
 import { useActionState, useMemo, useState } from "react";
+import Link from "next/link";
 import { motion } from "framer-motion";
 import {
   createTaskAction,
@@ -24,6 +25,10 @@ type Task = {
   isIndoor: boolean;
   successionSeriesId: string | null;
   seedBlocked: boolean;
+  // True once this task's due date falls after the date a since-lapsed
+  // subscription actually ended — see getSubscriptionExpiredAt. The task
+  // itself is never deleted, just visually obscured until they resubscribe.
+  blurred: boolean;
 };
 
 const WEEKDAY_LABELS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
@@ -202,100 +207,123 @@ export function CalendarView({ initialTasks }: { initialTasks: Task[] }) {
             {selectedTasks.map((task) => (
               <li
                 key={task.id}
-                className={`flex items-start justify-between gap-3 rounded-lg border p-3 ${
+                className={`relative flex items-start justify-between gap-3 rounded-lg border p-3 ${
                   task.status === "missed" ? "border-red-200 bg-red-50" : "border-black/10 bg-white"
                 }`}
               >
-                <label className="flex flex-1 items-start gap-2 text-sm">
-                  {task.status === "missed" ? (
-                    <WarningIcon className="mt-1 h-4 w-4 shrink-0 text-red-700" />
-                  ) : (
-                    <input
-                      type="checkbox"
-                      checked={task.status === "completed"}
-                      onChange={() => handleToggle(task)}
-                      className="mt-1 accent-(--brand-primary)"
-                    />
-                  )}
-                  <span>
-                    <span
-                      className={`transition-colors duration-300 ${
-                        task.status === "completed"
-                          ? "line-through text-(--text-muted)"
-                          : task.status === "missed"
-                            ? "text-red-800"
-                            : ""
-                      }`}
+                {task.blurred ? (
+                  <>
+                    {/* Never deleted from the DB, just hidden from view —
+                        this is purely a display restriction, not a
+                        pointer-events:none-only one: aria-hidden plus a
+                        tabIndex-free blurred block keeps it out of the
+                        accessibility tree entirely, so a screen reader
+                        doesn't announce content the visual UI is hiding. */}
+                    <div aria-hidden="true" className="pointer-events-none flex-1 select-none text-sm blur-sm">
+                      <span>{task.title}</span>
+                      {task.notes && <p className="text-xs text-(--text-muted)">{task.notes}</p>}
+                    </div>
+                    <Link
+                      href="/upgrade"
+                      className="absolute inset-0 flex items-center justify-center rounded-lg bg-white/50 text-xs font-medium text-(--brand-primary) underline"
                     >
-                      {task.title}
+                      Resubscribe to see this
+                    </Link>
+                  </>
+                ) : (
+                  <label className="flex flex-1 items-start gap-2 text-sm">
+                    {task.status === "missed" ? (
+                      <WarningIcon className="mt-1 h-4 w-4 shrink-0 text-red-700" />
+                    ) : (
+                      <input
+                        type="checkbox"
+                        checked={task.status === "completed"}
+                        onChange={() => handleToggle(task)}
+                        className="mt-1 accent-(--brand-primary)"
+                      />
+                    )}
+                    <span>
+                      <span
+                        className={`transition-colors duration-300 ${
+                          task.status === "completed"
+                            ? "line-through text-(--text-muted)"
+                            : task.status === "missed"
+                              ? "text-red-800"
+                              : ""
+                        }`}
+                      >
+                        {task.title}
+                      </span>
+                      {task.source === "weather" && (
+                        <span className="ml-2 whitespace-nowrap rounded-full bg-(--brand-secondary)/40 px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide">
+                          Weather
+                        </span>
+                      )}
+                      {task.source === "maintenance" && (
+                        <span
+                          className="ml-2 whitespace-nowrap rounded-full bg-emerald-100 px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide text-emerald-800"
+                          title="Seasonal plot upkeep, suggested automatically"
+                        >
+                          Maintenance
+                        </span>
+                      )}
+                      {task.isIndoor && (
+                        <span
+                          className="ml-2 whitespace-nowrap rounded-full bg-(--brand-primary)/15 px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide text-(--brand-primary)"
+                          title="Sow or start this one indoors"
+                        >
+                          Indoor
+                        </span>
+                      )}
+                      {task.successionSeriesId && (
+                        <span
+                          className="ml-2 whitespace-nowrap rounded-full bg-(--brand-primary)/15 px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide text-(--brand-primary)"
+                          title="One of several staggered sowings of this crop, for a continuous harvest"
+                        >
+                          Succession
+                        </span>
+                      )}
+                      {task.status === "missed" && (
+                        <span className="ml-2 whitespace-nowrap rounded-full bg-red-200 px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide text-red-800">
+                          Missed
+                        </span>
+                      )}
+                      {task.seedBlocked && (
+                        <span
+                          className="ml-2 whitespace-nowrap rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide text-amber-800"
+                          title="Not enough seeds in your inventory — pushed back a week at a time until you have enough or order more"
+                        >
+                          Requires seeds
+                        </span>
+                      )}
+                      {task.notes && <p className="text-xs text-(--text-muted)">{task.notes}</p>}
+                      {task.hardDeadlineDate && (
+                        <p className="text-xs text-(--text-muted)">Last date: {task.hardDeadlineDate}</p>
+                      )}
                     </span>
-                    {task.source === "weather" && (
-                      <span className="ml-2 rounded-full bg-(--brand-secondary)/40 px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide">
-                        Weather
-                      </span>
-                    )}
-                    {task.source === "maintenance" && (
-                      <span
-                        className="ml-2 rounded-full bg-emerald-100 px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide text-emerald-800"
-                        title="Seasonal plot upkeep, suggested automatically"
+                  </label>
+                )}
+                {!task.blurred && (
+                  <div className="flex flex-col items-end gap-1">
+                    {task.successionSeriesId && task.status === "pending" && (
+                      <button
+                        type="button"
+                        onClick={() => handleCancelSeries(task.successionSeriesId!)}
+                        className="text-xs text-(--text-muted) hover:text-red-700"
                       >
-                        Maintenance
-                      </span>
+                        Cancel remaining
+                      </button>
                     )}
-                    {task.isIndoor && (
-                      <span
-                        className="ml-2 rounded-full bg-(--brand-primary)/15 px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide text-(--brand-primary)"
-                        title="Sow or start this one indoors"
-                      >
-                        Indoor
-                      </span>
-                    )}
-                    {task.successionSeriesId && (
-                      <span
-                        className="ml-2 rounded-full bg-(--brand-primary)/15 px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide text-(--brand-primary)"
-                        title="One of several staggered sowings of this crop, for a continuous harvest"
-                      >
-                        Succession
-                      </span>
-                    )}
-                    {task.status === "missed" && (
-                      <span className="ml-2 rounded-full bg-red-200 px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide text-red-800">
-                        Missed
-                      </span>
-                    )}
-                    {task.seedBlocked && (
-                      <span
-                        className="ml-2 rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide text-amber-800"
-                        title="Not enough seeds in your inventory — pushed back a week at a time until you have enough or order more"
-                      >
-                        Requires seeds
-                      </span>
-                    )}
-                    {task.notes && <p className="text-xs text-(--text-muted)">{task.notes}</p>}
-                    {task.hardDeadlineDate && (
-                      <p className="text-xs text-(--text-muted)">Last date: {task.hardDeadlineDate}</p>
-                    )}
-                  </span>
-                </label>
-                <div className="flex flex-col items-end gap-1">
-                  {task.successionSeriesId && task.status === "pending" && (
                     <button
                       type="button"
-                      onClick={() => handleCancelSeries(task.successionSeriesId!)}
+                      onClick={() => handleDelete(task.id)}
                       className="text-xs text-(--text-muted) hover:text-red-700"
+                      aria-label={`Delete ${task.title}`}
                     >
-                      Cancel remaining
+                      Delete
                     </button>
-                  )}
-                  <button
-                    type="button"
-                    onClick={() => handleDelete(task.id)}
-                    className="text-xs text-(--text-muted) hover:text-red-700"
-                    aria-label={`Delete ${task.title}`}
-                  >
-                    Delete
-                  </button>
-                </div>
+                  </div>
+                )}
               </li>
             ))}
           </ul>
