@@ -3,6 +3,7 @@ import { eq, and } from "drizzle-orm";
 import type { LanguageModel } from "ai";
 import { createGoogleGenerativeAI } from "@ai-sdk/google";
 import { withTenant } from "@/lib/tenant/withTenant";
+import type { Database } from "@/db/client";
 import { tenantAIConfigs, type TenantAIConfigAgent } from "@/db/schema";
 import { decryptSecret } from "@/lib/security/secretBox";
 
@@ -86,4 +87,36 @@ export async function getModelForTenant(
   const modelId = config?.model || DEFAULT_MODEL_BY_AGENT[agent];
   const google = createGoogleGenerativeAI({ apiKey });
   return { model: google(modelId), provider: config?.provider ?? "google", modelId };
+}
+
+/**
+ * Identifies which Gemini API key a tenant+agent call will actually use,
+ * without decrypting it — for sizing Inngest `throttle` buckets correctly.
+ * A tenant with its own configured key (see getModelForTenant above) has its
+ * own isolated quota and must never share a throttle bucket with tenants on
+ * the shared platform key, or an unrelated tenant's volume could throttle
+ * this one's calls for no reason (and vice versa — this tenant's volume
+ * could eat into the platform key's shared headroom for everyone else if it
+ * were bucketed as "platform" by mistake).
+ *
+ * Takes an already-open tenant-scoped `tx` rather than opening its own
+ * withTenant transaction, so callers already inside one (dailyJobsFn's
+ * per-tenant loop) don't pay for a second pooled connection per tenant.
+ */
+export async function getQuotaPoolKey(
+  tx: Database,
+  tenantId: string,
+  agent: AgentName,
+): Promise<string> {
+  const [config] = await tx
+    .select({ apiKeyEncrypted: tenantAIConfigs.apiKeyEncrypted })
+    .from(tenantAIConfigs)
+    .where(
+      and(
+        eq(tenantAIConfigs.tenantId, tenantId),
+        eq(tenantAIConfigs.agent, agent),
+        eq(tenantAIConfigs.isActive, true),
+      ),
+    );
+  return config?.apiKeyEncrypted ? `tenant:${tenantId}:${agent}` : "platform";
 }

@@ -4714,3 +4714,85 @@ the suite run and restarted in its normal configuration afterward. Not independe
 `/dashboard`'s own `CalendarView` instance beyond code review — it computes `blurred` via the identical
 formula and renders through the same shared component already tested on `/calendar`, so this was
 treated as low-risk by construction rather than spending a second full test cycle on it.
+
+## Feature — grouped weather-advice generation + Inngest throttling, to survive quota at 100-1000 users
+
+Requested, after a discussion of what Gemini tier 100/1000 users would require and a flagged
+architectural risk (the daily job's unthrottled, one-Gemini-call-per-user fan-out): "Yes, let's
+implement that - can we group users in some way to reduce the overall volume of calls?" Two
+independent problems, addressed together since they share the same root cause: no pacing existed
+anywhere in `src/inngest/`, and weather-advice specifically makes one Gemini call per eligible user
+even though most users on a given day get either an identical (near-always-empty) suggestion set or
+one driven purely by forecast + expertise level, both of which are shared across many users.
+
+A Plan-agent review of the draft design caught several real gaps, all incorporated: the dev-only
+`weatherScenario` override needed to move out of the per-user event payload into the new pre-fetch
+step (forecasts are now fetched once, upstream, not per-user); rounding-based lat/long bucketing
+*before* fetching is what actually bounds the Open-Meteo call count and avoids a step-timeout risk
+from fetching hundreds of forecasts individually inside one `step.run()`; a naive loop over a
+group's users in `persist-results` would let one user's DB error fail the *whole* group (up to
+hundreds of users) where today each user fails independently — fixed with a per-user try/catch;
+per-tenant custom Gemini keys (`tenantAIConfigs.apiKeyEncrypted`) mean a single throttle bucket is
+wrong — needs a `quotaPoolKey` that isolates a tenant's own key from the shared platform key; and,
+separately, the *existing* unbatched `step.sendEvent(...)` calls (one call fanning out potentially
+hundreds/thousands of events at once) were a latent risk independent of this change, worth
+defensively chunking regardless.
+
+**Changes**:
+- `src/lib/ai/provider.ts` gains `getQuotaPoolKey(tx, tenantId, agent)`: checks `tenantAIConfigs` for
+  an active row with a configured key for that tenant+agent (without decrypting it — only whether one
+  exists), returning `` `tenant:${tenantId}:${agent}` `` if so, else `"platform"`. Takes an
+  already-open tenant-scoped `tx` rather than opening its own transaction, so callers already inside
+  `withTenant` (dailyJobsFn's per-tenant loop) don't pay for a second pooled connection per tenant.
+- `src/inngest/functions/dailyJobs.ts`:
+  - `find-eligible-users` now also carries each user's `latitude`/`longitude`/`expertiseLevel`
+    (already fetched in the same query, just not previously forwarded) and each tenant's
+    `weather_advisor` `quotaPoolKey` (computed once per tenant, not per user).
+  - New step `group-weather-users-by-forecast`: buckets users by lat/long rounded to ~2 decimal
+    degrees (~1km grid), fetches ONE Open-Meteo forecast per bucket (sequential, respecting the
+    `weatherScenario` dev override moved here from the old per-user event payload), then groups users
+    by `(tenantId, expertiseLevel, JSON.stringify(forecast))` — deliberately never merged across
+    tenants; two adjacent buckets that happen to fetch byte-identical forecast content still collapse
+    into one group via this second pass.
+  - Fans out ONE `weather-advice/requested` event per *group* (payload: `{tenantId, userIds, forecast,
+    expertiseLevel, quotaPoolKey}`) instead of one per user.
+  - Both the weather and maintenance `step.sendEvent(...)` calls are now chunked (`SEND_EVENT_CHUNK_SIZE
+    = 250`) as a defensive fix for the separately-flagged latent unbatched-send risk — unrelated to
+    grouping, just bundled in since it touches the same call sites.
+  - `find-eligible-maintenance-users` now also computes and carries each tenant's `maintenance_tasks`
+    `quotaPoolKey` (maintenance isn't grouped — each user's tool/growing-area mix is too idiosyncratic
+    to share one AI call — only throttled).
+- `src/inngest/functions/applyWeatherAdvice.ts` restructured around a group instead of a user: no more
+  `gather-context`/forecast-fetch (arrives pre-computed in the event); `call-agent` calls `assessWeather`
+  ONCE per group; `persist-results` loops every `userId` in the group with its own try/catch (delete
+  stale pending weather tasks due today/tomorrow, insert fresh ones from the shared `suggestions`) —
+  failures are collected, not fatal to the loop, and only thrown as an aggregate error *after* every
+  user has been attempted, so Inngest's existing `retries: 2` still retries just the failed users (the
+  delete+insert pair is idempotent per user, so re-running it for already-succeeded users on retry is
+  safe). Gains `throttle: { key: "event.data.quotaPoolKey", limit: 10, period: "1m" }`.
+- `src/inngest/functions/generateMaintenanceTasks.ts`: `EventData` gains `quotaPoolKey`; gains the same
+  `throttle: { key: "event.data.quotaPoolKey", limit: 10, period: "1m" }` — not restructured, just
+  paced, per the reasoning above.
+- Throttle limit (10/min per quota pool) is a deliberately conservative starting point for pacing a
+  once-daily, non-time-sensitive job, not a tuned value — noted as adjustable once real paid-tier
+  volume and an actual Gemini tier are known.
+
+**Verification**: `tsc --noEmit`/`eslint` clean. Live end-to-end test exploiting a genuinely useful
+natural fixture already present in the demo tenant's data: 8 paid+active users with located profiles,
+clustered at 3 distinct lat/long pairs, with a mix of expertise levels at each — including two users
+sharing *both* exact location and expertise level (should merge into one group) and users sharing
+location but *not* expertise level (should NOT merge). Swapped the dev server to mock mode
+(`GOOGLE_GENERATIVE_AI_API_KEY=""`, same convention the Playwright suite uses) to test the grouping
+logic itself without spending real Gemini quota, then triggered `dev/run-jobs` directly via the
+Inngest client (auth-gated route, same workaround used throughout this session). With a forced
+`weatherScenario` (making forecast content identical across all locations, so grouping collapses
+purely along `(tenant, expertiseLevel)`), the dev server log showed exactly **3**
+`apply-weather-advice` invocations — one per expertise level (advanced/beginner/intermediate) — instead
+of 8, confirmed against Postgres: all 8 eligible paid users received their task from a `hot_dry`-scenario
+run (each with the correct shared suggestion text), the 2 free-tier users with located profiles
+correctly received none, and no errors appeared in the dev server log. Full Playwright suite re-run:
+**18/18 passing**. Test task rows and all throwaway scripts cleaned up; dev server stopped for both
+the mock-mode test and the suite run, restarted in its normal (real-key) configuration afterward.
+Not independently load-tested at 100/1000-user scale (no environment to generate that fixture data) —
+the grouping/bucketing/throttling logic was verified correct at the mechanism level, not benchmarked
+for real-world call-count reduction at target scale.

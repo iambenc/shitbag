@@ -7,17 +7,27 @@ import { SLUG_TO_GROWING_AREA_TYPE } from "@/lib/garden/equipmentMapping";
 import { todayIso } from "@/lib/dates";
 import type { GrowingAreaType } from "@/db/schema";
 
-type EventData = { userId: string; tenantId: string };
+type EventData = { userId: string; tenantId: string; quotaPoolKey: string };
 
 /**
  * One user's monthly maintenance-task run — fanned out as an individual
  * event per eligible user from dailyJobsFn's own eligibility query, same
  * shape as applyWeatherAdviceFn (one step.run() per LLM call, proper
  * per-user Inngest memoization/retry isolation instead of looping AI calls
- * inside one un-resumable step).
+ * inside one un-resumable step). Not grouped like weather-advice — each
+ * user's maintenance context (growing-area mix, tool ownership) is too
+ * idiosyncratic to share a single AI call across users — so this function
+ * only gets throttled, not restructured; quotaPoolKey (own tenant key vs.
+ * the shared platform key — see getQuotaPoolKey in provider.ts) isolates
+ * that throttle bucket per tenant's actual quota.
  */
 export const generateMaintenanceTasksFn = inngest.createFunction(
-  { id: "generate-maintenance-tasks", retries: 2, triggers: [{ event: "maintenance-tasks/requested" }] },
+  {
+    id: "generate-maintenance-tasks",
+    retries: 2,
+    triggers: [{ event: "maintenance-tasks/requested" }],
+    throttle: { key: "event.data.quotaPoolKey", limit: 10, period: "1m" },
+  },
   async ({ event, step }) => {
     const { userId, tenantId } = event.data as EventData;
 
