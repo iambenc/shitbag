@@ -4796,3 +4796,31 @@ the mock-mode test and the suite run, restarted in its normal (real-key) configu
 Not independently load-tested at 100/1000-user scale (no environment to generate that fixture data) —
 the grouping/bucketing/throttling logic was verified correct at the mechanism level, not benchmarked
 for real-world call-count reduction at target scale.
+
+## Fix — removed the dev-only `/api/dev/run-jobs` cross-tenant job trigger
+
+Surfaced while writing DigitalOcean droplet deployment instructions: this route (added earlier as a
+stand-in for waiting on real cron scheduling) was gated only by `auth()` — any logged-in user, not
+just an admin, could hit it — and `dailyJobsFn` itself iterates every tenant unconditionally, so any
+authenticated user on any tenant could trigger AI-calling jobs (weather-advice, maintenance-tasks)
+for every tenant's eligible users, repeatedly, on demand. That's real Gemini spend an ordinary user
+could rack up at will, plus cross-tenant blast radius. The route's own code comment already called
+this out as temporary ("not something to ship without real admin tooling around it, or just removing
+it once cron execution can be verified") — with Inngest Cloud's dashboard now the intended
+production path (manually triggering any registered cron function for testing), the verification gap
+it existed to cover is closed, so removed rather than gated: even restricted to
+`requireTenantAdmin`, a tenant admin would still be able to trigger a job touching every *other*
+tenant's data, which is its own smell — this really wanted to be platform-superadmin-only if kept at
+all, and nothing currently needs it kept.
+
+**Change**: deleted `src/app/api/dev/run-jobs/route.ts` (and the now-empty `api/dev/` directory).
+Grepped first for any caller (UI button, test, script) — none existed; every use of this route this
+session was via a throwaway script sending the `dev/run-jobs` event directly to the Inngest client,
+which still works fine for local testing (this only removed the HTTP-reachable wrapper around it, not
+Inngest's own dev-mode `dev/run-jobs` event handling in `dailyJobsFn`/`weeklyShoppingListFn`).
+
+**Verification**: `tsc --noEmit` clean (one stale `.next/types/validator.ts` reference to the deleted
+route resolved itself after a dev-server restart with `.next` cleared — a generated-file staleness
+artifact, not a real error). Full Playwright suite re-run: **18/18 passing**, confirming nothing in
+the tested app surface depended on the route. Dev server stopped for the suite run and restarted in
+its normal configuration afterward.
