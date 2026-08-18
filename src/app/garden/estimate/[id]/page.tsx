@@ -5,6 +5,7 @@ import { auth } from "@/lib/auth";
 import { getCurrentTenant } from "@/lib/tenant/resolve";
 import { withTenant } from "@/lib/tenant/withTenant";
 import { growingAreaEstimations } from "@/db/schema";
+import { getUserProfile } from "@/lib/onboarding/profile";
 import { GrowingAreaEstimationOutputSchema } from "@/lib/ai/agents/growingAreaEstimator";
 import { JobInterstitial } from "@/components/JobInterstitial";
 import { EstimationReviewForm } from "./EstimationReviewForm";
@@ -96,6 +97,16 @@ export default async function EstimationReviewPage({ params }: { params: Promise
 
   const photoUrls = (estimation.photoUrls as string[] | null) ?? [];
 
+  // A manually-set boundary always wins the pre-fill, never silently
+  // overwritten by a fresh (possibly lower-confidence) AI guess — the user
+  // still sees and can accept the AI's number below, this only decides what
+  // the form starts out showing.
+  const profile = await getUserProfile(session.user.id, tenant.id);
+  const existingManualBoundary =
+    profile?.plotBoundarySource === "manual" && profile.plotWidthCm && profile.plotLengthCm
+      ? { widthCm: profile.plotWidthCm, lengthCm: profile.plotLengthCm }
+      : null;
+
   return (
     <div className="mx-auto max-w-2xl px-6 py-16">
       <h1 className="font-display text-3xl font-semibold text-(--brand-primary)">Review your estimate</h1>
@@ -126,7 +137,13 @@ export default async function EstimationReviewPage({ params }: { params: Promise
       )}
 
       <div className="mt-8">
-        <EstimationReviewForm estimationId={estimation.id} proposedAreas={parsed.data.areas} />
+        <EstimationReviewForm
+          estimationId={estimation.id}
+          proposedAreas={parsed.data.areas}
+          initialPlotWidthCm={existingManualBoundary?.widthCm ?? parsed.data.plotWidthCm ?? null}
+          initialPlotLengthCm={existingManualBoundary?.lengthCm ?? parsed.data.plotLengthCm ?? null}
+          plotBoundaryConfidence={existingManualBoundary ? null : (parsed.data.plotBoundaryConfidence ?? null)}
+        />
       </div>
     </div>
   );

@@ -44,6 +44,14 @@ export const growingAreas = pgTable(
     sourceUserEquipmentId: uuid("source_user_equipment_id").references(() => userEquipment.id, {
       onDelete: "set null",
     }),
+    // Where this area sits on the user's /garden/layout canvas, in cm from
+    // the plot's top-left corner. Null means "not yet placed on the
+    // canvas" — orthogonal to `status` above, which tracks claim/ownership
+    // for grow-plan purposes, not visual layout. Never written during a
+    // page render (see packGrowingAreas) — only ever set by an explicit
+    // user action (drag, or adding a new area from the layout canvas).
+    positionXCm: real("position_x_cm"),
+    positionYCm: real("position_y_cm"),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (table) => [tenantIsolationPolicy("growing_areas", table.tenantId)],

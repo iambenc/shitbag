@@ -67,12 +67,20 @@ function usesSizedFields(type: GrowingAreaType) {
 export function EstimationReviewForm({
   estimationId,
   proposedAreas,
+  initialPlotWidthCm,
+  initialPlotLengthCm,
+  plotBoundaryConfidence,
 }: {
   estimationId: string;
   proposedAreas: ProposedArea[];
+  initialPlotWidthCm: number | null;
+  initialPlotLengthCm: number | null;
+  plotBoundaryConfidence: number | null;
 }) {
   const router = useRouter();
   const [rows, setRows] = useState<Row[]>(() => proposedAreas.map((a, i) => toRow(a, `${i}`)));
+  const [plotWidthCm, setPlotWidthCm] = useState(initialPlotWidthCm?.toString() ?? "");
+  const [plotLengthCm, setPlotLengthCm] = useState(initialPlotLengthCm?.toString() ?? "");
   const [error, setError] = useState<string | null>(null);
   const [pending, startTransition] = useTransition();
   let nextKey = rows.length;
@@ -89,14 +97,18 @@ export function EstimationReviewForm({
 
   function handleSubmit() {
     setError(null);
-    const payload = rows.map((r) => ({
-      type: r.type,
-      sizeValue: usesSizedFields(r.type) && r.sizeValue ? Number(r.sizeValue) : null,
-      sizeUnit: usesSizedFields(r.type) && r.sizeValue ? r.sizeUnit : null,
-      widthCm: !usesSizedFields(r.type) && r.widthCm ? Number(r.widthCm) : null,
-      lengthCm: !usesSizedFields(r.type) && r.lengthCm ? Number(r.lengthCm) : null,
-      depthCm: !usesSizedFields(r.type) && r.type !== "bed" && r.depthCm ? Number(r.depthCm) : null,
-    }));
+    const payload = {
+      rows: rows.map((r) => ({
+        type: r.type,
+        sizeValue: usesSizedFields(r.type) && r.sizeValue ? Number(r.sizeValue) : null,
+        sizeUnit: usesSizedFields(r.type) && r.sizeValue ? r.sizeUnit : null,
+        widthCm: !usesSizedFields(r.type) && r.widthCm ? Number(r.widthCm) : null,
+        lengthCm: !usesSizedFields(r.type) && r.lengthCm ? Number(r.lengthCm) : null,
+        depthCm: !usesSizedFields(r.type) && r.type !== "bed" && r.depthCm ? Number(r.depthCm) : null,
+      })),
+      plotWidthCm: plotWidthCm ? Number(plotWidthCm) : null,
+      plotLengthCm: plotLengthCm ? Number(plotLengthCm) : null,
+    };
     startTransition(async () => {
       const result = await confirmGrowingAreaProposalsAction(estimationId, payload);
       if (result.error) {
@@ -109,6 +121,45 @@ export function EstimationReviewForm({
 
   return (
     <div className="flex flex-col gap-4">
+      <div className="flex flex-col gap-2 rounded-lg border border-black/10 bg-white p-4 shadow-card">
+        <p className="text-sm font-medium">Your plot&rsquo;s overall size</p>
+        <p className="text-xs text-(--text-muted)">
+          Used to lay out your growing areas on the plot planner. Leave blank if you&rsquo;d rather set
+          it later.
+        </p>
+        <div className="flex flex-wrap items-end gap-2">
+          <label className="flex flex-col gap-1 text-xs">
+            Width (cm)
+            <input
+              type="number"
+              min={1}
+              value={plotWidthCm}
+              onChange={(e) => setPlotWidthCm(e.target.value)}
+              className="w-24 rounded-md border border-black/15 px-2 py-1.5 text-sm"
+            />
+          </label>
+          <label className="flex flex-col gap-1 text-xs">
+            Length (cm)
+            <input
+              type="number"
+              min={1}
+              value={plotLengthCm}
+              onChange={(e) => setPlotLengthCm(e.target.value)}
+              className="w-24 rounded-md border border-black/15 px-2 py-1.5 text-sm"
+            />
+          </label>
+        </div>
+        {plotBoundaryConfidence !== null && (initialPlotWidthCm || initialPlotLengthCm) && (
+          <p className="text-xs text-(--text-muted)">
+            <span className={plotBoundaryConfidence < 0.4 ? "text-(--color-terracotta)" : undefined}>
+              {plotBoundaryConfidence < 0.4
+                ? "low confidence — check this"
+                : `${Math.round(plotBoundaryConfidence * 100)}% confidence`}
+            </span>
+          </p>
+        )}
+      </div>
+
       {rows.map((row) => (
         <div key={row.key} className="flex flex-col gap-2 rounded-lg border border-black/10 bg-white p-4 shadow-card">
           <div className="flex flex-wrap items-end gap-2">

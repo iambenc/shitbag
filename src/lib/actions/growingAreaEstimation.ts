@@ -11,6 +11,7 @@ import {
   sizeUnitEnum,
   equipmentTypes,
   userEquipment,
+  userProfiles,
 } from "@/db/schema";
 import { requireSessionAndTenant } from "@/lib/actions/shared";
 import { getSubscription, isPaidTier } from "@/lib/billing/subscription";
@@ -117,6 +118,18 @@ const ConfirmedRowSchema = z.object({
   depthCm: z.number().positive().nullable(),
 });
 
+// Plot boundary is optional even on a successful confirm — a photo that
+// only showed one pot close-up, or a user who cleared the fields, means
+// "don't touch userProfiles.plotWidthCm/plotLengthCm at all" rather than
+// "set them to null," so an already-set boundary (from a previous estimate
+// or a manual /garden/layout entry) is never wiped out by an unrelated
+// confirm that just didn't have a plot estimate to offer.
+const ConfirmPayloadSchema = z.object({
+  rows: z.array(ConfirmedRowSchema).max(20),
+  plotWidthCm: z.number().positive().nullable().optional(),
+  plotLengthCm: z.number().positive().nullable().optional(),
+});
+
 export type ConfirmGrowingAreaProposalsState = { error?: string; success?: boolean };
 
 // Rows are grouped by everything that has to match for them to be "the same
@@ -147,20 +160,21 @@ function equipmentGroupKey(row: z.infer<typeof ConfirmedRowSchema>): string {
  */
 export async function confirmGrowingAreaProposalsAction(
   estimationId: string,
-  rows: unknown,
+  payload: unknown,
 ): Promise<ConfirmGrowingAreaProposalsState> {
   const { userId, tenantId } = await requireSessionAndTenant();
 
-  const parsed = z.array(ConfirmedRowSchema).max(20).safeParse(rows);
+  const parsed = ConfirmPayloadSchema.safeParse(payload);
   if (!parsed.success) {
     return { error: "That doesn't look like a valid set of growing areas." };
   }
-  if (parsed.data.length === 0) {
+  if (parsed.data.rows.length === 0) {
     return { error: "Add at least one growing area before confirming." };
   }
+  const { plotWidthCm, plotLengthCm } = parsed.data;
 
   const groups = new Map<string, { row: z.infer<typeof ConfirmedRowSchema>; quantity: number }>();
-  for (const row of parsed.data) {
+  for (const row of parsed.data.rows) {
     const key = equipmentGroupKey(row);
     const existing = groups.get(key);
     if (existing) existing.quantity += 1;
@@ -240,6 +254,18 @@ export async function confirmGrowingAreaProposalsAction(
 
     if (newGrowingAreaRows.length > 0) {
       await tx.insert(growingAreas).values(newGrowingAreaRows.map((row) => ({ ...row, status: "available" as const })));
+    }
+
+    // Whatever the user submitted here is their approved intent regardless
+    // of whether it started as the AI's guess or their own typed value —
+    // same trust model as every editable area row above — so this always
+    // writes "manual", never "estimated" (that source value is only ever
+    // set by the Inngest job itself, before a human has reviewed anything).
+    if (plotWidthCm && plotLengthCm) {
+      await tx
+        .update(userProfiles)
+        .set({ plotWidthCm, plotLengthCm, plotBoundarySource: "manual", updatedAt: new Date() })
+        .where(eq(userProfiles.userId, userId));
     }
     return true;
   });

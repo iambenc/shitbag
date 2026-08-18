@@ -4824,3 +4824,365 @@ route resolved itself after a dev-server restart with `.next` cleared — a gene
 artifact, not a real error). Full Playwright suite re-run: **18/18 passing**, confirming nothing in
 the tested app surface depended on the route. Dev server stopped for the suite run and restarted in
 its normal configuration afterward.
+
+## Feature — birdseye plot layout planner: AI plot-boundary estimate + drag-and-drop canvas
+
+Requested: an AI-vision agent to assess plot photos and propose pots/planters/raised beds, factoring
+in height and movement clearance. Refined after a feasibility discussion (full 3D spatial reasoning
+from a single photo is weak ground for a vision-language model) to a more tractable scope: AI
+estimates the plot's width/length from a photo, and a **2D birdseye layout** is built from there,
+with the user able to drag growing areas around and add new ones until happy. Built on a dedicated
+branch (`feature/grow-space-layout`) as an explicit rollback point, per the user's request, in case
+the feature wasn't worth keeping.
+
+Height was a stated requirement, but `crops` has no mature-height data (only `spacingCm`/
+`soilDepthCm`); asked the user directly and they chose a **container-type proxy** (raised beds/
+planters = tall-capable, pots/seed trays = low) over adding a new column + backfill — height-shading
+is a soft heuristic over the existing `growingAreaTypeEnum`, not new data.
+
+Went through this project's full Plan-mode workflow (Explore research → Plan-agent design review →
+written plan → `ExitPlanMode` approval) given the scope: two schema changes, an extended AI agent, and
+a brand-new drag-and-drop UI with zero prior precedent in this codebase. The Plan-agent review caught
+six real implementation bugs before any code was written, all incorporated: no client component had
+access to an individual `growingAreas.id` (everything was aggregated to the equipment-row level,
+which a per-row-draggable canvas can't work from); reusing `applyEquipmentRows` for "add area from
+canvas" would have silently deleted the user's *other* equipment (it's a full delete-then-upsert built
+for `EquipmentPicker`'s always-resubmit-everything contract); the vision schema extension needed
+`.nullable().optional()`, not just `.nullable()`, or pre-existing unconfirmed estimations would fail
+`EstimationReviewPage`'s hard `safeParse` gate; auto-saving a packed layout during a Server
+Component's render was a real hazard (zero `page.tsx` anywhere in this codebase does a DB write, and
+Next's default `<Link>` prefetch-on-hover could trigger a save before the user ever opened the page);
+and free-tier users would have had no way to ever set a plot boundary, since only the paid photo-
+estimate flow could set one.
+
+**Changes**:
+- **Schema**: `userProfiles` gains `plotWidthCm`/`plotLengthCm`/`plotBoundarySource` (`"estimated"` |
+  `"manual"`), all nullable — a deliberately separate, more precise concept from the pre-existing
+  coarse `plotSize` onboarding category (not reconciled with it or fed into the grow planner; a real
+  follow-up, out of scope here). `growingAreas` gains `positionXCm`/`positionYCm`, nullable — `null`
+  means "not yet placed on the canvas," orthogonal to `status` (claim state for grow-plan purposes).
+  Both plain additive migrations.
+- **`src/lib/ai/agents/growingAreaEstimator.ts`**: extended (not duplicated) with
+  `plotWidthCm`/`plotLengthCm`/`plotBoundaryConfidence`, reusing the same photos/call/scale-reference-
+  confidence rules already established for individual areas. Mock output updated to match.
+- **Estimate review flow**: `EstimationReviewForm` gained an editable plot width/length section
+  (pre-filled from the AI's estimate, or an existing *manual* boundary if one exists — manual always
+  wins pre-fill, never silently overwritten by a fresh AI guess), submitted as explicit user-approved
+  input alongside the area rows — mirrors exactly how individual proposed areas already work (AI
+  proposes, user edits/accepts, submission is the real intent), so no new race surface beyond the
+  existing atomic `appliedAt` guard in `confirmGrowingAreaProposalsAction`.
+- **`src/lib/garden/layout.ts`** (new, pure functions, no DB access): `footprintCm` (pot/tray diameter
+  or litres → a square footprint stand-in; a generic default for anything unmeasurable), `isTooClose`
+  (soft `CLEARANCE_CM = 45` clearance check), `findFreePosition` (grid-scan for the first free spot
+  that never moves anything already placed), `suggestPositions` (places a batch of never-yet-
+  positioned areas one at a time against a fixed "already placed" set — the *only* placement algorithm
+  in this feature, reused for both the canvas's in-memory suggestion and the add-area action, so the
+  two can never disagree about what counts as free space).
+- **`src/lib/actions/garden/layout.ts`** (new): `saveGrowingAreaPositionAction` (drag persistence,
+  ownership-scoped, last-write-wins); `addGrowingAreaFromLayoutAction` (does **not** call
+  `applyEquipmentRows` — inserts `userEquipment` + `growingAreas` directly in one transaction,
+  following `confirmGrowingAreaProposalsAction`'s existing pattern instead, with a computed initial
+  position via `findFreePosition`); `setPlotBoundaryAction` (free — no paid-tier check, since
+  `/garden`/`/garden/layout` are both free features already).
+- **`src/app/garden/layout/page.tsx` + `LayoutCanvas.tsx`** (new): replaces `GrowingAreaManager.tsx`'s
+  static "Your plot right now" section (that view was built entirely on equipment-aggregated counts —
+  structurally incompatible with per-row drag persistence) with a link to this dedicated page.
+  Draggable cards use `framer-motion`'s `motion.div` (`drag`, `dragMomentum={false}`) — already an
+  installed dependency, zero new one added. Positions are **never** auto-saved on page load (matches
+  the Plan-review finding above) — unpositioned areas render a faded "suggested" placement computed
+  in-memory via `suggestPositions`, and only become a real saved position once the user actually drags
+  something. Each card's `key` includes its current position so a state update remounts it cleanly,
+  sidestepping framer-motion's internal-transform-vs-external-state sync ambiguity rather than fighting
+  it. Overlap/clearance is a soft warn (red ring), not a hard block — item dimensions are themselves
+  already approximate. Height-shading is a soft "☁️" advisory only, using the container-type proxy;
+  explicitly noted as UK/Northern-hemisphere-only ("south = sun side"), matching that this app has no
+  hemisphere handling anywhere despite already storing `latitude` — a known simplification, not an
+  oversight.
+
+**Verification**: `tsc --noEmit`/`eslint` clean. New `tests-e2e/garden-layout.spec.ts` added to the
+permanent regression pack — the riskiest part of this build (the drag interaction itself) is exercised
+end-to-end: sets a plot boundary, adds a growing area from the canvas, simulates a real mouse-drag via
+Playwright's pointer API, and confirms the new position survives a full page reload. Passed on first
+real run. Full Playwright suite re-run: **19/19 passing**.
+
+Hit a red herring worth recording: two unrelated `grow-plan.spec.ts` tests failed intermittently
+during verification (generation appeared to hang indefinitely). Direct-SQL reproduction against an
+existing account worked instantly, which didn't match — traced it properly by stashing this feature's
+entire changeset and re-running the same failing scenario against unmodified code, where it reproduced
+the *same* way. Clearing `.next` and restarting with a fresh Turbopack cache fixed it on **both** the
+baseline and this feature's code, confirming it was accumulated Turbopack cache staleness from this
+being an exceptionally long-running dev session, not a real regression — a good reminder to isolate
+via git stash rather than assume causation just because a failure appears alongside a change.
+
+Built on `feature/grow-space-layout`, not yet merged to `main` — `main` remains the rollback point the
+user asked for.
+
+## Feature — "Reset layout" button on the plot planner
+
+Requested: a way to clear the layout canvas back to its original suggested state. Already anticipated
+in this feature's own Plan-agent review (answer to open question B): resetting is "trivially `UPDATE
+growing_areas SET position_x_cm = NULL, position_y_cm = NULL WHERE user_id = ?`" — small, well-scoped,
+implemented directly without a fresh plan-mode pass.
+
+**Changes**: `resetLayoutAction()` (`src/lib/actions/garden/layout.ts`) — ownership-scoped, clears
+every one of the user's `growingAreas` rows back to unpositioned; touches nothing else (`status`,
+ownership). `LayoutCanvas.tsx` gains a "Reset layout" button (top-right, disabled when nothing has a
+saved position), gated behind `window.confirm` since it can wipe out several manually-dragged
+positions at once — same destructive-action-confirmation precedent as the calendar's existing "Cancel
+remaining re-sows" button. On confirm, optimistically clears every area's position in local state;
+`suggestPositions` (already built for the never-yet-positioned case) immediately takes back over for
+every area, requiring no new placement logic.
+
+**Verification**: `tsc --noEmit`/`eslint` clean. Extended `tests-e2e/garden-layout.spec.ts`'s existing
+test (rather than a new file — same flow, one more step): after confirming a drag persists across a
+reload, clicks "Reset layout" (accepting the `window.confirm` dialog), and asserts the item goes back
+to the faded "suggested" visual state at the exact same position it started at before ever being
+dragged — confirming `suggestPositions`' packing is deterministic. Passed on first real run. Full
+Playwright suite re-run: **19/19 passing**.
+
+## Feature — differentiated clearance: beds/planters need a walkway, pots/seed trays can pack tight
+
+Requested: beds, raised beds, and planters should require a walkway around them (overridable by the
+user, with a warning); pots and seed trays should be allowed to sit right next to each other. Until
+now `CLEARANCE_CM` (45cm) applied uniformly to every type in both directions — auto-placement and the
+drag-time "too close" warning — meaning pots were getting the same 45cm treatment as beds despite
+needing no such thing.
+
+**Changes** (`src/lib/garden/layout.ts`): replaced the single `CLEARANCE_CM` constant with
+`requiredClearanceCm(type)` — returns `WALKWAY_CLEARANCE_CM` (45) for `bed`/`raised_bed`/`planter`,
+`DENSE_CLEARANCE_CM` (0) for `pot`/`seed_tray`. A pair's actual required gap is the *larger* of what
+either side needs (`pairClearanceCm`) — a bed still needs its walkway even if the thing next to it is
+a pot, not the other way round. `PositionedRect`/`PackableGrowingArea` both gained a `type` field so
+`isTooClose`, `findFreePosition`, and `suggestPositions` can all resolve the right clearance; plot-edge
+clearance now also comes from the item's own required value (a bed keeps its walkway margin from the
+plot boundary too, a pot can sit flush against it). The existing soft-warn-don't-block design already
+gave "the user can override it" for free — dragging never hard-blocked, only auto-placement did — so
+no new override mechanism was needed, just making the *threshold* type-aware. `footprintCm`'s
+parameter type narrowed to just the size/dimension fields it actually uses (no longer needs a dummy
+`id` at call sites that don't have a real one yet). Both call sites
+(`addGrowingAreaFromLayoutAction`, `LayoutCanvas.tsx`) updated to thread `type` through; the canvas's
+help text rewritten to describe the new dual rule instead of a single number.
+
+**Verification**: `tsc --noEmit`/`eslint` clean. Extended `tests-e2e/garden-layout.spec.ts` with a new
+test: adds two pots back-to-back (auto-placed close together, asserts neither shows the "too close"
+warning) and two raised beds back-to-back (auto-placed apart, also no warning), then drags one bed
+directly onto the other — a placement the app still allows — and confirms the warning now appears on
+both, demonstrating the override-with-warning behavior specifically for walkway-requiring types.
+Passed on first real run. Full Playwright suite re-run: **20/20 passing**.
+
+## Fix — some canvas cards were rendering partially clipped by the plot boundary
+
+Reported directly: some pots were being partially rendered/cut off by the canvas. Root cause: each
+card has a 24px legibility floor on its rendered size (`Math.max(24, rect.widthCm * scale)`) — real at
+a low `scale` (a large plot, or, since the dense-clearance change above, many pots packed tightly
+together), where a card's true scaled cm-footprint can shrink to just a few px. `findFreePosition`
+only ever reasons in cm and has no idea this rendering floor exists, so an item legitimately placed
+right at the plot's far edge in cm terms could end up rendered well past the container's actual pixel
+edge once the floor inflated its box — silently clipped by the canvas's `overflow-hidden`.
+
+**Change** (`src/app/garden/layout/LayoutCanvas.tsx`): each card's rendered `left`/`top` is now clamped
+so its floor-inflated box never extends past the container's edge (`Math.min(rect.x * scale,
+containerWidthPx - renderedWidth)`, same for the y-axis) — a display-only adjustment; the card's real
+saved cm position is never touched. The clamp needed the container's *inner* (padding-box) dimensions,
+not its declared outer width/height — absolutely-positioned children sit inside the padding box, which
+is inset from the container's own `border-2`, a couple of px this fix initially missed and a live test
+run caught.
+
+**Verification**: `tsc --noEmit`/`eslint` clean. New permanent test in `tests-e2e/garden-layout.spec.ts`
+(plus a new `addGrowingAreaAt` SQL test helper in `helpers/db.ts`, since no UI path reliably reaches an
+exact cm position): sets a large plot (3000×2000cm) to force a low scale, inserts one pot directly at
+the exact far corner `findFreePosition` would allow, and asserts its rendered bounding box stays fully
+inside the canvas container's. Failed on the first run by ~1.5px (the border-inset gap above), fixed,
+then passed. Full Playwright suite re-run: **21/21 passing**.
+
+Also cleaned up two orphaned `playwright test-server` daemon processes found running since the previous
+weekend (unrelated to this session) that were intermittently causing fresh `pnpm exec playwright test`
+invocations to hang on the very first page load — killed, and test runs since have been reliable.
+
+## Feature — drag areas off the plot to remove them; a "not yet placed" tray to drag them back on
+
+Requested: let the user remove a growing area from the plot by dragging it off the canvas, and show
+unplaced items in a separate tray they can drag back onto the plot. No schema change needed —
+`positionXCm`/`positionYCm` already meant "not yet placed" via `null`; this is purely a change in how
+that state is presented and reached.
+
+**Changes**:
+- The canvas now renders two zones: the plot (only areas with a real saved position, absolutely
+  positioned as before) and a new "Not yet placed" tray below it (a plain flex-wrap list of fixed-size
+  cards for every area with a null position). One unified `handleDragEnd` covers every drag regardless
+  of which zone it started in: dropping inside the plot's bounding rect places/repositions the area
+  there (centred under the pointer, clamped to the plot bounds); dropping anywhere else sends it back
+  to the tray.
+- `addGrowingAreaFromLayoutAction` (`src/lib/actions/garden/layout.ts`) simplified: new areas now
+  always insert unpositioned (into the tray) rather than auto-computing a starting spot on the plot —
+  the whole point of the tray is that nothing appears on the plot without the user putting it there.
+  This removed its only remaining caller of `findFreePosition`/`suggestPositions`
+  (`src/lib/garden/layout.ts`), so both were deleted as genuinely dead code, along with the "suggested,
+  faded position" rendering state on the plot that they existed to support — a real simplification, not
+  just a stylistic one.
+- New `unplaceGrowingAreaAction(growingAreaId)`: ownership-scoped, clears one area's position — the
+  single-item counterpart to the existing bulk `resetLayoutAction`.
+- Every card gets a `dragTick` counter folded into its React `key`, bumped on every drag end regardless
+  of outcome — without it, a "no-op" drag (dropped back roughly where it started, or dragged within the
+  tray and released there) left framer-motion's own internal drag transform lingering on the DOM node,
+  visually offsetting the card from its actual layout position until something unrelated forced a
+  re-render.
+
+**Bug found and fixed during verification**: framer-motion's `PanInfo.point` is documented as
+"relative to the device or page" — i.e. it includes scroll offset — while `getBoundingClientRect()`
+(used to test whether a drop landed inside the plot) is viewport-relative and excludes it. The two
+only agree when the page is scrolled to the top, which is not reliable — Playwright's own `.fill()`
+auto-scrolls a target field into view before typing, and the tray/add-area form sit low enough on this
+page that filling the "Size" field before an add routinely leaves the page scrolled. Whenever that
+happened, every drop looked like it landed outside the plot, so nothing could ever be placed — a bug
+that would have hit a real user on any viewport short enough to need scrolling, not just the test.
+Fixed by shifting the plot's rect into page coordinates (`+ window.scrollX/scrollY`) before comparing
+against `info.point`, in both the inside/outside check and the cm-position conversion that follows it.
+
+**Verification**: `tsc --noEmit`/`eslint` clean. Rewrote `tests-e2e/garden-layout.spec.ts`'s drag tests
+for the new model: adding an area lands it in the tray; dragging it onto the plot places and persists
+it across a reload; dragging it back off returns it to the tray and persists that too; the bulk reset
+button also sends a placed area back to the tray. A second test drops two pots so their footprints
+touch exactly (0cm gap) at precomputed cm coordinates and confirms no warning, then does the identical
+touching-drop pattern with two raised beds and confirms both warn — the same drag pattern, divergent
+outcome, driven purely by the differentiated clearance rule. Both failed on the first real run (the
+scroll-coordinate bug above), fixed, then passed. The pre-existing far-edge-clipping test needed no
+changes — it inserts its test fixture directly via SQL, independent of the placement mechanism that
+changed here. Full Playwright suite re-run: **21/21 passing**.
+
+## Feature — the plot planner now proposes a layout automatically, instead of starting empty
+
+Requested: the planner should suggest a layout rather than leaving the user to place everything by
+hand; the user should still be able to move things around or ignore the suggestion entirely. This
+reintroduces the auto-placement algorithm removed two entries ago (`findFreePosition`/`suggestPositions`
+in `src/lib/garden/layout.ts`, brought back essentially as they were) — but reconciling it with last
+entry's drag-off-to-remove feature raised a real design question worth recording: if every unplaced
+area always gets a fresh suggestion, dragging a confirmed area off the plot to remove it would just
+have it reappear as a new suggestion on the very next render, making "remove" look broken.
+
+**Resolved with one small piece of client-only state**, not a schema change: `LayoutCanvas.tsx` gains
+a `dismissed: Set<string>` (React state, never persisted — deliberately resets on reload). Every
+unplaced area not in `dismissed` gets a suggested spot computed fresh on every render via
+`suggestPositions`, rendered directly on the plot in a faded/dashed style, confirmed the instant it's
+dragged (any drop inside the plot bounds saves a real position, same mechanism whether the item started
+as a suggestion or an existing confirmed placement being moved). Dragging *any* on-plot area
+(suggested or confirmed) outside the plot bounds adds it to `dismissed` — and additionally calls the
+existing `unplaceGrowingAreaAction` if it had a real position to clear. Dismissing is explicitly framed
+as "not right now," not "never": since it's client-only, a reload clears it and the area becomes a
+fresh candidate again — a deliberate choice (documented in code and in the tests) over inventing a
+persisted exclusion flag for a want that was never actually asked for.
+
+**Changes**:
+- `src/lib/garden/layout.ts`: restored `findFreePosition`/`suggestPositions` (deleted in the tray-only
+  entry above) alongside the differentiated-clearance logic already there — same packing approach,
+  same per-type clearance rule, now serving suggestions instead of nothing.
+- `LayoutCanvas.tsx`: the plot now renders both confirmed (`placed`) and suggested-but-unsaved
+  (`suggestedOnPlot`) areas together as one `onPlot` list, so overlap/shading warnings see the whole
+  picture rather than just confirmed placements. "Reset layout" now also clears `dismissed` (its
+  confirm dialog reworded to "start over with fresh suggestions") and is enabled whenever there's
+  *either* a real placement or a dismissal to clear. The "not yet placed" tray is renamed "Not on your
+  plot" and now only holds genuinely set-aside or doesn't-fit-the-plot areas — the common case (an
+  area with nowhere decided yet) no longer needs a tray at all, since it's suggested directly.
+- `src/app/garden/layout/page.tsx`: intro copy updated to describe the suggest-first flow.
+
+**Two real bugs found and fixed while getting the new drag tests passing (test-side both times, not
+app bugs)**:
+1. The very first attempt reused the same drag helper pattern as before, dragging *from* a suggested
+   card already sitting inside the plot rather than from the separate tray section — and hit the exact
+   same page-vs-viewport coordinate class of bug as the previous entry, in the same `droppedInsidePlot`
+   check, requiring no further app-code change (already fixed) once traced back to the same cause.
+2. A second, genuinely new issue: clicking "+ Add growing area" (near the bottom of a page taller than
+   the test viewport) auto-scrolls that button into view, which can push the plot itself — near the
+   top of the page — *above* the viewport entirely (a bounding box with a **negative** y). A mousedown
+   at an off-screen coordinate doesn't reliably hit anything, so the drag silently never started.
+   Fixed test-side with a `scrollToTop()` helper called immediately before every pair of bounding-box
+   reads used for a drag, keeping the plot and whatever's on it in a known, visible scroll state.
+   Diagnosed by temporarily instrumenting `handleDragEnd` with a `console.log` and a throwaway spec
+   file capturing the browser console, rather than guessing — the debug output showed `plotBox.y: -49`
+   directly.
+
+**Verification**: `tsc --noEmit`/`eslint` clean. Rewrote all three `tests-e2e/garden-layout.spec.ts`
+tests for the new lifecycle: adding an area now asserts a *suggested* card appears immediately (not a
+tray entry); dragging it confirms and persists across a reload; dragging it off both persists the
+un-placement and sets it aside (confirmed via a second reload — after which, since dismissal doesn't
+persist, it correctly re-appears as a fresh suggestion, not stuck in the tray); "Reset layout" now
+asserts a fresh suggestion reappears on the plot rather than the item landing in the tray. The
+differentiated-clearance test's exact-touching-drop technique needed no logic changes, just swapping
+which zone each drag starts from. The pre-existing far-edge-clipping test was untouched and still
+passed unmodified. Full Playwright suite re-run: **21/21 passing**.
+
+## Change — reset button moved inline under the canvas, an in-app modal instead of the browser confirm,
+## and identical set-aside areas grouped with a count
+
+Requested: move "Reset layout" inline under the canvas rather than floated top-right; replace its
+`window.confirm` with a real modal; and, separately mid-turn, simplify the "Not on your plot" section
+by grouping identical set-aside areas with a count instead of listing every instance.
+
+**Changes** (`src/app/garden/layout/LayoutCanvas.tsx`):
+- The reset button moved from a `flex justify-end` row above the plot to a plain `self-start` element
+  directly below it, before the help text.
+- New `ConfirmResetModal` component: a fixed-position overlay (`role="alertdialog"`, `aria-modal`),
+  closes on Escape or a backdrop click, cancel/confirm buttons. `handleReset`'s old body (the actual
+  `resetLayoutAction` call + state updates) became `confirmReset`, invoked by the modal instead of by
+  the button directly; the button now just opens it (`setConfirmingReset(true)`). The modal's confirm
+  button is labelled "Yes, reset" rather than reusing "Reset layout" — sharing the trigger's label
+  would make the two buttons ambiguous to any accessibility-role-based lookup (including the
+  Playwright tests) the moment the modal is open.
+- New `groupSetAside(areas, overflowIds)`: collapses set-aside areas sharing type + size/dimensions
+  into one card with a count badge, the same "3x 20cm pots" convention this app already uses for owned
+  equipment elsewhere (`EquipmentPicker`, `confirmGrowingAreaProposalsAction`'s `equipmentGroupKey`).
+  Areas with an occupant (a crop already growing in them) never merge — which crop is growing where is
+  meaningfully different information, not a duplicate. Dragging a grouped card acts on one
+  representative area only; the group naturally shrinks (or picks a new representative) as areas leave
+  the set-aside list, no extra bookkeeping needed since it's recomputed fresh every render like
+  everything else here.
+
+**A real bug surfaced while writing the grouping test, not an app bug**: the existing `scrollToTop()`
+test helper (added a few entries back to fix a *different* scroll-coordinate issue) turned out not to
+be robust — it assumed scrolling to the very top of the page was enough to make both a drag's source
+and destination visible at once, which happened to hold for every drag exercised so far but breaks
+once a source element (the new grouped set-aside card) sits far enough down the page that it and the
+plot can never be on-screen together in one viewport. Replaced with a `dragTo()` helper that scrolls
+the source and destination into view *independently*, right before reading each one's bounding box —
+mirroring how a real drag-and-scroll gesture actually works, and no longer dependent on the two
+elements' relative position on an increasingly tall page. Diagnosed the same way as the earlier
+scroll bug: a temporary `console.log` of the failing drag's source/destination boxes showed the source
+sitting at `y: 950` against a 720px default viewport.
+
+**Verification**: `tsc --noEmit`/`eslint` clean. Updated the existing reset-flow test for the modal
+(click trigger → assert `alertdialog` visible → click "Yes, reset" → assert it closes). Added a new
+test: three identical pots each set aside individually collapse into one card whose title reports
+"3 set aside"; dragging that card onto the plot places exactly one instance and the group's title
+updates to "2 set aside" (not zero, not three). Rewrote every other drag call site in the file to use
+the new shared `dragTo()` helper, both for robustness and to remove the repeated boilerplate. Full
+Playwright suite re-run: **22/22 passing**.
+
+## Change — suggestions prioritize beds/raised beds/planters over pots/seed trays
+
+Requested: priority should go to garden beds, raised beds, and planters. `suggestPositions`
+(`src/lib/garden/layout.ts`) previously sorted candidates purely by footprint area descending —
+usually enough to get walkway-requiring types processed first in practice (they tend to be bigger),
+but not guaranteed, and never an explicit policy.
+
+**Change**: the sort now compares `requiredClearanceCm(type)` first (bed/raised_bed/planter always
+outrank pot/seed_tray, since only they carry the 45cm walkway requirement) and only falls back to
+footprint size as a tiebreak within the same tier. Since `findFreePosition`/`suggestPositions` place
+items into `occupied` one at a time in this exact order, this doesn't just affect *ordering cosmetics*
+— placing walkway types first means they get first claim on the plot's space, and any type genuinely
+short on room now lands in `overflow` (set aside as "doesn't fit") in the pot/seed_tray tier rather
+than the walkway tier, which wasn't previously guaranteed.
+
+**Verification**: `tsc --noEmit`/`eslint` clean. Hand-derived a plot/item geometry (130×120cm plot; a
+40cm pot with a *larger* raw footprint (1600cm²) than a 40×30cm raised bed (1200cm²), sized so the
+bed only ever fits at exactly one spot, and a pot placed there first blocks it entirely with no room
+for the bed to land anywhere else) where the old footprint-only sort and the new priority sort would
+disagree, then confirmed the exact predicted outcome (bed placed at (45,45), pot overflowed) via a
+throwaway `tsx` script calling `suggestPositions` directly before writing the real test — cheaper
+than debugging a wrong assumption through a full browser test. Added a permanent
+Playwright test asserting the same thing end-to-end with no dragging involved (purely what the
+automatic suggestion proposes): the bed shows up as a suggested plot card, the bigger-footprint pot
+lands in "Not on your plot" as a doesn't-fit card. Failed once on a real locator bug in the new test
+itself (the shared `SET_ASIDE_ITEM` constant only matches the "drag onto the plot to place" wording;
+a doesn't-fit card's title is the mutually-exclusive "doesn't fit your plot at its current size" —
+confirmed via the failure's page snapshot that the app's actual behavior was already correct, only the
+test's locator was wrong), fixed, then passed. Full Playwright suite re-run: **23/23 passing**.

@@ -1,18 +1,10 @@
 import { redirect } from "next/navigation";
 import Link from "next/link";
-import { eq, asc, inArray, isNotNull, and } from "drizzle-orm";
+import { eq, asc, isNotNull, and } from "drizzle-orm";
 import { auth } from "@/lib/auth";
 import { getCurrentTenant } from "@/lib/tenant/resolve";
 import { withTenant } from "@/lib/tenant/withTenant";
-import {
-  userEquipment,
-  equipmentTypes,
-  partnerLinks,
-  growingAreas,
-  planRecommendations,
-  planRecommendationStages,
-  crops,
-} from "@/db/schema";
+import { userEquipment, equipmentTypes, partnerLinks, growingAreas } from "@/db/schema";
 import { getUserProfile } from "@/lib/onboarding/profile";
 import { SLUG_TO_GROWING_AREA_TYPE } from "@/lib/garden/equipmentMapping";
 import { EquipmentPicker } from "@/components/EquipmentPicker";
@@ -27,7 +19,7 @@ export default async function GardenPage() {
   const profile = await getUserProfile(session.user.id, tenant.id);
   if (!profile?.onboardingCompletedAt) redirect("/onboarding/location");
 
-  const { equipmentRows, areas, types, links, occupancy } = await withTenant(tenant.id, async (tx) => {
+  const { equipmentRows, areas, types, links } = await withTenant(tenant.id, async (tx) => {
     const [equipmentRows, areas, types, links] = await Promise.all([
       tx
         .select({ equipment: userEquipment, type: equipmentTypes })
@@ -47,28 +39,7 @@ export default async function GardenPage() {
         .where(and(eq(partnerLinks.tenantId, tenant.id), isNotNull(partnerLinks.equipmentTypeId))),
     ]);
 
-    // What's currently growing (in_use areas) or earmarked for later
-    // (reserved areas, awaiting a transplant task) — lets the picker show
-    // the effect of a generated plan, not just an opaque status flag. Joins
-    // through planRecommendationStages, not planRecommendations directly,
-    // since a recommendation can now span several stages/areas over its
-    // lifecycle.
-    const claimedAreaIds = areas.filter((a) => a.status === "in_use" || a.status === "reserved").map((a) => a.id);
-    const occupancy = claimedAreaIds.length
-      ? await tx
-          .select({
-            areaId: planRecommendationStages.growingAreaId,
-            stageStatus: planRecommendationStages.status,
-            cropName: crops.name,
-            cropEmoji: crops.emoji,
-          })
-          .from(planRecommendationStages)
-          .innerJoin(planRecommendations, eq(planRecommendationStages.planRecommendationId, planRecommendations.id))
-          .innerJoin(crops, eq(planRecommendations.cropId, crops.id))
-          .where(inArray(planRecommendationStages.growingAreaId, claimedAreaIds))
-      : [];
-
-    return { equipmentRows, areas, types, links, occupancy };
+    return { equipmentRows, areas, types, links };
   });
 
   const linksByType = new Map(links.map((l) => [l.equipmentTypeId, l]));
@@ -80,20 +51,6 @@ export default async function GardenPage() {
       area.sourceUserEquipmentId,
       (placedCountByEquipmentId.get(area.sourceUserEquipmentId) ?? 0) + 1,
     );
-  }
-
-  const occupantByAreaId = new Map(occupancy.map((o) => [o.areaId, { cropName: o.cropName, cropEmoji: o.cropEmoji }]));
-  const occupantsByEquipmentId = new Map<string, { cropName: string; cropEmoji: string }[]>();
-  const reservedByEquipmentId = new Map<string, { cropName: string; cropEmoji: string }[]>();
-  for (const area of areas) {
-    if (!area.sourceUserEquipmentId) continue;
-    if (area.status !== "in_use" && area.status !== "reserved") continue;
-    const occupant = occupantByAreaId.get(area.id);
-    if (!occupant) continue;
-    const targetMap = area.status === "in_use" ? occupantsByEquipmentId : reservedByEquipmentId;
-    const list = targetMap.get(area.sourceUserEquipmentId) ?? [];
-    list.push(occupant);
-    targetMap.set(area.sourceUserEquipmentId, list);
   }
 
   const placeable = equipmentRows
@@ -109,8 +66,6 @@ export default async function GardenPage() {
       depthCm: r.equipment.depthCm,
       quantityOwned: r.equipment.quantity,
       placedCount: placedCountByEquipmentId.get(r.equipment.id) ?? 0,
-      occupants: occupantsByEquipmentId.get(r.equipment.id) ?? [],
-      reserved: reservedByEquipmentId.get(r.equipment.id) ?? [],
     }));
 
   return (

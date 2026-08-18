@@ -36,6 +36,16 @@ export type PlotSize = (typeof plotSizeEnum)[number];
 export const expertiseLevelEnum = ["beginner", "intermediate", "advanced"] as const;
 export type ExpertiseLevel = (typeof expertiseLevelEnum)[number];
 
+// "estimated" = last written by the AI plot-photo estimate (see
+// growingAreaEstimator.ts); "manual" = the user typed it in directly (either
+// via setPlotBoundaryAction, or by editing the AI's number before confirming
+// an estimate — see confirmGrowingAreaProposalsAction, which always writes
+// "manual" since the user had final edit control over whatever was
+// submitted). Never overwritten with a lower-confidence AI guess once set —
+// only used to decide which value pre-fills the estimate review form.
+export const plotBoundarySourceEnum = ["estimated", "manual"] as const;
+export type PlotBoundarySource = (typeof plotBoundarySourceEnum)[number];
+
 export const userProfiles = pgTable(
   "user_profiles",
   {
@@ -51,6 +61,16 @@ export const userProfiles = pgTable(
     latitude: real("latitude"),
     longitude: real("longitude"),
     plotSize: text("plot_size", { enum: plotSizeEnum }),
+    // A separate, more precise concept from plotSize above — that's a
+    // coarse onboarding category (window ledge vs. allotment) consumed by
+    // the grow planner prompt; these are literal cm dimensions used only by
+    // the /garden/layout drag-and-drop canvas. Deliberately not reconciled
+    // with plotSize or fed into the grow planner — a real future
+    // enhancement, out of scope for now. Null until the user either
+    // confirms an AI plot-photo estimate or sets one manually.
+    plotWidthCm: real("plot_width_cm"),
+    plotLengthCm: real("plot_length_cm"),
+    plotBoundarySource: text("plot_boundary_source", { enum: plotBoundarySourceEnum }),
     avgSunlightHours: real("avg_sunlight_hours"),
     householdSize: integer("household_size"),
     expertiseLevel: text("expertise_level", { enum: expertiseLevelEnum }),
