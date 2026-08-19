@@ -5662,3 +5662,42 @@ test had never been updated after that revert. Fixed to assert same-size cards w
 *labels* instead, matching current intended behavior. Full suite re-run: **13/13 passing** (one
 `net::ERR_ABORTED`/detached-frame failure on an unrelated, unchanged test turned out to be dev-server
 recompilation flake — confirmed by re-running that single test in isolation, which passed cleanly).
+
+## UI — onboarding: stepper inputs, side-by-side layout, indoor-space toggle
+
+Requested: "In the onboarding: the average hours of daylight should be a +/- input; the number of
+people in the household should be a +/- input with a maximum of 10; both side by side; the 'I have
+indoor space' checkbox should be a more obvious toggle; hours you can spend gardening on a weekday
+and on a weekend day should both be +/- inputs, side by side."
+
+**Change**: new shared `src/components/onboarding/NumberStepper.tsx` client component — a `+`/`-`
+controlled number input that still renders a real native `<input type="number" name=... />`, so it
+submits through the existing Server Action `FormData` flow unchanged (required/min/max keep working
+as native HTML validation too). Used in four places: `PlotForm.tsx`'s `avgSunlightHours` (0–24,
+step 0.5) and `householdSize` (1–10, new `MAX_HOUSEHOLD_SIZE` constant, lowered from the old max of
+20 to match the request — kept in sync with a matching lowered max in `plotSchema` in
+`src/lib/actions/onboarding/plot.ts`), and `ExperienceForm.tsx`'s `weekdayHoursAvailable`/
+`weekendHoursAvailable` (0–24, step 0.5). Both pairs now sit side by side in a `flex-col
+sm:flex-row` wrapper. `PlotForm.tsx`'s `hasIndoorSeedlingSpace` checkbox was rebuilt as a visible
+track/thumb toggle switch (still a real `<input type="checkbox">` positioned `absolute inset-0
+opacity-0` over the whole control, not `sr-only`/`display:none`, so it stays a genuine actionable
+target — a `sr-only` checkbox has zero effective size and fails click/tap targeting) with a
+`peer-checked`-driven `<span>` for the visual track and thumb.
+
+**Bug found and fixed during this work**: `NumberStepper`'s first draft wrapped both `+`/`-`
+buttons and the `<input>` inside one implicit `<label>`. Per the HTML spec, `<button>` is a
+labelable element just like `<input>`; when a `<label>` implicitly wraps more than one labelable
+descendant, the browser associates the label with only the *first* one — here, the decrease
+button — leaving the actual number input with no accessible name at all (confirmed via a Playwright
+accessibility snapshot showing an unnamed `spinbutton`, and via `getByLabel` timing out with zero
+matches). Fixed by switching to explicit association: a `useId()`-generated id, a standalone
+`<label htmlFor={id}>`, and `id={id}` on the `<input>`, with the two buttons as plain unlabelled
+siblings (each keeps its own generic `aria-label="Decrease"`/`"Increase"` rather than an
+per-field-interpolated label, since Playwright's `getByLabel` substring-matches by default and an
+aria-label containing the field's label text as a substring would otherwise resolve as a second,
+ambiguous match).
+
+**Verification**: `tsc --noEmit`/`eslint` clean across `NumberStepper.tsx`, `PlotForm.tsx`,
+`ExperienceForm.tsx`, and `plot.ts`. `tests-e2e/onboarding.spec.ts` (the only e2e test touching any
+of these fields) passes end-to-end unchanged, exercising all four stepper inputs plus the new toggle
+switch's `.check()` interaction.

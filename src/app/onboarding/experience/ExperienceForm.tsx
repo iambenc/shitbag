@@ -4,6 +4,7 @@ import { useActionState } from "react";
 import { completeOnboardingAction, type ExperienceState } from "@/lib/actions/onboarding/experience";
 import { expertiseLevelEnum, type ExpertiseLevel } from "@/db/schema";
 import { expertiseLevelLabels } from "@/lib/onboarding/labels";
+import { NumberStepper } from "@/components/onboarding/NumberStepper";
 
 const initialState: ExperienceState = {};
 
@@ -42,33 +43,26 @@ export function ExperienceForm({
         </div>
       </fieldset>
 
-      <label className="flex flex-col gap-1 text-sm">
-        Hours you can spend gardening on a weekday
-        <input
+      <div className="flex flex-col gap-4 sm:flex-row">
+        <NumberStepper
           name="weekdayHoursAvailable"
-          type="number"
+          label="Hours you can spend gardening on a weekday"
           min={0}
           max={24}
           step={0.5}
           required
           defaultValue={initial.weekdayHoursAvailable ?? undefined}
-          className="rounded-md border border-black/15 px-3 py-2"
         />
-      </label>
-
-      <label className="flex flex-col gap-1 text-sm">
-        Hours you can spend gardening on a weekend day
-        <input
+        <NumberStepper
           name="weekendHoursAvailable"
-          type="number"
+          label="Hours you can spend gardening on a weekend day"
           min={0}
           max={24}
           step={0.5}
           required
           defaultValue={initial.weekendHoursAvailable ?? undefined}
-          className="rounded-md border border-black/15 px-3 py-2"
         />
-      </label>
+      </div>
 
       {state.error && <p className="text-sm text-red-700">{state.error}</p>}
       <button

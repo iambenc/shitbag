@@ -4,6 +4,14 @@ import { useActionState } from "react";
 import { savePlotAction, type PlotState } from "@/lib/actions/onboarding/plot";
 import { plotSizeEnum, type PlotSize } from "@/db/schema";
 import { plotSizeLabels } from "@/lib/onboarding/labels";
+import { NumberStepper } from "@/components/onboarding/NumberStepper";
+
+// Kept in sync with plotSchema's own householdSize.max in
+// src/lib/actions/onboarding/plot.ts — both are the same business rule
+// (10 is a deliberately generous ceiling for a household size, not a
+// technical limit), so this UI cap and the server-side validation cap must
+// always agree.
+const MAX_HOUSEHOLD_SIZE = 10;
 
 const initialState: PlotState = {};
 
@@ -43,41 +51,44 @@ export function PlotForm({
         </div>
       </fieldset>
 
-      <label className="flex flex-col gap-1 text-sm">
-        Average hours of sunlight per day
-        <input
+      <div className="flex flex-col gap-4 sm:flex-row">
+        <NumberStepper
           name="avgSunlightHours"
-          type="number"
+          label="Average hours of sunlight per day"
           min={0}
           max={24}
           step={0.5}
           required
           defaultValue={initial.avgSunlightHours ?? undefined}
-          className="rounded-md border border-black/15 px-3 py-2"
         />
-      </label>
-
-      <label className="flex flex-col gap-1 text-sm">
-        People in your household
-        <input
+        <NumberStepper
           name="householdSize"
-          type="number"
+          label="People in your household"
           min={1}
-          max={20}
+          max={MAX_HOUSEHOLD_SIZE}
+          step={1}
           required
           defaultValue={initial.householdSize ?? undefined}
-          className="rounded-md border border-black/15 px-3 py-2"
         />
-      </label>
+      </div>
 
-      <label className="flex items-center gap-2 text-sm">
+      <label className="relative flex cursor-pointer items-center justify-between gap-3 rounded-md border border-black/15 px-4 py-3 text-sm transition has-checked:border-(--brand-primary) has-checked:bg-(--brand-primary)/10">
+        I have indoor space (windowsill, greenhouse, etc.) for starting seedlings early
+        {/* Visually replaced by the track/thumb span below (opacity-0, not
+            display:none/sr-only) — a real native checkbox still sits over
+            the whole control so it stays keyboard/screen-reader operable
+            and Playwright's .check()/.click() (which requires a genuinely
+            visible, non-zero-size target) keeps working exactly as before. */}
         <input
           name="hasIndoorSeedlingSpace"
           type="checkbox"
           defaultChecked={initial.hasIndoorSeedlingSpace ?? false}
-          className="accent-(--brand-primary)"
+          className="peer absolute inset-0 h-full w-full cursor-pointer opacity-0"
         />
-        I have indoor space (windowsill, greenhouse, etc.) for starting seedlings early
+        <span
+          aria-hidden
+          className="relative h-6 w-11 shrink-0 rounded-full bg-black/20 transition-colors after:absolute after:top-0.5 after:left-0.5 after:h-5 after:w-5 after:rounded-full after:bg-white after:shadow after:transition-transform peer-checked:bg-(--brand-primary) peer-checked:after:translate-x-5"
+        />
       </label>
 
       {state.error && <p className="text-sm text-red-700">{state.error}</p>}

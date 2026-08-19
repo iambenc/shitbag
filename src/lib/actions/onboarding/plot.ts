@@ -11,7 +11,10 @@ import { nextOnboardingStep } from "@/lib/onboarding/steps";
 const plotSchema = z.object({
   plotSize: z.enum(plotSizeEnum),
   avgSunlightHours: z.coerce.number().min(0).max(24),
-  householdSize: z.coerce.number().int().min(1).max(20),
+  // Kept in sync with PlotForm.tsx's own MAX_HOUSEHOLD_SIZE — same business
+  // rule (10 is a deliberately generous ceiling, not a technical limit) on
+  // both sides.
+  householdSize: z.coerce.number().int().min(1).max(10),
   hasIndoorSeedlingSpace: z.coerce.boolean(),
 });
 
