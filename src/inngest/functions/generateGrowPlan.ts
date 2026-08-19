@@ -15,14 +15,13 @@ import {
   harvestLog,
   crops,
   cropVarieties,
-  shoppingListItems,
   equipmentTypes,
   userEquipment,
 } from "@/db/schema";
 import { generateGrowPlan, type GrowPlannerInput } from "@/lib/ai/agents/growPlanner";
 import { getCropFacts } from "@/lib/ai/agents/cropFacts";
 import { getVarietyFacts, type ParentCropFacts } from "@/lib/ai/agents/varietyFacts";
-import { PURCHASABLE_GROWING_SPACE_SLUGS, SLUG_TO_GROWING_AREA_TYPE } from "@/lib/garden/equipmentMapping";
+import { SLUG_TO_GROWING_AREA_TYPE } from "@/lib/garden/equipmentMapping";
 import { getSeedStock } from "@/lib/seeds/stock";
 
 function slugify(value: string): string {
@@ -161,6 +160,7 @@ export const generateGrowPlanFn = inngest.createFunction(
             widthCm: a.widthCm,
             lengthCm: a.lengthCm,
             depthCm: a.depthCm,
+            heightCm: a.heightCm,
           })),
           unplacedEquipment,
           ownedSeeds: seeds
@@ -461,6 +461,13 @@ export const generateGrowPlanFn = inngest.createFunction(
           // the one their owning recommendation resolved to, same as cropId
           // already works.
           const varietyIdByRecommendationId = new Map<string, string | null>();
+          // Every recommendation id (usually one, but see the "two lettuce
+          // beds" note above) that resolved to a given crop — used below to
+          // flip requiresPurchase to true on the real persisted row once the
+          // quantity-shortfall check (which only knows crop ids) is in, so
+          // acceptRecommendationAction has a single authoritative flag to
+          // read per recommendation instead of recomputing this itself.
+          const recommendationIdsByCropId = new Map<string, string[]>();
           if (validRecommendations.length > 0) {
             const insertedRecommendations = await tx
               .insert(planRecommendations)
@@ -481,6 +488,10 @@ export const generateGrowPlanFn = inngest.createFunction(
             validRecommendations.forEach(({ r, originalIndex }, i) => {
               recommendationIdByOriginalIndex.set(originalIndex, insertedRecommendations[i].id);
               varietyIdByRecommendationId.set(insertedRecommendations[i].id, varietyIdFor(r));
+              recommendationIdsByCropId.set(cropIdBySlug[r.cropSlug], [
+                ...(recommendationIdsByCropId.get(cropIdBySlug[r.cropSlug]) ?? []),
+                insertedRecommendations[i].id,
+              ]);
             });
 
             const stageRows = validRecommendations.flatMap(({ stages }, i) =>
@@ -569,12 +580,17 @@ export const generateGrowPlanFn = inngest.createFunction(
             await tx.insert(tasks).values(taskRows);
           }
 
-          // Add shopping-list items immediately rather than waiting on the
-          // weekly cron job (src/inngest/functions/weeklyShoppingList.ts,
-          // left unchanged — it's now a backstop for plans generated before
-          // this existed, not the primary path). Both inserts below land in
-          // this same transaction, so the weekly job can never observe a
-          // recommendation without also observing its shopping-list item.
+          // Seeds only ever reach the shopping list once the user has
+          // explicitly accepted the recommendation that needs them
+          // (acceptRecommendationAction) — a freshly generated recommendation
+          // starts "pending" (awaiting review) and may still be rejected
+          // outright, so nothing is added here at generation time. What IS
+          // done here is computing the authoritative requiresPurchase flag
+          // each recommendation row carries forward, so accept-time has a
+          // single boolean to read rather than re-deriving stock shortfalls
+          // itself later (stock can change between generation and accept,
+          // but re-checking it at accept time would just replace one snapshot
+          // with another no more "correct" than this one).
           //
           // Two independent signals feed this, unioned together: the AI's
           // own presence-based requiresPurchase flag (crop owned at all?),
@@ -609,63 +625,30 @@ export const generateGrowPlanFn = inngest.createFunction(
           for (const { r } of validRecommendations) {
             if (r.requiresPurchase) cropIdsNeedingPurchase.add(cropIdBySlug[r.cropSlug]);
           }
-          if (cropIdsNeedingPurchase.size > 0) {
-            const existingCropItems = await tx
-              .select({ cropId: shoppingListItems.cropId })
-              .from(shoppingListItems)
-              .where(and(eq(shoppingListItems.userId, userId), inArray(shoppingListItems.cropId, [...cropIdsNeedingPurchase])));
-            const alreadyListedCropIds = new Set(existingCropItems.map((i) => i.cropId));
-            const newCropIds = [...cropIdsNeedingPurchase].filter((id) => !alreadyListedCropIds.has(id));
-            if (newCropIds.length > 0) {
-              await tx.insert(shoppingListItems).values(
-                newCropIds.map((cropId) => ({
-                  tenantId,
-                  userId,
-                  cropId,
-                  quantityLabel: "1 packet",
-                  source: "ai" as const,
-                })),
-              );
-            }
+          // quantityShortfallCropIds can flag a recommendation the AI itself
+          // said requiresPurchase: false for (e.g. "you own some Carrot
+          // seed" without knowing the real per-sowing count yet) — flip
+          // those rows to true too, so requiresPurchase always reflects the
+          // fuller, code-checked signal by the time anyone reads it.
+          const recommendationIdsNeedingPurchase = [...cropIdsNeedingPurchase].flatMap(
+            (cropId) => recommendationIdsByCropId.get(cropId) ?? [],
+          );
+          if (recommendationIdsNeedingPurchase.length > 0) {
+            await tx
+              .update(planRecommendations)
+              .set({ requiresPurchase: true })
+              .where(inArray(planRecommendations.id, recommendationIdsNeedingPurchase));
           }
 
-          // Purchasable growing-space equipment (pots/trays/planters/raised
-          // beds — deliberately not the watering can, a tool rather than
-          // growing space, and deliberately not garden beds, which aren't a
-          // product at all, just ground in the user's own garden) the user
-          // owns none of. Not crop-specific: no crop->equipment mapping
-          // exists in this schema, so this is "growing needs equipment,
-          // surfaced now" not a claim about what any particular recommended
-          // crop requires.
-          const [tenantGrowingEquipmentTypes, ownedEquipment, existingEquipmentItems] = await Promise.all([
-            tx.select().from(equipmentTypes).where(inArray(equipmentTypes.slug, PURCHASABLE_GROWING_SPACE_SLUGS)),
-            tx
-              .select({ equipmentTypeId: userEquipment.equipmentTypeId })
-              .from(userEquipment)
-              .where(eq(userEquipment.userId, userId)),
-            tx
-              .select({ equipmentTypeId: shoppingListItems.equipmentTypeId })
-              .from(shoppingListItems)
-              .where(eq(shoppingListItems.userId, userId)),
-          ]);
-          const ownedEquipmentTypeIds = new Set(ownedEquipment.map((e) => e.equipmentTypeId));
-          const alreadyListedEquipmentTypeIds = new Set(
-            existingEquipmentItems.map((i) => i.equipmentTypeId).filter(Boolean),
-          );
-          const missingEquipmentTypes = tenantGrowingEquipmentTypes.filter(
-            (t) => !ownedEquipmentTypeIds.has(t.id) && !alreadyListedEquipmentTypeIds.has(t.id),
-          );
-          if (missingEquipmentTypes.length > 0) {
-            await tx.insert(shoppingListItems).values(
-              missingEquipmentTypes.map((t) => ({
-                tenantId,
-                userId,
-                equipmentTypeId: t.id,
-                quantityLabel: "1",
-                source: "ai" as const,
-              })),
-            );
-          }
+          // Equipment purchases are deliberately never AI-suggested — only
+          // ever added to the shopping list by the user themselves
+          // (addShoppingItemAction), same as any other manual item. Growing-
+          // space equipment used to be auto-added here for every type the
+          // user owned none of, regardless of whether any recommendation
+          // needed it; removed as unwanted noise with no way for the user to
+          // tell it apart from something they'd actually asked for (the
+          // shopping list's own source: "ai"/"manual" split is never
+          // surfaced in the UI).
 
           await tx
             .update(growPlans)

@@ -65,9 +65,11 @@ export default async function GardenLayoutPage() {
             widthCm: a.widthCm,
             lengthCm: a.lengthCm,
             depthCm: a.depthCm,
+            heightCm: a.heightCm,
             status: a.status,
             positionXCm: a.positionXCm,
             positionYCm: a.positionYCm,
+            rotationDeg: a.rotationDeg,
             occupant: occupantByAreaId.get(a.id) ?? null,
           }))}
         />

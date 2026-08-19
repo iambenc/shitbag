@@ -1,0 +1,1 @@
+ALTER TABLE "growing_areas" ADD COLUMN "rotation_deg" integer DEFAULT 0 NOT NULL;

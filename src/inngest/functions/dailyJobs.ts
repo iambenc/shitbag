@@ -2,7 +2,16 @@ import { eq, and, lte, isNotNull, inArray } from "drizzle-orm";
 import { inngest } from "@/inngest/client";
 import { db } from "@/db/client";
 import { withTenant } from "@/lib/tenant/withTenant";
-import { tenants, userProfiles, tasks, taskRescheduleEvents, shoppingListItems, subscriptions, growingAreas } from "@/db/schema";
+import {
+  tenants,
+  userProfiles,
+  tasks,
+  taskRescheduleEvents,
+  shoppingListItems,
+  subscriptions,
+  growingAreas,
+  planRecommendations,
+} from "@/db/schema";
 import { getWeeklyForecast, type DailyForecast, type WeatherScenario } from "@/lib/weather";
 import { getQuotaPoolKey } from "@/lib/ai/provider";
 import { todayIso, addDaysIso, startOfMonthLocal } from "@/lib/dates";
@@ -278,6 +287,23 @@ export const dailyJobsFn = inngest.createFunction(
                   reason: "seeds",
                 });
                 await tx.update(tasks).set({ dueDate: nextWeek }).where(eq(tasks.id, task.id));
+
+                // Same rule as everywhere else this session: seeds only
+                // reach the shopping list for a recommendation the user has
+                // actually accepted (acceptRecommendationAction) — a task
+                // can exist and slip even while its owning recommendation is
+                // still "pending" (tasks aren't gated on acceptance), but
+                // that's not itself permission to shop for it yet. Every
+                // task that reaches this branch has cropId+estimatedSeedsUsed
+                // set, which only ever happens for an AI-generated task, so
+                // planRecommendationId is always present here in practice.
+                const [rec] = task.planRecommendationId
+                  ? await tx
+                      .select({ status: planRecommendations.status })
+                      .from(planRecommendations)
+                      .where(eq(planRecommendations.id, task.planRecommendationId))
+                  : [];
+                if (rec?.status !== "accepted") continue;
 
                 const [existingItem] = await tx
                   .select({ id: shoppingListItems.id })

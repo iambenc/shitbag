@@ -1,4 +1,4 @@
-import { pgTable, uuid, text, real, timestamp } from "drizzle-orm/pg-core";
+import { pgTable, uuid, text, real, integer, timestamp } from "drizzle-orm/pg-core";
 import { tenants } from "./tenant";
 import { users } from "./user";
 import { userEquipment, sizeUnitEnum } from "./equipment";
@@ -6,8 +6,23 @@ import { tenantIsolationPolicy } from "./_rls";
 
 // Excludes "watering_can" (a tool, not growing space). Includes "seed_tray" —
 // the spec's own worked example ("seed tray frees up, pot marked in-use")
-// requires seed trays to be trackable the same way as pots.
-export const growingAreaTypeEnum = ["seed_tray", "pot", "planter", "raised_bed", "bed"] as const;
+// requires seed trays to be trackable the same way as pots. "greenhouse"/
+// "mini_greenhouse"/"cold_frame" are the only types with a meaningful
+// heightCm (see below) — see HEIGHT_TYPES/hasHeight in src/lib/garden/layout.ts.
+// This is a plain text column with no DB-level enum/CHECK constraint, so
+// adding values here is a pure TypeScript change — no migration needed for
+// this line by itself (confirmed against every migration in this repo's
+// history: none of them ever ALTER TYPE/CREATE TYPE anything).
+export const growingAreaTypeEnum = [
+  "seed_tray",
+  "pot",
+  "planter",
+  "raised_bed",
+  "bed",
+  "greenhouse",
+  "mini_greenhouse",
+  "cold_frame",
+] as const;
 export type GrowingAreaType = (typeof growingAreaTypeEnum)[number];
 
 // "reserved" = earmarked for a later stage of a specific recommendation's
@@ -37,6 +52,12 @@ export const growingAreas = pgTable(
     widthCm: real("width_cm"),
     lengthCm: real("length_cm"),
     depthCm: real("depth_cm"),
+    // How tall the structure itself stands — a genuinely different physical
+    // fact from depthCm above (soil/growing-medium depth). Only meaningful
+    // for greenhouse/mini_greenhouse/cold_frame today (see hasHeight in
+    // src/lib/garden/layout.ts); left null for every other type, same as
+    // depthCm is left null wherever it doesn't apply.
+    heightCm: real("height_cm"),
     status: text("status", { enum: growingAreaStatusEnum }).notNull().default("available"),
     // Nullable: Phase 2 always sets this (placed from owned equipment), but
     // the model allows a future growing area with no equipment provenance
@@ -52,6 +73,14 @@ export const growingAreas = pgTable(
     // user action (drag, or adding a new area from the layout canvas).
     positionXCm: real("position_x_cm"),
     positionYCm: real("position_y_cm"),
+    // Clockwise degrees from the area's stored widthCm/lengthCm orientation —
+    // always one of 0/90/180/270 (see nextRotationDeg in
+    // src/lib/garden/layout.ts). Independent of position: an area can be
+    // rotated whether it's placed on the plot or still sitting unplaced in
+    // the canvas's tray, and rotating never changes the stored widthCm/
+    // lengthCm themselves, only which one acts as the on-canvas footprint's
+    // effective width vs. length (see rotatedFootprintCm).
+    rotationDeg: integer("rotation_deg").notNull().default(0),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (table) => [tenantIsolationPolicy("growing_areas", table.tenantId)],

@@ -1,7 +1,7 @@
 import { test, expect } from "@playwright/test";
 import path from "node:path";
 import { signUpAndOnboard } from "./helpers/auth";
-import { upgradeToPaid } from "./helpers/db";
+import { upgradeToPaid, getShoppingListCropSlugs } from "./helpers/db";
 
 const authFile = path.join(__dirname, ".auth", "grow-plan.json");
 
@@ -64,6 +64,44 @@ test.describe("grow plan generation", () => {
     await expect(page.getByRole("button", { name: "Generate my grow plan" })).toHaveCount(0);
     await page.getByRole("link", { name: "View membership" }).click();
     await expect(page).toHaveURL(/\/upgrade/);
+    await context.close();
+  });
+
+  test("seeds only reach the shopping list once a recommendation needing them is accepted, not just generated", async ({
+    browser,
+  }) => {
+    // Default 30s test timeout is shorter than the 60s the Accept-button
+    // wait below allows for (matching the same generous ceiling the first
+    // test in this file already uses) — the Inngest dev job usually
+    // finishes in a few seconds, but explicitly widening this stops a slow
+    // run from failing on the outer test timeout before that inner one
+    // ever gets a chance to.
+    test.setTimeout(90_000);
+    // Own account (not the shared authFile user above) so its shopping
+    // list starts genuinely empty — nothing else in this file has touched
+    // it yet.
+    const context = await browser.newContext();
+    const page = await context.newPage();
+    const { email } = await signUpAndOnboard(page, { addPotEquipment: true });
+    await upgradeToPaid(email);
+
+    await page.goto("/grow-plan");
+    await page.getByRole("button", { name: "Generate my grow plan" }).click();
+    const acceptButtons = page.getByRole("button", { name: "Accept" });
+    await expect(acceptButtons.first()).toBeVisible({ timeout: 60_000 });
+
+    // A fresh test user owns no seeds at all, so the mock planner marks
+    // every recommendation requiresPurchase — generating alone must still
+    // leave the shopping list untouched regardless.
+    expect(await getShoppingListCropSlugs(email)).toHaveLength(0);
+
+    await acceptButtons.first().click();
+    await expect(page.getByRole("button", { name: "✓ Accepted" }).first()).toBeVisible();
+
+    await expect
+      .poll(async () => getShoppingListCropSlugs(email))
+      .not.toHaveLength(0);
+
     await context.close();
   });
 });

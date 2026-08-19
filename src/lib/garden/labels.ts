@@ -6,6 +6,9 @@ export const growingAreaTypeLabels: Record<GrowingAreaType, string> = {
   planter: "Planter",
   raised_bed: "Raised bed",
   bed: "Garden bed",
+  greenhouse: "Greenhouse",
+  mini_greenhouse: "Mini greenhouse",
+  cold_frame: "Cold frame",
 };
 
 export const growingAreaTypeEmoji: Record<GrowingAreaType, string> = {
@@ -14,6 +17,9 @@ export const growingAreaTypeEmoji: Record<GrowingAreaType, string> = {
   planter: "🪵",
   raised_bed: "🧱",
   bed: "🌻",
+  greenhouse: "🏠",
+  mini_greenhouse: "⛺",
+  cold_frame: "🖼️",
 };
 
 // A "sized" quantity (today, a pot) can be a cm diameter or a litres volume —

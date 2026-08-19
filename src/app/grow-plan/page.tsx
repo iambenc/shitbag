@@ -25,15 +25,14 @@ type Area = {
   widthCm: number | null;
   lengthCm: number | null;
   depthCm: number | null;
+  heightCm: number | null;
 };
 
 function areaSizeLabel(area: Area): string | null {
   const sized = formatSizeValue(area.sizeValue, area.sizeUnit);
-  if (sized) return sized;
-  if (area.widthCm && area.lengthCm) {
-    return `${area.widthCm}x${area.lengthCm}${area.depthCm ? `x${area.depthCm}` : ""}cm`;
-  }
-  return null;
+  const dims = sized ?? (area.widthCm && area.lengthCm ? `${area.widthCm}x${area.lengthCm}${area.depthCm ? `x${area.depthCm}` : ""}cm` : null);
+  if (!dims) return null;
+  return area.heightCm ? `${dims}, ${area.heightCm}cm tall` : dims;
 }
 
 type RecommendationGroup = {

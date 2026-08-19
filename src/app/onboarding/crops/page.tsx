@@ -11,7 +11,15 @@ export default async function CropsStepPage() {
   const tenant = await getCurrentTenant();
 
   const [allCrops, favorites] = await Promise.all([
-    db.select().from(crops).orderBy(asc(crops.sortOrder)),
+    // verified = true only — the original curated UK staples list
+    // (src/db/seed-data/crops.ts). AI-backfilled rows (a grow plan's
+    // "unusual suggestion," or a user typing a not-yet-cataloged crop into
+    // /seeds — see generateGrowPlan.ts/seeds.ts) insert into this same
+    // global, un-tenant-scoped `crops` table with verified: false, and
+    // without this filter every one of those extras — however
+    // niche/mistyped/AI-hallucinated — permanently joins what every future
+    // onboarding user swipes through, not just the person who added it.
+    db.select().from(crops).where(eq(crops.verified, true)).orderBy(asc(crops.sortOrder)),
     withTenant(tenant.id, async (tx) =>
       tx
         .select({ cropId: userFavoriteCrops.cropId })

@@ -15,17 +15,16 @@ type EquipmentRow = {
   widthCm: number | null;
   lengthCm: number | null;
   depthCm: number | null;
+  heightCm: number | null;
   quantityOwned: number;
   placedCount: number;
 };
 
-function sizeText(row: Pick<EquipmentRow, "sizeValue" | "sizeUnit" | "widthCm" | "lengthCm" | "depthCm">) {
+function sizeText(row: Pick<EquipmentRow, "sizeValue" | "sizeUnit" | "widthCm" | "lengthCm" | "depthCm" | "heightCm">) {
   const sized = formatSizeValue(row.sizeValue, row.sizeUnit);
-  if (sized) return sized;
-  if (row.widthCm && row.lengthCm) {
-    return `${row.widthCm}×${row.lengthCm}${row.depthCm ? `×${row.depthCm}` : ""}cm`;
-  }
-  return null;
+  const dims = sized ?? (row.widthCm && row.lengthCm ? `${row.widthCm}×${row.lengthCm}${row.depthCm ? `×${row.depthCm}` : ""}cm` : null);
+  if (dims && row.heightCm) return `${dims}, ${row.heightCm}cm tall`;
+  return dims;
 }
 
 export function GrowingAreaManager({ equipment }: { equipment: EquipmentRow[] }) {

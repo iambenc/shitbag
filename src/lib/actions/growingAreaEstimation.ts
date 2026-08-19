@@ -21,6 +21,7 @@ import { startOfTodayLocal } from "@/lib/dates";
 import { MAX_DAILY_GROWING_AREA_ESTIMATIONS, MAX_ESTIMATION_PHOTOS } from "@/lib/ai/limits";
 import { GROWING_AREA_TYPE_TO_SLUG } from "@/lib/garden/equipmentMapping";
 import { buildGrowingAreaRows } from "@/lib/garden/growingAreaSync";
+import { footprintCm, isFixedType } from "@/lib/garden/layout";
 import { z } from "zod";
 
 export type UploadPhotosForEstimationState = { error?: string };
@@ -116,6 +117,15 @@ const ConfirmedRowSchema = z.object({
   widthCm: z.number().positive().nullable(),
   lengthCm: z.number().positive().nullable(),
   depthCm: z.number().positive().nullable(),
+  heightCm: z.number().positive().nullable().optional(),
+  // Only ever applied for a fixed-in-place type (bed/raised_bed) — see
+  // isFixedType below. Carried through from the AI's estimate untouched by
+  // the review UI (there's no position input on that form; the layout
+  // canvas is where a user actually adjusts placement), so this is
+  // effectively read-only from the form's perspective even though it rides
+  // in the same submitted payload as the fields the user can edit.
+  positionXCm: z.number().nullable().optional(),
+  positionYCm: z.number().nullable().optional(),
 });
 
 // Plot boundary is optional even on a successful confirm — a photo that
@@ -136,9 +146,36 @@ export type ConfirmGrowingAreaProposalsState = { error?: string; success?: boole
 // equipment" (one userEquipment row + quantity, matching how EquipmentPicker
 // already represents "3x 20cm pots" as one row, not three) — never by type
 // alone, since two pots of different sizes are genuinely different owned
-// items.
+// items. Deliberately NOT part of the key: position. Two same-shaped raised
+// beds photographed in different spots are still "the same equipment" for
+// ownership/quantity purposes (one userEquipment row, quantity 2) even
+// though they need two distinct growingAreas positions — see how `groups`
+// below keeps each contributing row's own data instead of collapsing to a
+// single representative + count the way this used to work before positions
+// existed.
 function equipmentGroupKey(row: z.infer<typeof ConfirmedRowSchema>): string {
-  return [row.type, row.sizeValue, row.sizeUnit, row.widthCm, row.lengthCm, row.depthCm].join("|");
+  return [row.type, row.sizeValue, row.sizeUnit, row.widthCm, row.lengthCm, row.depthCm, row.heightCm].join("|");
+}
+
+// Clamps a fixed-type area's AI-estimated position into the plot's actual
+// (possibly since-edited) bounds, same clamp shape LayoutCanvas.tsx's own
+// drag handler already uses — a raised bed confirmed with a position from
+// one estimate pass shouldn't ever render off-canvas just because the plot
+// dimensions submitted alongside it ended up smaller than what the position
+// was originally estimated against.
+function clampToPlot(
+  positionXCm: number,
+  positionYCm: number,
+  footprint: { widthCm: number; lengthCm: number },
+  plotWidthCm: number,
+  plotLengthCm: number,
+): { positionXCm: number; positionYCm: number } {
+  const maxX = Math.max(0, plotWidthCm - footprint.widthCm);
+  const maxY = Math.max(0, plotLengthCm - footprint.lengthCm);
+  return {
+    positionXCm: Math.min(Math.max(0, positionXCm), maxX),
+    positionYCm: Math.min(Math.max(0, positionYCm), maxY),
+  };
 }
 
 /**
@@ -173,12 +210,16 @@ export async function confirmGrowingAreaProposalsAction(
   }
   const { plotWidthCm, plotLengthCm } = parsed.data;
 
-  const groups = new Map<string, { row: z.infer<typeof ConfirmedRowSchema>; quantity: number }>();
+  // Each group's rows array preserves every contributing row's own data
+  // (crucially, its own position) — only equipmentGroupKey's shared fields
+  // (type/size/dims) are guaranteed identical within a group, so anything
+  // needing that uses groupRows[0] as the representative below.
+  const groups = new Map<string, z.infer<typeof ConfirmedRowSchema>[]>();
   for (const row of parsed.data.rows) {
     const key = equipmentGroupKey(row);
     const existing = groups.get(key);
-    if (existing) existing.quantity += 1;
-    else groups.set(key, { row, quantity: 1 });
+    if (existing) existing.push(row);
+    else groups.set(key, [row]);
   }
 
   const applied = await withTenant(tenantId, async (tx) => {
@@ -200,7 +241,7 @@ export async function confirmGrowingAreaProposalsAction(
     // not a separate read-then-write, which would let both requests pass.
     if (!claimed) return false;
 
-    const neededSlugs = [...new Set([...groups.values()].map((g) => GROWING_AREA_TYPE_TO_SLUG[g.row.type]))];
+    const neededSlugs = [...new Set([...groups.values()].map((groupRows) => GROWING_AREA_TYPE_TO_SLUG[groupRows[0].type]))];
     const types = await tx
       .select({ id: equipmentTypes.id, slug: equipmentTypes.slug })
       .from(equipmentTypes)
@@ -208,7 +249,9 @@ export async function confirmGrowingAreaProposalsAction(
     const equipmentTypeIdBySlug = new Map(types.map((t) => [t.slug, t.id]));
 
     const newGrowingAreaRows: ReturnType<typeof buildGrowingAreaRows>[number][] = [];
-    for (const { row, quantity } of groups.values()) {
+    for (const groupRows of groups.values()) {
+      const row = groupRows[0];
+      const quantity = groupRows.length;
       const slug = GROWING_AREA_TYPE_TO_SLUG[row.type];
       const equipmentTypeId = equipmentTypeIdBySlug.get(slug);
       // Every growingAreaTypeEnum value has a seeded equipmentTypes row for
@@ -231,8 +274,25 @@ export async function confirmGrowingAreaProposalsAction(
           widthCm: row.widthCm,
           lengthCm: row.lengthCm,
           depthCm: row.depthCm,
+          heightCm: row.heightCm ?? null,
         })
         .returning({ id: userEquipment.id });
+
+      // A fixed-in-place area (bed/raised_bed) keeps the exact spot the
+      // photo estimate put it at — clamped into the (possibly since-
+      // edited) plot bounds submitted alongside it — becoming a real,
+      // already-confirmed placement rather than something the layout
+      // canvas has to suggest a spot for. Everything else stays
+      // unpositioned (the override below resolves to {}), same as before:
+      // a pot or planter is portable, so its photographed spot is a
+      // starting point at best, not something worth locking in
+      // automatically.
+      const overrides = groupRows.map((instance) => {
+        if (!isFixedType(instance.type) || !plotWidthCm || !plotLengthCm) return {};
+        if (instance.positionXCm == null || instance.positionYCm == null) return {};
+        const clamped = clampToPlot(instance.positionXCm, instance.positionYCm, footprintCm(instance), plotWidthCm, plotLengthCm);
+        return { positionXCm: clamped.positionXCm, positionYCm: clamped.positionYCm };
+      });
 
       newGrowingAreaRows.push(
         ...buildGrowingAreaRows(
@@ -245,9 +305,11 @@ export async function confirmGrowingAreaProposalsAction(
             widthCm: row.widthCm,
             lengthCm: row.lengthCm,
             depthCm: row.depthCm,
+            heightCm: row.heightCm ?? null,
             sourceUserEquipmentId: equipmentRow.id,
           },
           quantity,
+          overrides,
         ),
       );
     }

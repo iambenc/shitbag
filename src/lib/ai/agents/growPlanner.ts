@@ -158,6 +158,7 @@ export type GrowPlannerInput = {
     widthCm: number | null;
     lengthCm: number | null;
     depthCm: number | null;
+    heightCm: number | null;
   }[];
   unplacedEquipment: { type: string; count: number }[];
   // varietySlug null means "owns this crop's seeds but no specific variety
@@ -181,11 +182,10 @@ export type GrowPlanResult = {
 
 function areaSizeText(area: GrowPlannerInput["growingAreas"][number]): string {
   const sized = formatSizeValue(area.sizeValue, area.sizeUnit);
-  if (sized) return sized;
-  if (area.widthCm && area.lengthCm) {
-    return `${area.widthCm}x${area.lengthCm}${area.depthCm ? `x${area.depthCm}` : ""}cm`;
-  }
-  return "size unknown";
+  const dims =
+    sized ?? (area.widthCm && area.lengthCm ? `${area.widthCm}x${area.lengthCm}${area.depthCm ? `x${area.depthCm}` : ""}cm` : null);
+  if (!dims) return "size unknown";
+  return area.heightCm ? `${dims}, ${area.heightCm}cm tall` : dims;
 }
 
 // Static across every single call, for every tenant and user — never
@@ -201,7 +201,7 @@ function areaSizeText(area: GrowPlannerInput["growingAreas"][number]): string {
 const BASE_INSTRUCTIONS: string[] = [
   "Recommend crops that will thrive given the space, sunlight, and season (relative to today's date and the sow-month windows above). Prioritise owned seeds; anything else needed must be marked requiresPurchase: true.",
   "Maximise the household's value return: where several crops would suit the same space and season roughly equally well, prefer the one with a higher estimated retail cost (est. retail £/kg in the catalog above) — growing high-cost-to-buy crops (soft fruit, fresh herbs, specialty salad leaves) saves the user more money than growing cheap staples (potatoes, onions, cabbage) they could buy inexpensively anyway. This is secondary to genuine fit, season, owned seeds, favourites, and dislikes — never recommend a crop that's a poor fit, out of season, disliked, or unsuited to the available space just because it's expensive to buy. Where cost was a meaningful factor in a choice, you may briefly note the value angle in that recommendation's reasoning.",
-  'Decide, per crop, how many growing-area stages it needs — most just need one (sown directly in its final growing space, exactly what "stages" with a single entry means). Some crops, especially ones with an indoor sowing window (sowIndoorFromMonth/ToMonth set in the catalog), are better started in a seed tray or pot before moving to their final growing space — for these, list every stage in order from where it starts to its final home (2 or 3 entries). Only use more than one stage when you actually have suitable areas of each needed type available — never invent a stage there\'s no real space for. Prefer matching a crop\'s spacingCm/soilDepthCm to an area\'s dimensions where both are known (e.g. don\'t put a deep-rooted crop in a shallow tray) — a pot\'s size may be given as a diameter in cm or a volume in litres (L); for a litres figure, use general horticultural judgement for fit (roughly: ~1-2L suits small herbs/seedlings, ~5-10L suits most vegetables, 15L+ suits larger plants) rather than comparing it arithmetically against spacingCm/soilDepthCm, which only makes sense for a cm diameter. Every area must still get used by some stage of some recommendation if there\'s a reasonable crop for it — don\'t leave areas unused just because the fit isn\'t perfect. If there are no available growing areas, produce no recommendations.',
+  'Decide, per crop, how many growing-area stages it needs — most just need one (sown directly in its final growing space, exactly what "stages" with a single entry means). Some crops, especially ones with an indoor sowing window (sowIndoorFromMonth/ToMonth set in the catalog), are better started in a seed tray or pot before moving to their final growing space — for these, list every stage in order from where it starts to its final home (2 or 3 entries). Only use more than one stage when you actually have suitable areas of each needed type available — never invent a stage there\'s no real space for. Prefer matching a crop\'s spacingCm/soilDepthCm to an area\'s dimensions where both are known (e.g. don\'t put a deep-rooted crop in a shallow tray) — a pot\'s size may be given as a diameter in cm or a volume in litres (L); for a litres figure, use general horticultural judgement for fit (roughly: ~1-2L suits small herbs/seedlings, ~5-10L suits most vegetables, 15L+ suits larger plants) rather than comparing it arithmetically against spacingCm/soilDepthCm, which only makes sense for a cm diameter. Every area must still get used by some stage of some recommendation if there\'s a reasonable crop for it — don\'t leave areas unused just because the fit isn\'t perfect. If there are no available growing areas, produce no recommendations. A greenhouse, mini-greenhouse, or cold frame extends the growing season by protecting from frost and giving extra warmth — treat a greenhouse as capable of being either a genuine final growing space (for tender/heat-loving crops that couldn\'t survive outdoors) or a hardier crop\'s early-season start; treat a mini-greenhouse or cold frame primarily as a season-extension or hardening-off stage before a crop\'s final growing space, rarely a final home itself, similar in role to a pot or seed tray but for larger or already-potted plants rather than seedlings.',
   "Explain your reasoning per recommendation, in language appropriate to the user's expertise level.",
   'Generate tasks (sowing, feeding where feeding notes exist, and transplanting where relevant) each with an explanation of why/when and an absolute last date (hardDeadlineDate) after which it\'s too late. For any crop with more than one stage, also add a transplant task for each stage after the first (e.g. "Pot on your Tomato seedlings", "Plant out your Tomato into its raised bed"), with activatesGrowingAreaId set to that stage\'s growing area id — completing this task is what actually moves the crop, so get its timing right relative to the previous stage. Leave activatesGrowingAreaId null on every other task. Every task must also set recommendationIndex to the 0-based position of its crop\'s entry in the recommendations array above. Growing area ids (the uuids from AVAILABLE GROWING AREAS TO FILL) are for the activatesGrowingAreaId/stages fields only — never write one into a task\'s title or explanation, even to disambiguate between two areas of the same type; refer to areas there only by type and size (e.g. "a seed tray", "the 20cm pot", "your raised bed").',
   "On every task that sows or plants seeds (the crop's first sowing and any succession re-sow), set estimatedSeedsUsed to your best-guess seed count for that specific sowing — the growing area's size divided by the crop's spacingCm, plus a 20-30% margin for germination failure. Leave it null on every other task (feeding, transplanting, potting on).",
@@ -382,7 +382,7 @@ function buildMockPlan(input: GrowPlannerInput): GrowPlanOutput {
     list.push(a);
     pool.set(a.type, list);
   }
-  const FINAL_TYPES = ["raised_bed", "bed", "planter"];
+  const FINAL_TYPES = ["raised_bed", "bed", "planter", "greenhouse"];
   function take(types: string[]): Area | null {
     for (const t of types) {
       const list = pool.get(t);

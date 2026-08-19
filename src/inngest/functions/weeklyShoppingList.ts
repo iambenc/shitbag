@@ -8,11 +8,16 @@ import { todayIso, addDaysIso } from "@/lib/dates";
 type DevRunJobsEvent = { name: "dev/run-jobs"; data?: { job?: "daily" | "weekly" } };
 
 /**
- * Runs weekly (Mondays 06:00): for every requiresPurchase recommendation
- * whose crop's earliest task falls within the next 14 days, add a shopping
- * list item if one doesn't already exist. Naturally paid-only — recommendations
- * only exist for users who've generated a grow plan, already gated in Phase 5 —
- * so no extra tier check is needed here.
+ * Runs weekly (Mondays 06:00): for every requiresPurchase, user-accepted
+ * recommendation whose crop's earliest task falls within the next 14 days,
+ * add a shopping list item if one doesn't already exist. Naturally paid-only
+ * — recommendations only exist for users who've generated a grow plan,
+ * already gated in Phase 5 — so no extra tier check is needed here.
+ *
+ * status = "accepted" only — a still-"pending" recommendation is awaiting
+ * the user's review and may yet be rejected outright, so it must never put
+ * seeds on the shopping list on its own (see acceptRecommendationAction,
+ * the actual primary path this is a backstop for).
  */
 export const weeklyShoppingListFn = inngest.createFunction(
   { id: "weekly-shopping-list", triggers: [{ cron: "0 6 * * 1" }, { event: "dev/run-jobs" }] },
@@ -31,7 +36,7 @@ export const weeklyShoppingListFn = inngest.createFunction(
             .select({ recommendation: planRecommendations, growPlan: growPlans })
             .from(planRecommendations)
             .innerJoin(growPlans, eq(planRecommendations.growPlanId, growPlans.id))
-            .where(eq(planRecommendations.requiresPurchase, true));
+            .where(and(eq(planRecommendations.requiresPurchase, true), eq(planRecommendations.status, "accepted")));
 
           for (const { recommendation, growPlan } of recs) {
             const [sowTask] = await tx

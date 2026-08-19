@@ -76,6 +76,7 @@ export type StageShape = {
   widthCm: number | null;
   lengthCm: number | null;
   depthCm: number | null;
+  heightCm: number | null;
 };
 
 export type RecommendationReplacementInput = {
@@ -117,7 +118,8 @@ function stageShapeText(stages: StageShape[]): string {
         : s.widthCm && s.lengthCm
           ? `${s.widthCm}x${s.lengthCm}${s.depthCm ? `x${s.depthCm}` : ""}cm`
           : "size unknown";
-      return `- stage ${i + 1}: ${s.type}, ${size}`;
+      const withHeight = s.heightCm ? `${size}, ${s.heightCm}cm tall` : size;
+      return `- stage ${i + 1}: ${s.type}, ${withHeight}`;
     })
     .join("\n");
 }
@@ -179,7 +181,8 @@ INSTRUCTIONS
 6. Use prior harvest history to judge whether a crop is worth recommending again.
 7. On every task that sows or plants seeds (the crop's first sowing and any succession re-sow), set estimatedSeedsUsed to your best-guess seed count for that specific sowing — stage 1's size divided by the crop's spacingCm, plus a 20-30% margin for germination failure. Leave it null on every other task (feeding, transplanting).
 8. If a crop you'd genuinely recommend isn't in the catalog above, you may propose it: set newCropName to its common name and give it a lowercase-hyphenated cropSlug, used identically in this recommendation and its tasks. Only propose well-established, common home-garden crops you're confident about. Leave newCropName null for every crop already in the catalog.
-9. VARIETIES: picking a specific cultivar (varietySlug) is entirely optional — leave it null for a plain species-level recommendation, which is fine and the normal case. Only pick one when you have a genuine reason: the user already owns seeds for that specific variety (see SEEDS ALREADY OWNED), a listed variety's growth habit genuinely fits STAGE SHAPE better, it has notable disease resistance worth calling out, or it's a well-established, clearly superior choice you're confident about. If you pick a variety not in that crop's listed varieties, propose it via newVarietyName the same way newCropName works for a new crop — only for well-established, real cultivars. Never set varietySlug/newVarietyName when newCropName is also set.`;
+9. VARIETIES: picking a specific cultivar (varietySlug) is entirely optional — leave it null for a plain species-level recommendation, which is fine and the normal case. Only pick one when you have a genuine reason: the user already owns seeds for that specific variety (see SEEDS ALREADY OWNED), a listed variety's growth habit genuinely fits STAGE SHAPE better, it has notable disease resistance worth calling out, or it's a well-established, clearly superior choice you're confident about. If you pick a variety not in that crop's listed varieties, propose it via newVarietyName the same way newCropName works for a new crop — only for well-established, real cultivars. Never set varietySlug/newVarietyName when newCropName is also set.
+10. If STAGE SHAPE includes a greenhouse, mini-greenhouse, or cold frame, remember these give frost protection and extra warmth — factor that into which crop and timing genuinely fits (e.g. a tender crop, or an earlier/later sowing window than the same crop would get outdoors).`;
 }
 
 export async function generateRecommendationReplacement(

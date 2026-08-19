@@ -232,6 +232,20 @@
       "when": 1787007443738,
       "tag": "0032_bright_adam_destine",
       "breakpoints": true
+    },
+    {
+      "idx": 33,
+      "version": "7",
+      "when": 1787069712336,
+      "tag": "0033_sudden_blade",
+      "breakpoints": true
+    },
+    {
+      "idx": 34,
+      "version": "7",
+      "when": 1787091954490,
+      "tag": "0034_volatile_phil_sheldon",
+      "breakpoints": true
     }
   ]
 }

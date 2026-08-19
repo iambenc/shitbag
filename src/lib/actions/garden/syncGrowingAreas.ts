@@ -55,6 +55,7 @@ export async function syncGrowingAreasAction(
           widthCm: row.equipment.widthCm,
           lengthCm: row.equipment.lengthCm,
           depthCm: row.equipment.depthCm,
+          heightCm: row.equipment.heightCm,
           sourceUserEquipmentId: userEquipmentId,
         },
         clamped - existing.length,

@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { confirmGrowingAreaProposalsAction } from "@/lib/actions/growingAreaEstimation";
 import { growingAreaTypeEnum, type GrowingAreaType, type SizeUnit } from "@/db/schema";
 import { growingAreaTypeLabels } from "@/lib/garden/labels";
+import { isFixedType, hasHeight, hasDepth } from "@/lib/garden/layout";
 
 type ProposedArea = {
   type: GrowingAreaType;
@@ -13,8 +14,19 @@ type ProposedArea = {
   widthCm: number | null;
   lengthCm: number | null;
   depthCm: number | null;
+  // .optional() upstream in ProposedGrowingAreaSchema (rows generated before
+  // this field existed have no key here at all) — same reasoning as
+  // positionXCm/positionYCm below.
+  heightCm?: number | null;
   confidence: number;
   description: string;
+  // Only ever applied for a fixed-in-place type (bed/raised_bed — see
+  // isFixedType in src/lib/garden/layout.ts); carried straight through to
+  // confirmGrowingAreaProposalsAction without a UI for editing it here —
+  // the layout canvas, not this list of rows, is where placement actually
+  // gets adjusted.
+  positionXCm?: number | null;
+  positionYCm?: number | null;
 };
 
 type Row = {
@@ -25,8 +37,11 @@ type Row = {
   widthCm: string;
   lengthCm: string;
   depthCm: string;
+  heightCm: string;
   confidence: number | null;
   description: string | null;
+  positionXCm: number | null;
+  positionYCm: number | null;
 };
 
 function toRow(area: ProposedArea, key: string): Row {
@@ -38,8 +53,11 @@ function toRow(area: ProposedArea, key: string): Row {
     widthCm: area.widthCm?.toString() ?? "",
     lengthCm: area.lengthCm?.toString() ?? "",
     depthCm: area.depthCm?.toString() ?? "",
+    heightCm: area.heightCm?.toString() ?? "",
     confidence: area.confidence,
     description: area.description,
+    positionXCm: area.positionXCm ?? null,
+    positionYCm: area.positionYCm ?? null,
   };
 }
 
@@ -52,8 +70,13 @@ function emptyRow(key: string): Row {
     widthCm: "",
     lengthCm: "",
     depthCm: "",
+    heightCm: "",
     confidence: null,
     description: null,
+    // A manually-added row (not from the photo estimate) has no estimated
+    // position to carry.
+    positionXCm: null,
+    positionYCm: null,
   };
 }
 
@@ -104,7 +127,14 @@ export function EstimationReviewForm({
         sizeUnit: usesSizedFields(r.type) && r.sizeValue ? r.sizeUnit : null,
         widthCm: !usesSizedFields(r.type) && r.widthCm ? Number(r.widthCm) : null,
         lengthCm: !usesSizedFields(r.type) && r.lengthCm ? Number(r.lengthCm) : null,
-        depthCm: !usesSizedFields(r.type) && r.type !== "bed" && r.depthCm ? Number(r.depthCm) : null,
+        depthCm: !usesSizedFields(r.type) && hasDepth(r.type) && r.depthCm ? Number(r.depthCm) : null,
+        heightCm: hasHeight(r.type) && r.heightCm ? Number(r.heightCm) : null,
+        // Only actually applied server-side for a fixed-in-place type — see
+        // isFixedType — sent unconditionally here regardless of the row's
+        // current type since the server is the source of truth for that
+        // gate, not this form.
+        positionXCm: r.positionXCm,
+        positionYCm: r.positionYCm,
       })),
       plotWidthCm: plotWidthCm ? Number(plotWidthCm) : null,
       plotLengthCm: plotLengthCm ? Number(plotLengthCm) : null,
@@ -223,7 +253,7 @@ export function EstimationReviewForm({
                     className="w-24 rounded-md border border-black/15 px-2 py-1.5 text-sm"
                   />
                 </label>
-                {row.type !== "bed" && (
+                {hasDepth(row.type) && (
                   <label className="flex flex-col gap-1 text-xs">
                     Depth (cm)
                     <input
@@ -231,6 +261,18 @@ export function EstimationReviewForm({
                       min={1}
                       value={row.depthCm}
                       onChange={(e) => updateRow(row.key, { depthCm: e.target.value })}
+                      className="w-24 rounded-md border border-black/15 px-2 py-1.5 text-sm"
+                    />
+                  </label>
+                )}
+                {hasHeight(row.type) && (
+                  <label className="flex flex-col gap-1 text-xs">
+                    Height (cm)
+                    <input
+                      type="number"
+                      min={1}
+                      value={row.heightCm}
+                      onChange={(e) => updateRow(row.key, { heightCm: e.target.value })}
                       className="w-24 rounded-md border border-black/15 px-2 py-1.5 text-sm"
                     />
                   </label>
@@ -255,6 +297,13 @@ export function EstimationReviewForm({
                   · {row.confidence < 0.4 ? "low confidence — check this" : `${Math.round(row.confidence * 100)}% confidence`}
                 </span>
               )}
+            </p>
+          )}
+          {isFixedType(row.type) && row.positionXCm != null && row.positionYCm != null && (
+            <p className="text-xs text-(--text-muted)">
+              📍 Placed on your plot planner at the spot estimated from the photo — beds don&rsquo;t move
+              once built, so this skips the layout canvas&rsquo;s usual suggestion step. Adjust it later
+              on the plot planner if it&rsquo;s off.
             </p>
           )}
         </div>

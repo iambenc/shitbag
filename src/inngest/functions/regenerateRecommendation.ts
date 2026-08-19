@@ -14,7 +14,6 @@ import {
   harvestLog,
   crops,
   cropVarieties,
-  shoppingListItems,
 } from "@/db/schema";
 import {
   generateRecommendationReplacement,
@@ -44,6 +43,7 @@ type InstanceStage = {
   widthCm: number | null;
   lengthCm: number | null;
   depthCm: number | null;
+  heightCm: number | null;
 };
 type Instance = { recommendationId: string; cropId: string; regenerationCount: number; stages: InstanceStage[] };
 
@@ -115,6 +115,7 @@ export const regenerateRecommendationFn = inngest.createFunction(
                 widthCm: area?.widthCm ?? null,
                 lengthCm: area?.lengthCm ?? null,
                 depthCm: area?.depthCm ?? null,
+                heightCm: area?.heightCm ?? null,
               }));
             return { recommendationId: id, cropId: rec?.cropId ?? "", regenerationCount: rec?.regenerationCount ?? 0, stages };
           })
@@ -127,6 +128,7 @@ export const regenerateRecommendationFn = inngest.createFunction(
           widthCm: s.widthCm,
           lengthCm: s.lengthCm,
           depthCm: s.depthCm,
+          heightCm: s.heightCm,
         })) ?? [];
 
         const rejectedCropSlugs = instances
@@ -452,20 +454,25 @@ export const regenerateRecommendationFn = inngest.createFunction(
             quantityShortfall = stock.known && stock.total < totalSeedsNeeded;
           }
 
-          if (result.output.requiresPurchase || quantityShortfall) {
-            const [existingItem] = await tx
-              .select({ id: shoppingListItems.id })
-              .from(shoppingListItems)
-              .where(and(eq(shoppingListItems.userId, userId), eq(shoppingListItems.cropId, replacementCropId)));
-            if (!existingItem) {
-              await tx.insert(shoppingListItems).values({
-                tenantId,
-                userId,
-                cropId: replacementCropId,
-                quantityLabel: "1 packet",
-                source: "ai" as const,
-              });
-            }
+          // As in generateGrowPlan.ts: seeds only reach the shopping list
+          // once the user explicitly accepts this replacement
+          // (acceptRecommendationAction) — it's inserted "pending" above,
+          // same fresh review gate as a brand-new recommendation, not
+          // auto-approved just because it's replacing something the user
+          // already had. quantityShortfall can be true even when the AI's
+          // own requiresPurchase guess was false, so it's unioned in here
+          // too, giving requiresPurchase the same authoritative meaning on
+          // every recommendation row regardless of which path created it.
+          if (quantityShortfall && !result.output.requiresPurchase) {
+            await tx
+              .update(planRecommendations)
+              .set({ requiresPurchase: true })
+              .where(
+                inArray(
+                  planRecommendations.id,
+                  newRecs.map((rec) => rec.id),
+                ),
+              );
           }
 
           const oldRecIds = instances.map((inst) => inst.recommendationId);

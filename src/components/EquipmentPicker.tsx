@@ -4,6 +4,7 @@ import { useActionState, useState } from "react";
 import type { EquipmentState } from "@/lib/garden/equipmentRows";
 import type { EquipmentCategory, SizeUnit } from "@/db/schema";
 import { SLUG_TO_GROWING_AREA_TYPE } from "@/lib/garden/equipmentMapping";
+import { hasHeight, hasDepth } from "@/lib/garden/layout";
 
 type EquipmentTypeInfo = {
   id: string;
@@ -22,6 +23,7 @@ type OwnedRowInput = {
   widthCm: number | null;
   lengthCm: number | null;
   depthCm: number | null;
+  heightCm: number | null;
 };
 
 type Row = {
@@ -33,6 +35,7 @@ type Row = {
   widthCm: string;
   lengthCm: string;
   depthCm: string;
+  heightCm: string;
 };
 
 const initialState: EquipmentState = {};
@@ -47,6 +50,7 @@ function emptyRow(equipmentTypeId: string): Row {
     widthCm: "",
     lengthCm: "",
     depthCm: "",
+    heightCm: "",
   };
 }
 
@@ -76,6 +80,7 @@ export function EquipmentPicker({
       widthCm: r.widthCm?.toString() ?? "",
       lengthCm: r.lengthCm?.toString() ?? "",
       depthCm: r.depthCm?.toString() ?? "",
+      heightCm: r.heightCm?.toString() ?? "",
     })),
   );
 
@@ -214,7 +219,7 @@ export function EquipmentPicker({
                         className="w-24 rounded-md border border-black/15 px-2 py-1.5 text-sm"
                       />
                     </label>
-                    {type.slug !== "garden-beds" && (
+                    {hasDepth(SLUG_TO_GROWING_AREA_TYPE[type.slug]) && (
                       <label className="flex flex-col gap-1 text-xs">
                         Depth (cm)
                         <input
@@ -222,6 +227,18 @@ export function EquipmentPicker({
                           min={1}
                           value={row.depthCm}
                           onChange={(e) => updateRow(row.id, { depthCm: e.target.value })}
+                          className="w-24 rounded-md border border-black/15 px-2 py-1.5 text-sm"
+                        />
+                      </label>
+                    )}
+                    {hasHeight(SLUG_TO_GROWING_AREA_TYPE[type.slug]) && (
+                      <label className="flex flex-col gap-1 text-xs">
+                        Height (cm)
+                        <input
+                          type="number"
+                          min={1}
+                          value={row.heightCm}
+                          onChange={(e) => updateRow(row.id, { heightCm: e.target.value })}
                           className="w-24 rounded-md border border-black/15 px-2 py-1.5 text-sm"
                         />
                       </label>
@@ -276,6 +293,7 @@ export function EquipmentPicker({
         widthCm: r.widthCm ? Number(r.widthCm) : null,
         lengthCm: r.lengthCm ? Number(r.lengthCm) : null,
         depthCm: r.depthCm ? Number(r.depthCm) : null,
+        heightCm: r.heightCm ? Number(r.heightCm) : null,
       })),
   );
 

@@ -85,6 +85,9 @@ export const userEquipment = pgTable(
     widthCm: real("width_cm"),
     lengthCm: real("length_cm"),
     depthCm: real("depth_cm"),
+    // Structure height — see the identical column on growingAreas for why
+    // this is a separate fact from depthCm, not a reuse of it.
+    heightCm: real("height_cm"),
   },
   (table) => [tenantIsolationPolicy("user_equipment", table.tenantId)],
 ).enableRLS();

@@ -15,6 +15,7 @@ export const equipmentRowSchema = z.object({
   widthCm: z.coerce.number().positive().nullable().optional(),
   lengthCm: z.coerce.number().positive().nullable().optional(),
   depthCm: z.coerce.number().positive().nullable().optional(),
+  heightCm: z.coerce.number().positive().nullable().optional(),
 });
 
 export const equipmentRowsSchema = z.array(equipmentRowSchema).max(200);
@@ -99,6 +100,7 @@ export async function applyEquipmentRows(
         widthCm: r.widthCm ?? null,
         lengthCm: r.lengthCm ?? null,
         depthCm: r.depthCm ?? null,
+        heightCm: r.heightCm ?? null,
       })),
     )
     .onConflictDoUpdate({
@@ -110,6 +112,7 @@ export async function applyEquipmentRows(
         widthCm: sql`excluded.width_cm`,
         lengthCm: sql`excluded.length_cm`,
         depthCm: sql`excluded.depth_cm`,
+        heightCm: sql`excluded.height_cm`,
       },
       // RLS only enforces tenant isolation, not per-user — without this, a
       // same-tenant user could submit another user's real userEquipment.id
@@ -158,6 +161,7 @@ export async function applyEquipmentRows(
         widthCm: row.widthCm ?? null,
         lengthCm: row.lengthCm ?? null,
         depthCm: row.depthCm ?? null,
+        heightCm: row.heightCm ?? null,
         sourceUserEquipmentId: row.id,
       },
       insertCount,

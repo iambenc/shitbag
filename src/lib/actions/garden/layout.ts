@@ -57,6 +57,36 @@ export async function unplaceGrowingAreaAction(growingAreaId: string): Promise<S
   });
 }
 
+/**
+ * Persists a rotate-button click — independent of position, so this works
+ * identically whether the area is already placed on the plot or still
+ * sitting unplaced in the tray (see the rotationDeg column comment on
+ * growingAreas). The client always computes the next value via
+ * nextRotationDeg and passes it here; re-validated server-side rather than
+ * trusted, same caution saveGrowingAreaPositionAction already applies to
+ * xCm/yCm.
+ */
+export async function setGrowingAreaRotationAction(
+  growingAreaId: string,
+  rotationDeg: number,
+): Promise<SaveGrowingAreaPositionResult> {
+  const { userId, tenantId } = await requireSessionAndTenant();
+
+  if (![0, 90, 180, 270].includes(rotationDeg)) {
+    return { ok: false, error: "That's not a valid rotation." };
+  }
+
+  return withTenant(tenantId, async (tx) => {
+    const [row] = await tx
+      .update(growingAreas)
+      .set({ rotationDeg })
+      .where(and(eq(growingAreas.id, growingAreaId), eq(growingAreas.userId, userId)))
+      .returning({ id: growingAreas.id });
+    if (!row) return { ok: false, error: "Growing area not found." };
+    return { ok: true };
+  });
+}
+
 export type AddGrowingAreaFromLayoutResult =
   | {
       ok: true;
@@ -68,8 +98,10 @@ export type AddGrowingAreaFromLayoutResult =
         widthCm: number | null;
         lengthCm: number | null;
         depthCm: number | null;
+        heightCm: number | null;
         positionXCm: number | null;
         positionYCm: number | null;
+        rotationDeg: number;
       };
     }
   | { ok: false; error: string };
@@ -96,6 +128,7 @@ export async function addGrowingAreaFromLayoutAction(params: {
   widthCm: number | null;
   lengthCm: number | null;
   depthCm: number | null;
+  heightCm: number | null;
 }): Promise<AddGrowingAreaFromLayoutResult> {
   const { userId, tenantId } = await requireSessionAndTenant();
 
@@ -119,6 +152,7 @@ export async function addGrowingAreaFromLayoutAction(params: {
         widthCm: params.widthCm,
         lengthCm: params.lengthCm,
         depthCm: params.depthCm,
+        heightCm: params.heightCm,
       })
       .returning({ id: userEquipment.id });
 
@@ -135,6 +169,7 @@ export async function addGrowingAreaFromLayoutAction(params: {
             widthCm: params.widthCm,
             lengthCm: params.lengthCm,
             depthCm: params.depthCm,
+            heightCm: params.heightCm,
             sourceUserEquipmentId: equipmentRow.id,
           },
           1,
@@ -152,8 +187,10 @@ export async function addGrowingAreaFromLayoutAction(params: {
         widthCm: newArea.widthCm,
         lengthCm: newArea.lengthCm,
         depthCm: newArea.depthCm,
+        heightCm: newArea.heightCm,
         positionXCm: newArea.positionXCm,
         positionYCm: newArea.positionYCm,
+        rotationDeg: newArea.rotationDeg,
       },
     };
   });

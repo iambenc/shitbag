@@ -64,6 +64,7 @@ export default async function GardenPage() {
       widthCm: r.equipment.widthCm,
       lengthCm: r.equipment.lengthCm,
       depthCm: r.equipment.depthCm,
+      heightCm: r.equipment.heightCm,
       quantityOwned: r.equipment.quantity,
       placedCount: placedCountByEquipmentId.get(r.equipment.id) ?? 0,
     }));
@@ -111,6 +112,7 @@ export default async function GardenPage() {
               widthCm: r.equipment.widthCm,
               lengthCm: r.equipment.lengthCm,
               depthCm: r.equipment.depthCm,
+              heightCm: r.equipment.heightCm,
             }))}
             action={updateEquipmentAction}
             submitLabel="Save equipment"

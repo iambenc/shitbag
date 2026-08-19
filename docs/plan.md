@@ -5186,3 +5186,479 @@ itself (the shared `SET_ASIDE_ITEM` constant only matches the "drag onto the plo
 a doesn't-fit card's title is the mutually-exclusive "doesn't fit your plot at its current size" —
 confirmed via the failure's page snapshot that the app's actual behavior was already correct, only the
 test's locator was wrong), fixed, then passed. Full Playwright suite re-run: **23/23 passing**.
+
+## Feature — the photo estimate now feeds the layout planner: fixed structures keep their photographed spot
+
+Requested: combine the growing-space photo estimate with the plot layout planner — a fixed item like
+a raised bed should keep the position estimated from the photo, rather than needing the layout
+canvas to suggest one for it. "Fixed" means physically built in place — dug into the ground or
+built from timber/stone — as opposed to portable (a pot, seed tray, or even a heavy planter):
+`FIXED_TYPES = ["bed", "raised_bed"]` (`src/lib/garden/layout.ts`), a deliberately different axis
+from the existing `WALKWAY_TYPES` (clearance, not mobility — a planter needs a walkway but isn't
+nailed down, so it's in one set but not the other).
+
+**Changes**:
+- `growingAreaEstimator.ts`: `ProposedGrowingAreaSchema` gains `positionXCm`/`positionYCm`
+  (`.nullable().optional()`, same backward-compat reasoning as `plotWidthCm` — old stored estimates
+  have no key here at all) — each area's estimated spot within the plot, same top-left-origin
+  coordinate system as `plotWidthCm`/`plotLengthCm` and as `growingAreas.positionXCm/Y` itself. New
+  prompt instruction: estimate every area's position whenever the plot boundary itself was also
+  estimated; leave both null otherwise. `MOCK_OUTPUT` updated (bed *and* pot both get a position, so
+  the mock path also exercises "estimated but not fixed" — the pot's — not just the bed's).
+- `confirmGrowingAreaProposalsAction` (`src/lib/actions/growingAreaEstimation.ts`): grouping changed
+  from `{representative row, count}` to `{all contributing rows}` — needed because position broke the
+  old assumption that identical-shaped rows are fully interchangeable. Two same-size raised beds
+  photographed in different spots still collapse into one `userEquipment` row (quantity 2, unchanged —
+  ownership/quantity tracking is still shape-based), but now each contributing row's *own* position
+  survives into its own `growingAreas` row instead of being lost to the group's single representative.
+  A fixed-type row's position is clamped into the (possibly since-edited-in-the-review-form) plot
+  bounds — same clamp shape `LayoutCanvas.tsx`'s drag handler already uses — and only applied at all
+  if the confirm request also carries plot dimensions; any non-fixed type's position is simply never
+  read, regardless of what the AI proposed for it.
+- `buildGrowingAreaRows` (`src/lib/garden/growingAreaSync.ts`) gained an optional per-index
+  `overrides` array — the shared row-shaping helper's other two callers (`syncGrowingAreasAction`,
+  `applyEquipmentRows`) don't pass it and are unaffected; only the confirm action needs distinct
+  per-instance data for what's otherwise a batch of identical rows.
+- `EstimationReviewForm.tsx`: no new *editable* position fields — placement is still the layout
+  canvas's job, not a text-entry list — position is just carried through a row's submitted payload
+  unchanged. A small note (📍 …) appears under a fixed-type row that has an estimated position,
+  explaining it'll be placed immediately rather than suggested, so this isn't an invisible behavior
+  change.
+
+**Verification**: `tsc --noEmit`/`eslint` clean. New Playwright test (plus two new DB helpers,
+`addCompletedEstimation` and `getGrowingAreasByType`, since driving this through the real photo-
+upload + Inngest pipeline would need actual image fixtures for something that pipeline already has
+its own coverage): seeds a `growing_area_estimations` row already `status: 'complete'` with a
+raised bed (position 40,20) and a pot (position 220,150) in a 300×200 plot, confirms it through the
+real review page and server action, then checks both the exact stored `growingAreas` position
+(bed: exactly 40,20 — clamp had no effect since it already fit; pot: null) and the resulting
+`/garden/layout` render (bed shows as an already-confirmed placement, pot as a proposal). Failed once
+on a real test-locator ambiguity (the plot's own width/length fields share a label with the bed row's
+own width/length fields further down the same form — `.first()` fixed it), not an app bug. Full
+Playwright suite re-run: **24/24 passing** (one unrelated pre-existing flake in `dashboard.spec.ts` —
+a Next.js route-announcer live region duplicating the page heading's text under Playwright's strict-
+mode text matching — confirmed by re-running that file alone twice, clean both times, and confirmed
+via `git diff` that nothing on this branch touches anything dashboard-related).
+
+## Feature — greenhouses, mini-greenhouses, cold frames, and a real `heightCm` dimension
+
+Requested: three forgotten pieces of garden equipment — greenhouses, mini-greenhouses, and cold
+frames — with the grow planner, growing-area estimator, and plot planner all aware of them once a
+user owns one; followed by "all of these will need to height, width, and length," a genuinely new
+physical dimension none of the existing five growing-area types tracked (`depthCm` is soil/growing-
+medium depth, not how tall a structure stands).
+
+**Schema**: `growingAreaTypeEnum` (`src/db/schema/growing-area.ts`) gained `"greenhouse"`,
+`"mini_greenhouse"`, `"cold_frame"` — confirmed via an exhaustive grep across every migration in
+`src/db/migrations/` that this "enum" is really just `text("col", { enum: [...] })` with no native
+Postgres `ENUM` type or `CHECK` constraint anywhere in this schema's history, so the 3 new values
+needed zero migration, pure TypeScript. Both `growingAreas` and `userEquipment` gained a real new
+column, `heightCm: real("height_cm")` (nullable) — migration `0033_sudden_blade.sql`, exactly the
+predicted plain `ADD COLUMN` on both tables, nothing else. `pnpm db:seed` added 3 new
+`equipmentTypeSeeds` entries (`greenhouses`/`mini-greenhouses`/`cold-frames`, `category: "dimensions"`)
+and re-ran clean (0 new on the second run — confirmed idempotent).
+
+**Classification** (`src/lib/garden/layout.ts`): `WALKWAY_TYPES` gained all three (bulky enough to
+need clearance, even a low cold frame needs room to kneel and open its lid); `FIXED_TYPES` gained
+only `"greenhouse"` (installed on a permanent base like a shed — mini-greenhouses/cold frames are
+sold as portable/foldable, so their photo-estimated position stays a suggestion, same as a pot's,
+not an automatic lock-in). New `HEIGHT_TYPES = ["greenhouse", "mini_greenhouse", "cold_frame"]` +
+`hasHeight(type)` helper, same shape as `isFixedType`, used everywhere a height input needs gating.
+`LayoutCanvas.tsx`'s separate `TALL_TYPES` (its own shading heuristic, not `layout.ts`'s) gained
+`"greenhouse"`/`"mini_greenhouse"` but deliberately not `"cold_frame"` (knee-height, sloped-lid box).
+`growPlanner.ts`'s mock-only `FINAL_TYPES` gained `"greenhouse"` only (a real final growing space for
+tender crops; mini-greenhouse/cold-frame are closer in role to a pot — season-extension aids, rarely
+a crop's final home).
+
+**`heightCm` threaded through the full write path** — `equipmentRowSchema` +
+`applyEquipmentRows()` (`equipmentRows.ts`), `GrowingAreaRowParams` (`growingAreaSync.ts`),
+`addGrowingAreaFromLayoutAction` (`layout.ts`, 4 spots: params type, `userEquipment` insert,
+`buildGrowingAreaRows` call, return shape), `confirmGrowingAreaProposalsAction`
+(`growingAreaEstimation.ts`), and — found only via `tsc --noEmit` catching it, not part of the
+original plan's file list — `syncGrowingAreasAction` (`syncGrowingAreas.ts`)'s own
+`buildGrowingAreaRows` call. **Critical bug fixed** (caught by a Plan-agent review before any code
+was written, then verified directly against the file): `equipmentGroupKey` in
+`confirmGrowingAreaProposalsAction` didn't include `heightCm`, so two greenhouses estimated from a
+photo with matching width/length but different heights would silently collapse into one
+`userEquipment` group and one's real height would be discarded (only `groupRows[0]`'s dimensions seed
+the shared row) — fixed by adding `row.heightCm` to the key's join array. Same class of bug, lower
+stakes (display-only): `LayoutCanvas.tsx`'s `groupSetAside` dedup key also gained `heightCm`, or two
+differently-tall greenhouses would visually merge into one "×2" set-aside card.
+
+**UI**: a conditional Height (cm) input, gated by `hasHeight(type)`, added to `EquipmentPicker.tsx`,
+`EstimationReviewForm.tsx`, and `LayoutCanvas.tsx`'s `AddAreaForm` — same visual slot already used for
+the existing conditional depth field. Display-formatter parity: the `${width}×${length}${depth?...}cm`
+pattern appears in 5 places app-wide, not the 3 originally assumed (a Plan-agent review caught the
+2 missed ones) — `LayoutCanvas.tsx`'s `sizeText`, `growPlanner.ts`'s `areaSizeText`,
+`recommendationReplacement.ts`'s `stageShapeText`, `GrowingAreaManager.tsx`'s own `sizeText`, and
+`grow-plan/page.tsx`'s `areaSizeLabel` — all 5 now append `, {height}cm tall` when present.
+
+**Agent awareness**: `growPlanner.ts` and `recommendationReplacement.ts` (kept as independently-
+duplicated files per this codebase's existing precedent) each gained `heightCm` on their inline
+growing-area/stage-shape types, appended it to their prompt's size text, and got new prompt
+instructions — `growPlanner.ts`'s stage-sequencing instruction (append: greenhouses can be a genuine
+final growing space or an early-season start, mini-greenhouses/cold frames are usually a season-
+extension stage, not a final home) and `recommendationReplacement.ts`'s own new instruction (a fixed
+STAGE SHAPE including one of these three should factor frost protection/extra warmth into crop and
+timing choice). `growingAreaEstimator.ts`'s prompt now names all three explicitly, its schema gained
+`heightCm` (`.nullable().optional()`, same backward-compat reasoning as `positionXCm` — old stored
+`rawOutput` rows have no key here at all), and `MOCK_OUTPUT` gained a third example area (a
+greenhouse with a real `heightCm`). Both Inngest `gather-context` steps
+(`generateGrowPlan.ts`/`regenerateRecommendation.ts`) map `heightCm` through exactly like `depthCm`
+already was.
+
+**Verification**: `tsc --noEmit`/`eslint` clean (two real compile errors surfaced and fixed along the
+way: `labels.ts`'s two `Record<GrowingAreaType, string>` object literals missing the 3 new keys —
+predicted, compiler-enforced; and the `syncGrowingAreas.ts`/`garden/layout/page.tsx` gaps the
+original plan's file list had missed). `pnpm db:seed` run twice, 3 new then 0 new — confirmed
+idempotent. Grep sweep: all 5 display-formatter sites now emit height; `heightCm` present in every
+critical write-path file. Two new Playwright tests added to `garden-layout.spec.ts` (plus extending
+`getGrowingAreasByType` to also return `heightCm`): (1) adding a greenhouse with a height via
+`AddAreaForm`, confirming the Height field appears (gated correctly), reloading to prove the value
+reached the database through `addGrowingAreaFromLayoutAction` (the gap a first design draft missed
+entirely), then adding a second same-footprint-different-height greenhouse and confirming the two
+render as separate set-aside cards, not merged; (2) the `equipmentGroupKey` regression directly —
+confirming a photo estimate with two same-footprint, different-height greenhouses and asserting both
+`growingAreas` rows persist their own distinct `heightCm` (180 and 250), not both collapsing to one.
+Both passed on the first run after the fixes. Full Playwright suite re-run: **25/26 passing** — the
+one failure (`seeds.spec.ts`'s "mock AI backfill" test) is on a feature this session's diff never
+touched (seed-packet/crop-facts AI backfill, unrelated to growing areas/equipment/layout); confirmed
+via `git diff` that zero files touched this session relate to it, and confirmed it fails consistently
+in isolation too — looks like a pre-existing environment mismatch (a live `GOOGLE_GENERATIVE_AI_API_KEY`
+is configured in this dev environment, so a test written against the mock AI path's deterministic
+fixture text is instead hitting the real model, which won't fabricate crop facts for an invented
+"Playwright Test Fruit" name the same way the mock does) — not a regression from this feature.
+
+Live end-to-end generation check (a live `GOOGLE_GENERATIVE_AI_API_KEY` is configured in this dev
+environment, so this exercised the real model, not the mock fallback): gave a fresh paid-tier test
+account a 200×300×210cm greenhouse and a 90×60×40cm cold frame via `EquipmentPicker`, generated a
+real plan, then deleted the throwaway test script and account afterward. The model's reasoning
+genuinely engaged with the new prompt instruction, not just mechanically — its summary opened with
+"By utilizing your greenhouse and cold frame, we can easily extend the growing season well into
+autumn and winter," the greenhouse recommendation (Perpetual Spinach) reasoned that growing it there
+"protects it from early autumn frosts, keeping you in fresh, high-value gourmet leaves... straight
+through winter," and the cold frame recommendation (Mizuna) called it "a brilliant, cost-effective
+way... to get fresh salads deep into autumn." Both areas rendered their height correctly in the
+recommendation card's size text (`🏠 Greenhouse · 200x300cm, 210cm tall`,
+`🖼️ Cold frame · 90x60cm, 40cm tall`), confirming `growPlanner.ts`'s `areaSizeText` and `labels.ts`'s
+emoji map both work correctly end to end for the new types.
+
+### Correction — greenhouses/mini-greenhouses/cold frames don't take a depth measurement
+
+Requested: these three types only ever need width, length, and height — `depthCm` (soil/growing-
+medium depth) isn't meaningful for a structure a crop isn't planted directly into. The depth input
+had previously followed the pre-existing `type !== "bed"` convention (a ground-level bed is the only
+type that already hid it), which meant it was still showing for all three new types alongside the
+new height input.
+
+**Change**: new `NO_DEPTH_TYPES = ["bed", ...HEIGHT_TYPES]` + `hasDepth(type)` helper in
+`src/lib/garden/layout.ts`, same shape as `hasHeight`. Every spot that previously gated the depth
+input/value on `type !== "bed"` now gates on `hasDepth(type)` instead — `LayoutCanvas.tsx`'s
+`AddAreaForm` (both the input's visibility and its submitted value), `EstimationReviewForm.tsx` (same
+two spots), and `EquipmentPicker.tsx` (input visibility only — its submission already only reads
+`r.depthCm` if the field was actually filled in, so hiding the input was sufficient there).
+`growingAreaEstimator.ts`'s prompt updated to explicitly tell the model to always leave `depthCm`
+null for these three types, reusing the same widthCm/lengthCm/heightCm-only framing already given for
+`heightCm`. No display-formatter changes needed — every `sizeText`/`areaSizeText`-style helper already
+only appends the depth segment when `depthCm` has a value, so once it's never set for these types the
+segment just stops appearing on its own.
+
+**Verification**: `tsc --noEmit`/`eslint` clean. Extended the existing greenhouse `AddAreaForm`
+Playwright test with an explicit assertion that `Depth (cm)` has zero matches once `greenhouse` is
+selected (alongside the pre-existing assertion that `Height (cm)` is visible) — passed. Full
+Playwright suite re-run clean apart from the same pre-existing, unrelated `seeds.spec.ts` flake noted
+above.
+
+## Feature — rotate placed areas in 90° increments, and snap-to-grid with a visible grid
+
+Requested in two parts: "users should be able to rotate each planting area in 90 degree increments,"
+followed mid-turn by "can we add snap to grid functionality to the canvas with a grid shown?" —
+handled together since they interact (a rotated footprint has to be what snapping/collision math
+uses, and a shared grid unit keeps auto-suggested, snapped, and rotated positions all on one lattice).
+
+**Schema**: `growingAreas` gained `rotationDeg: integer("rotation_deg").notNull().default(0)` —
+migration `0034_volatile_phil_sheldon.sql`, exactly the predicted plain `ADD COLUMN ... DEFAULT 0 NOT
+NULL`. Always one of 0/90/180/270, independent of position (an area can be rotated whether it's
+placed on the plot or still sitting unplaced in the tray) and independent of the stored
+`widthCm`/`lengthCm` themselves — rotating never rewrites those, only which one acts as the
+footprint's effective width vs. length for placement/collision/rendering purposes.
+
+**Rotation** (`src/lib/garden/layout.ts`): `nextRotationDeg(rotationDeg)` cycles
+0→90→180→270→0. `rotatedFootprintCm(footprint, rotationDeg)` swaps width/length only at 90/270 — 0
+and 180 are visually and functionally identical for a plain rectangle with no rendered front/back.
+Every place that used to call `footprintCm(area)` directly for an actual on-canvas footprint (not a
+display-text size, which stays unrotated — the physical object's dimensions don't change just
+because of how it's oriented on the plot) now wraps it in `rotatedFootprintCm(..., area.rotationDeg)`:
+`placedRects`, the overlap/shading comparisons, and `handleDragEnd`'s edge-clamp math in
+`LayoutCanvas.tsx`, plus `suggestPositions`' own footprint computation in `layout.ts` (its
+`PackableGrowingArea` type gained `rotationDeg` accordingly, so a rotated-but-still-unconfirmed
+suggestion gets suggested a spot sized for its *actual* current orientation). A new server action,
+`setGrowingAreaRotationAction(growingAreaId, rotationDeg)` (`src/lib/actions/garden/layout.ts`, same
+shape/re-validation caution as `saveGrowingAreaPositionAction`), persists it — the client computes the
+next value via `nextRotationDeg` and calls this action, same optimistic-update-then-revert-on-failure
+pattern `handleDragEnd` already uses. A ↻ button appears on every plot-rendered card (both real
+placements and unconfirmed suggestions) for any width/length-sized type (`!usesSizedFields(type)` —
+rotating a pot/seed tray's sizeValue-based square footprint would be a visible no-op, so the control
+is hidden rather than offered as a button that does nothing); `onPointerDown`/`onClick` both call
+`stopPropagation()` so clicking it doesn't also register as the start of the card's own framer-motion
+drag gesture. `groupSetAside`'s set-aside-tray dedup key gained `rotationDeg` too, same reasoning as
+the earlier `heightCm` fix — two areas differing only in rotation aren't really interchangeable
+(dragging one specific instance onto the plot now produces a different-orientation result than the
+other), so they shouldn't merge into one "×2" card.
+
+**Snap-to-grid** (`src/lib/garden/layout.ts`): the existing (previously unexported, internal-only)
+`SCAN_STEP_CM` — the step `findFreePosition` already scanned candidate spots in — was renamed to
+exported `GRID_CM` and reused as the one shared grid unit, rather than introducing a second magic
+number: 15cm, which evenly divides `WALKWAY_CLEARANCE_CM` (45), so a walkway-type's edge clearance
+never itself knocks an auto-suggested position off this grid. New `snapToGrid(valueCm)` rounds to the
+nearest multiple; `handleDragEnd` in `LayoutCanvas.tsx` now snaps the raw pointer-derived x/y before
+clamping to the plot's bounds. The plot's own container div renders visible grid lines at
+`GRID_CM * scale` px spacing via a `repeating`-style CSS `background-image` (two
+`linear-gradient`s, one per axis) rather than one DOM element per line — cheap regardless of plot
+size, and layers over the existing `bg-(--surface-tint)` background-color class without a shorthand
+`background` property clash.
+
+**Real bug found while implementing, not by user report**: the pre-existing "pots can be dragged to
+touch with no warning, but beds warn when dragged to touch another bed" Playwright test broke the
+moment snap-to-grid landed — it depended on dragging two items to an *exact*, non-grid-aligned
+edge-to-edge position (a 25cm pot's footprint, and a 100cm bed's width, neither of which divides
+evenly into the new 15cm grid), which a snapped drag can no longer reliably reproduce. This isn't a
+test bug to patch around — it's a real, permanent consequence of the feature: once dragging snaps to
+a grid, exact sub-grid-unit placement by dragging is only possible when the item's own footprint
+dimension happens to be a multiple of the grid size. Fixed by rewriting the test to seed the two
+exact-touching positions directly via SQL (extended the existing `addGrowingAreaAt` test helper to
+also accept `widthCm`/`lengthCm`, not just `sizeValue`/`sizeUnit`, so it could seed the raised-bed
+case too) rather than via a simulated drag — this is actually a better test of what it's really
+checking (the `isTooClose`/`pairClearanceCm` overlap-warning rendering logic itself), not a
+workaround, since that logic only cares about the stored position and footprint, never about how the
+position was reached.
+
+**Verification**: `tsc --noEmit`/`eslint` clean. Two new Playwright tests in `garden-layout.spec.ts`:
+(1) adds a 200×100cm planter, drags it onto the plot, asserts its rendered box is 120×60px (scale 0.6
+for this test's 1000×800 plot), clicks the ↻ control, asserts the box swaps to 60×120px, reloads to
+prove `rotationDeg` reached the database via `setGrowingAreaRotationAction` (not just optimistic
+client state), and checks the stored value is exactly `90`; (2) drags a pot to a deliberately
+non-grid-aligned drop point and asserts the resulting stored `positionXCm`/`positionYCm` are each an
+exact multiple of 15. Both passed. Full Playwright suite re-run: **27/28 passing** — the one failure
+is the same pre-existing, unrelated `seeds.spec.ts` mock-AI-backfill flake noted in the previous
+entry, confirmed via `git diff` that nothing in this feature touches seed inventory/crop-facts code.
+
+## Feature — owning several identical items no longer auto-suggests all of them onto the plot at once
+
+Requested: "individual pots should be dragged from the inventory to the canvas, not all of them at
+the same time" — previously, `suggestPositions` treated every unplaced, non-dismissed area as an
+independent candidate, so owning 3 identical 25cm pots meant all 3 appeared as separate faded
+suggested cards on the plot simultaneously the moment they were added, rather than the user drawing
+from an inventory one at a time.
+
+**Change** (`src/app/garden/layout/LayoutCanvas.tsx`): a new `stackKey(area)` helper (factored out of
+`groupSetAside`'s own dedup key, now shared) identifies "the same equipment" — same type + every
+dimension. A new `splitStackedCandidates(candidates)` groups unplaced/non-dismissed candidates by
+`stackKey` and splits them: a genuinely one-of-a-kind area (no other unplaced area shares its
+`stackKey`) still gets auto-suggested a spot on the plot, exactly as before — there's no ambiguity
+about "which one," so suggesting it still saves the user a step. 2+ interchangeable instances of the
+same equipment are excluded from `suggestPositions` entirely and flow straight into the "Not on your
+plot" tray as one grouped card (reusing `groupSetAside`, unchanged), requiring the user to drag them
+onto the canvas individually. As a stack shrinks (dragged out one at a time), the last remaining
+instance naturally becomes one-of-a-kind on a later render and starts getting suggested a spot like
+any other unique area — a deliberate, not-overthought transition rather than a special case. An
+occupant-bearing area is always treated as one-of-a-kind regardless of how many share its `stackKey`,
+matching `groupSetAside`'s own pre-existing "never merge — which crop is growing where is meaningfully
+different" rule. Trade-off, accepted as reasonable: a stacked item is never pre-flagged "doesn't fit"
+the way a unique area's `suggestPositions` overflow would be — it only becomes apparent once the user
+actually drags it out. The instructional paragraph below the canvas got a short added sentence
+explaining the new tray behavior.
+
+**Real bug found while building this, not by user report**: writing a test that added 3 identical
+pots back-to-back (no intervening waits) surfaced a genuine pre-existing race in `AddAreaForm`,
+unrelated to this feature — its Size/Width/Length/etc. inputs aren't disabled while a previous
+submission is still in flight (only the submit button is), so typing a new area's dimensions during
+that window, then having the previous request resolve, would silently wipe the just-typed value (its
+unconditional `setSizeValue("")` etc. cleanup ran after the fact, clobbering newer input rather than
+its own stale submission). Fixed by snapshotting the submitted values before the `await` and only
+resetting a field if it still holds that same snapshotted value by the time the request resolves —
+preserves genuinely newer input typed mid-flight, still resets normally in the common case. This
+alone wasn't sufficient for the exact test scenario (submitting the *identical* value — "25" three
+times — defeats a value-equality heuristic, since it can't distinguish "leftover" from "fresh but
+coincidentally the same"); the test itself was also corrected to wait for the button to re-enable
+before each addition, matching how a real sequence of add-clicks actually behaves rather than
+firing them faster than the UI could realistically process.
+
+**Verification**: `tsc --noEmit`/`eslint` clean. New Playwright test: adds 3 identical pots back to
+back, asserts zero `SUGGESTED_ITEM`s and one grouped `SET_ASIDE_ITEM` card titled "3 set aside";
+drags one out, asserts the remaining 2 still don't auto-suggest (still a stack); drags another out,
+asserts the last one now DOES auto-suggest (genuinely unique again). Confirmed via a throwaway
+diagnostic script (direct SQL read of the 3 pots' actual stored rows) that the underlying `AddAreaForm`
+race was real before being fixed — two of the three rows had `size_value: null` despite the test
+having typed "25" for all three. Full Playwright suite re-run: **27/28 passing**, same pre-existing
+unrelated `seeds.spec.ts` flake as every prior entry.
+
+## Feature — tray cards scale with the area's real size
+
+Requested: "equipment sizing needs to be more obvious in the 'Not on your plot' section, currently
+all pots look the same regardless of their size" — accurate: every tray card rendered at one fixed
+64×64px box (`TRAY_CARD_PX`) regardless of the area's actual footprint, a deliberate original design
+("the tray is a palette, not a scaled map") that the user now wants revisited specifically for size
+legibility.
+
+**Change** (`src/app/garden/layout/LayoutCanvas.tsx`): replaced the fixed `TRAY_CARD_PX` constant with
+`trayCardSizePx(footprint)`, which scales each card's own width/height independently from the area's
+real `footprintCm` (unrotated — a tray card isn't spatially oriented, so rotation has no visual
+meaning there) at `TRAY_SCALE_PX_PER_CM = 1.4`, clamped to `[TRAY_CARD_MIN_PX=32, TRAY_CARD_MAX_PX=96]`
+— its own independent scale/floor/ceiling tuned for the tray's small card budget, not derived from the
+plot's dynamic per-plot `MAX_SCALE_PX_PER_CM`. A 25cm pot (already a square footprint, since
+`footprintCm` returns `sizeValue×sizeValue` for a diameter-based area) renders at 35px, a 45cm one at
+63px, clearly differentiable; a non-square footprint (a planter, say) now also renders as a
+non-square tray card, mirroring its real aspect ratio, which the fixed-square design couldn't. Known,
+accepted limitation carried over from the underlying footprint model: a litres-sized pot (no cm
+diameter recorded) still falls back to `footprintCm`'s `DEFAULT_FOOTPRINT_CM=30` placeholder
+regardless of its real litre volume, so two different-volume litres pots still render at the same
+tray-card size — the hover title's exact "5L"/"20L" text still differentiates them even though the
+box can't; fixing that would mean inventing a litres→cm heuristic used nowhere else in this app, out
+of scope for what was asked.
+
+**Verification**: `tsc --noEmit`/`eslint` clean. New Playwright test: sets aside a 15cm pot and a
+45cm pot (different sizes, so they land as two separate un-grouped tray cards, not merged), reads
+both cards' actual rendered bounding boxes, and asserts the 15cm one clamps to the 32px floor while
+the 45cm one renders at 63px — visibly, measurably bigger. Full Playwright suite re-run: **29/30
+passing**, same pre-existing unrelated `seeds.spec.ts` flake as every prior entry in this file.
+
+## Correction — label tray cards with their actual size, not just a scaled box
+
+Requested immediately after the above: "let's label the pot sizes, the sizing isn't obvious" — the
+box-size-only cue wasn't legible enough on its own; a card's second line of text still just repeated
+the generic type name ("Pot") regardless of size, with the actual "25cm"/"5L" figure only reachable
+via the hover title.
+
+**Change** (`src/app/garden/layout/LayoutCanvas.tsx`): an unoccupied tray card's second line now
+shows `sizeText(area)` (its real size/dimensions) instead of the generic type label — the emoji
+already conveys type (🪴 = pot), so the visible text slot is better spent on the thing that
+actually varies card-to-card. Falls back to the type label when there's no size to show at all (e.g.
+a garden bed with no dimensions entered). An *occupied* card still shows the crop name here instead,
+unchanged — which crop is growing where stays the more useful at-a-glance fact for those, matching
+`groupSetAside`'s own pre-existing "never merge an occupied area" priority.
+
+**Verification**: `tsc --noEmit`/`eslint` clean. Extended the previous entry's differently-sized-pots
+Playwright test with two more assertions — the 15cm card's visible text reads "15cm" and the 45cm
+card's reads "45cm" (not just their differing box dimensions, already covered). Full Playwright suite
+re-run: **29/30 passing**, same pre-existing unrelated `seeds.spec.ts` flake as every prior entry.
+
+## Fix — seeds only reach the shopping list once a recommendation is accepted
+
+Requested: "seeds should only be added to the shopping list when suggested by the garden planner when
+the user has accepted that suggestion." Confirmed real: `planRecommendations.status` already models
+exactly this distinction (`"pending"` = awaiting review, may still be rejected outright; `"accepted"`
+= the user explicitly kept it, via `acceptRecommendationAction`), but every path that added a crop's
+seeds to `shoppingListItems` ignored it entirely — `generateGrowPlan.ts` and
+`regenerateRecommendation.ts` both inserted a shopping-list row for every `requiresPurchase`
+recommendation at persist time, i.e. the instant a fresh/replacement recommendation was created and
+still `"pending"`, before the user had reviewed anything. `weeklyShoppingList.ts`'s cron backstop had
+the identical gap (queried `requiresPurchase = true` with no status filter at all — would've re-added
+an item for a `"rejected"` recommendation too). `dailyJobs.ts`'s task-slippage job could also trigger
+it, driven off an existing due task rather than recommendation status directly — tasks aren't gated
+on acceptance in this app (a separate, pre-existing, deliberate design not touched here), so a
+still-`"pending"` recommendation's sow task can genuinely go overdue and short on stock.
+
+**Change**: moved the crop/seed side of shopping-list creation to the one place that actually means
+"the user said yes" — `acceptRecommendationAction` (`src/lib/actions/recommendations.ts`) — leaving
+the equipment/growing-space side of shopping-list creation in `generateGrowPlan.ts` untouched (that
+signal is "growing needs equipment, surfaced now," never tied to any one crop's acceptance, and
+wasn't part of what was asked).
+- `generateGrowPlan.ts`/`regenerateRecommendation.ts`: no longer insert `shoppingListItems` directly.
+  Both still compute the same union of two signals as before (the AI's own `requiresPurchase` guess,
+  OR a code-checked seed-stock shortfall from summed `estimatedSeedsUsed`) — but now write that union
+  back onto the persisted `planRecommendations.requiresPurchase` column itself (an `UPDATE ... WHERE
+  id IN (...)` keyed off a new `recommendationIdsByCropId`/`newRecs` mapping) rather than acting on it
+  immediately. This makes `requiresPurchase` the single authoritative flag every later reader can just
+  trust, instead of re-deriving a stock-shortfall snapshot itself at a different point in time.
+- `acceptRecommendationAction`: `updateOwnedRecommendations`'s `.returning()` now also returns
+  `cropId`/`requiresPurchase`; after the status flip to `"accepted"` succeeds, inserts one
+  `shoppingListItems` row per newly-accepted `requiresPurchase` crop not already listed (same
+  dedup-by-cropId shape the old immediate-insert code used) and revalidates `/shopping-list` too.
+- `weeklyShoppingList.ts`: added `eq(planRecommendations.status, "accepted")` to its query — closes
+  its own independent version of the same gap, keeping it a true backstop for the accept path above
+  rather than a second way to bypass it.
+- `dailyJobs.ts`'s task-slippage job: the reschedule-to-next-week behaviour is unchanged (still fires
+  for *any* due task short on stock, regardless of its recommendation's status — deliberately, since
+  that's about the task's own due date, not shopping), but the shopping-list insert specifically now
+  looks up the task's owning recommendation via `tasks.planRecommendationId` and only proceeds if its
+  status is `"accepted"`. Every task that reaches this branch already has `cropId`+`estimatedSeedsUsed`
+  set, which only ever happens for an AI-generated task, so `planRecommendationId` is always present
+  in practice — no manual-task case being silently mishandled.
+
+**Verification**: `tsc --noEmit`/`eslint` clean across the whole project. New Playwright test
+(`grow-plan.spec.ts`, its own isolated user rather than the file's shared one, so its shopping list
+starts genuinely empty): generates a mock-path plan, asserts the shopping list has zero crop items
+immediately after generation (even though a seedless fresh user makes every mock recommendation
+`requiresPurchase`), accepts one recommendation, then asserts the shopping list is no longer empty.
+Re-ran the full `grow-plan.spec.ts` (all 3 tests) plus the two photo-estimate tests in
+`garden-layout.spec.ts` together (touched adjacent code this session) — **5/5 passing**.
+
+## Removal — equipment purchases are never AI-suggested, only ever user-driven
+
+Follow-up question after the fix above ("why is planting equipment being added to the shopping list
+without the user asking?"), then a direct instruction: "the equipment purchases should be driven by
+the user, not from suggestions." Found the cause: a separate, older block in `generateGrowPlan.ts`
+(documented earlier in this file under "Owning equipment should stop the shopping-list nagging") that
+ran on every plan generation and added every `PURCHASABLE_GROWING_SPACE_SLUGS` equipment type
+(seed trays, pots, planters, raised beds, greenhouses, mini-greenhouses, cold frames) the user owned
+*none* of at all — completely independent of whether any recommendation needed it, and (same root
+issue as the seeds fix above) independent of whether the user had accepted anything. Made worse by
+the shopping list UI never actually rendering the `source: "manual" | "ai"` distinction anywhere, so
+an AI-added equipment item looked identical to one the user typed in themselves — no way to tell it
+apart, let alone why it was there.
+
+**Change**: deleted the block outright rather than trying to make it accepted-recommendation-aware
+like the seeds fix — the user's own framing ("driven by the user, not from suggestions") rules out
+an AI-suggested equipment path entirely, not just an unaccepted one. Equipment now only ever reaches
+the shopping list via `addShoppingItemAction` (the existing manual "+ Add an item" path on
+`/shopping-list`, already source: "manual"). Removed alongside it: the now-dead
+`PURCHASABLE_GROWING_SPACE_SLUGS` export (`src/lib/garden/equipmentMapping.ts`) and the `shoppingListItems`
+import in `generateGrowPlan.ts` (no longer referenced there at all — the crop/seed side of shopping-list
+creation lives entirely in `acceptRecommendationAction` now, per the fix above). `equipmentTypes`/
+`userEquipment` imports stay — still used elsewhere in the same file for building the AI's own
+"what growing space does this user already have" context, unrelated to shopping. Deliberately left
+untouched: `updateEquipmentAction`'s existing reconciliation (recording equipment as owned marks any
+matching *pending* shopping item `purchased`) — that's a general, source-agnostic tidy-up that's just
+as correct for a manually-added item as it ever was for an AI one, not part of what was asked to go.
+
+**Verification**: `tsc --noEmit`/`eslint` clean across the whole project (including confirming
+`equipmentTypes`/`userEquipment` are still genuinely used post-removal, not orphaned too). No existing
+test asserted the removed auto-suggestion behavior, so nothing needed updating; `grow-plan.spec.ts`'s
+"seeds only reach the shopping list once accepted" test (added in the fix above) still passes
+unchanged, since it never touched equipment.
+
+## Feature — an already-set plot's size can be edited, not just set once
+
+Requested: "on the garden planner, the user should be able to adjust the size of their plots."
+Confirmed real: `setPlotBoundaryAction` (`src/lib/actions/garden/layout.ts`) was always a plain
+upsert with no distinction between setting and resizing, but `LayoutCanvas.tsx` only ever rendered
+`PlotBoundaryForm` when `plotWidthCm`/`plotLengthCm` were both null — the moment a plot was set once,
+that form vanished for good, with nothing left on `/garden/layout` to bring it back.
+
+**Change** (`src/app/garden/layout/LayoutCanvas.tsx`): `PlotBoundaryForm` now takes optional
+`initialWidthCm`/`initialLengthCm`/`onSaved`/`onCancel` props, reused for both roles it now plays —
+unchanged as the first-time "no plot yet" setup screen (no props, no Cancel button, nothing to go
+back to) and, new, as an inline editor once a plot exists (pre-filled from the current size, with a
+Cancel button). A small toolbar row above the canvas — "Plot size: {w}×{h}cm" plus an "Edit size"
+button — toggles a new `editingPlotSize` state; while true, `PlotBoundaryForm` renders in place of
+the whole canvas (same full-replacement shape the null-boundary case already used), same
+`setPlotBoundaryAction`/`router.refresh()` path underneath either way. Deliberately not attempted:
+reconciling already-*confirmed* areas whose real stored cm position now falls outside a shrunk plot —
+per `PlotBoundaryForm`'s own new copy for the editing case, they keep their exact saved position
+unchanged (only display-clamped to stay visible on screen, same pre-existing clamp used everywhere
+else), never silently moved or dropped; only genuinely unplaced/suggested spots reflow, which
+`suggestPositions` already recomputes fresh on every render regardless.
+
+**Verification**: `tsc --noEmit`/`eslint` clean. New Playwright test: sets a plot to 1000×800cm,
+opens the edit form (asserts it's pre-filled with the current values, unlike the blank first-time
+form), types a new width then Cancels — asserts the saved size is untouched — then edits again and
+actually Saves 600×500cm, asserting the toolbar reflects the new size. While re-running the full
+`garden-layout.spec.ts` suite to confirm nothing else broke, found and fixed one genuinely stale,
+unrelated test: "differently-sized pots render as differently-sized cards in the tray" was still
+asserting the *variable* tray-card sizing this session reverted (per the earlier "make all of the
+icons in the not on your plot section the same size" request) back to a fixed `TRAY_CARD_PX` — the
+test had never been updated after that revert. Fixed to assert same-size cards with differing size
+*labels* instead, matching current intended behavior. Full suite re-run: **13/13 passing** (one
+`net::ERR_ABORTED`/detached-frame failure on an unrelated, unchanged test turned out to be dev-server
+recompilation flake — confirmed by re-running that single test in isolation, which passed cleanly).

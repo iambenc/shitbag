@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import Image from "next/image";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { motion, type PanInfo } from "framer-motion";
@@ -10,8 +11,21 @@ import {
   addGrowingAreaFromLayoutAction,
   setPlotBoundaryAction,
   resetLayoutAction,
+  setGrowingAreaRotationAction,
 } from "@/lib/actions/garden/layout";
-import { footprintCm, isTooClose, suggestPositions, WALKWAY_CLEARANCE_CM, type PositionedRect } from "@/lib/garden/layout";
+import {
+  footprintCm,
+  rotatedFootprintCm,
+  nextRotationDeg,
+  snapToGrid,
+  isTooClose,
+  suggestPositions,
+  hasHeight,
+  hasDepth,
+  WALKWAY_CLEARANCE_CM,
+  GRID_CM,
+  type PositionedRect,
+} from "@/lib/garden/layout";
 import { growingAreaTypeLabels, growingAreaTypeEmoji, formatSizeValue } from "@/lib/garden/labels";
 import { growingAreaTypeEnum, type GrowingAreaType, type GrowingAreaStatus, type SizeUnit } from "@/db/schema";
 
@@ -25,9 +39,11 @@ type Area = {
   widthCm: number | null;
   lengthCm: number | null;
   depthCm: number | null;
+  heightCm: number | null;
   status: GrowingAreaStatus;
   positionXCm: number | null;
   positionYCm: number | null;
+  rotationDeg: number;
   occupant: Occupant | null;
 };
 
@@ -39,26 +55,50 @@ const MAX_CANVAS_HEIGHT_PX = 480;
 const MAX_SCALE_PX_PER_CM = 3;
 // Matches the canvas container's own `border-2` below.
 const CONTAINER_BORDER_PX = 2;
-// Fixed visual size for every tray card, regardless of the area's real
-// footprint — the tray is a palette, not a scaled map (that's the plot's
-// job), so there's no proportional sizing to preserve here.
+// The tray still isn't a scaled map of real cm positions (that's the
+// plot's job) — cards aren't laid out at proportional coordinates, just
+// flex-wrapped. Every card renders at this one fixed size regardless of
+// its real footprint, so the tray reads as a tidy uniform grid rather
+// than cards of varying size.
 const TRAY_CARD_PX = 64;
 
-// Height-shading heuristic per the user's chosen approach: no real
-// mature-height data exists anywhere (crops has none), so container TYPE
-// stands in for height — raised beds/planters are treated as tall-capable,
-// pots/seed trays as low. "South" = greater Y in this canvas's north-up
-// convention, and this is UK/Northern-hemisphere-only — this app has no
-// hemisphere handling anywhere else despite already storing latitude, so
-// that's a known, deliberate simplification here, not an oversight.
-const TALL_TYPES: GrowingAreaType[] = ["raised_bed", "planter"];
+// Height-shading heuristic per the user's chosen approach: mostly no real
+// mature-height data exists (crops has none), so container TYPE stands in
+// for height — raised beds/planters/greenhouses/mini-greenhouses are
+// treated as tall-capable, pots/seed trays/cold frames (knee-height,
+// sloped-lid boxes) as low. Real heightCm data does now exist for
+// greenhouse/mini_greenhouse/cold_frame (see HEIGHT_TYPES in layout.ts),
+// but this heuristic deliberately stays the same simple boolean-per-type
+// model rather than comparing actual values — a reasonable future
+// enhancement, not required today. "South" = greater Y in this canvas's
+// north-up convention, and this is UK/Northern-hemisphere-only — this app
+// has no hemisphere handling anywhere else despite already storing
+// latitude, so that's a known, deliberate simplification here, not an
+// oversight.
+const TALL_TYPES: GrowingAreaType[] = ["raised_bed", "planter", "greenhouse", "mini_greenhouse"];
 const SHADE_CHECK_DISTANCE_CM = 150;
 
-function sizeText(row: Pick<Area, "sizeValue" | "sizeUnit" | "widthCm" | "lengthCm" | "depthCm">) {
+// Custom per-type icons for this canvas only — deliberately NOT touching
+// labels.ts's shared growingAreaTypeEmoji (still used as-is by
+// GrowingAreaManager.tsx and grow-plan/page.tsx). Only types with a real
+// asset in public/icons/growing-areas/ appear here; everything else falls
+// back to the shared emoji below.
+const CUSTOM_ICON_SRC: Partial<Record<GrowingAreaType, string>> = {
+  seed_tray: "/icons/growing-areas/seed_tray.png",
+  greenhouse: "/icons/growing-areas/greenhouse.png",
+  pot: "/icons/growing-areas/pot.png",
+  planter: "/icons/growing-areas/planter.png",
+  raised_bed: "/icons/growing-areas/raised_bed.png",
+  bed: "/icons/growing-areas/bed.png",
+  mini_greenhouse: "/icons/growing-areas/mini_greenhouse.png",
+  cold_frame: "/icons/growing-areas/cold_frame.png",
+};
+
+function sizeText(row: Pick<Area, "sizeValue" | "sizeUnit" | "widthCm" | "lengthCm" | "depthCm" | "heightCm">) {
   const sized = formatSizeValue(row.sizeValue, row.sizeUnit);
-  if (sized) return sized;
-  if (row.widthCm && row.lengthCm) return `${row.widthCm}×${row.lengthCm}${row.depthCm ? `×${row.depthCm}` : ""}cm`;
-  return null;
+  const dims = sized ?? (row.widthCm && row.lengthCm ? `${row.widthCm}×${row.lengthCm}${row.depthCm ? `×${row.depthCm}` : ""}cm` : null);
+  if (dims && row.heightCm) return `${dims}, ${row.heightCm}cm tall`;
+  return dims;
 }
 
 function usesSizedFields(type: GrowingAreaType) {
@@ -71,12 +111,24 @@ function statusClasses(status: GrowingAreaStatus) {
   return "border-black/15 bg-white";
 }
 
+// Identifies "the same equipment" — same type + every dimension — shared by
+// groupSetAside's tray-card collapsing below and the stacked-vs-unique split
+// suggestPositions candidates get filtered through (see suggestionCandidates
+// in LayoutCanvas). Two areas with this same key are physically
+// interchangeable stock (e.g. two 25cm pots), not two meaningfully distinct
+// items.
+function stackKey(area: Pick<Area, "type" | "sizeValue" | "sizeUnit" | "widthCm" | "lengthCm" | "depthCm" | "heightCm" | "rotationDeg">) {
+  return [area.type, area.sizeValue, area.sizeUnit, area.widthCm, area.lengthCm, area.depthCm, area.heightCm, area.rotationDeg].join(
+    "|",
+  );
+}
+
 type SetAsideGroup = { key: string; representative: Area; count: number; doesntFit: boolean };
 
-// Collapses identical set-aside areas (same type + size/dimensions) into
-// one card with a count, same "3x 20cm pots" convention this app already
-// uses for owned equipment (see EquipmentPicker/confirmGrowingAreaProposalsAction)
-// — simpler to scan than a card per instance once several build up.
+// Collapses identical set-aside areas (same stackKey) into one card with a
+// count, same "3x 20cm pots" convention this app already uses for owned
+// equipment (see EquipmentPicker/confirmGrowingAreaProposalsAction) —
+// simpler to scan than a card per instance once several build up.
 // Occupant-bearing areas never merge: which crop is growing where is
 // meaningfully different information, not a duplicate. Dragging a group's
 // card acts on its `representative` area only; the group naturally shrinks
@@ -90,7 +142,7 @@ function groupSetAside(areas: Area[], overflowIds: Set<string>): SetAsideGroup[]
       individual.push({ key: area.id, representative: area, count: 1, doesntFit });
       continue;
     }
-    const key = [area.type, area.sizeValue, area.sizeUnit, area.widthCm, area.lengthCm, area.depthCm, doesntFit].join("|");
+    const key = `${stackKey(area)}|${doesntFit}`;
     const existing = groups.get(key);
     if (existing) existing.count += 1;
     else groups.set(key, { key, representative: area, count: 1, doesntFit });
@@ -98,12 +150,62 @@ function groupSetAside(areas: Area[], overflowIds: Set<string>): SetAsideGroup[]
   return [...groups.values(), ...individual];
 }
 
-function PlotBoundaryForm() {
+// Splits unplaced, non-dismissed candidates into the ones that should get
+// an automatic suggested spot on the plot (a genuinely one-of-a-kind area —
+// there's no ambiguity about "which one," so suggesting it saves the user a
+// step) versus ones that shouldn't (2+ interchangeable instances of the
+// same equipment — e.g. three 25cm pots) — those stay in the tray as one
+// grouped card, requiring the user to drag them onto the plot individually
+// rather than all landing on the canvas simultaneously as separate
+// suggestions. An occupant-bearing area is always treated as one-of-a-kind
+// regardless of how many share its stackKey, same "never merge" rule
+// groupSetAside applies — which crop is growing where is never
+// interchangeable. As a stack shrinks (its members get dragged out one by
+// one), the last remaining instance naturally becomes "one-of-a-kind" on a
+// later render and starts getting suggested a spot like any other unique
+// area.
+function splitStackedCandidates(candidates: Area[]): { unique: Area[]; stackedIds: Set<string> } {
+  const groups = new Map<string, Area[]>();
+  for (const area of candidates) {
+    const key = area.occupant ? `occupant:${area.id}` : stackKey(area);
+    const existing = groups.get(key);
+    if (existing) existing.push(area);
+    else groups.set(key, [area]);
+  }
+  const unique: Area[] = [];
+  const stackedIds = new Set<string>();
+  for (const group of groups.values()) {
+    if (group.length > 1) {
+      for (const area of group) stackedIds.add(area.id);
+    } else {
+      unique.push(group[0]);
+    }
+  }
+  return { unique, stackedIds };
+}
+
+// Doubles as both the very first "no plot yet" setup screen (no
+// initial*/onCancel — nothing to go back to) and, once a plot exists, an
+// inline editor for resizing it (pre-filled, with a Cancel button back to
+// the canvas) — same action either way, setPlotBoundaryAction is a plain
+// upsert with no distinction between "setting" and "resizing."
+function PlotBoundaryForm({
+  initialWidthCm,
+  initialLengthCm,
+  onSaved,
+  onCancel,
+}: {
+  initialWidthCm?: number;
+  initialLengthCm?: number;
+  onSaved?: () => void;
+  onCancel?: () => void;
+}) {
   const router = useRouter();
-  const [widthCm, setWidthCm] = useState("");
-  const [lengthCm, setLengthCm] = useState("");
+  const [widthCm, setWidthCm] = useState(initialWidthCm?.toString() ?? "");
+  const [lengthCm, setLengthCm] = useState(initialLengthCm?.toString() ?? "");
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const isEditing = initialWidthCm != null && initialLengthCm != null;
 
   async function handleSave() {
     setError(null);
@@ -115,18 +217,25 @@ function PlotBoundaryForm() {
       return;
     }
     router.refresh();
+    onSaved?.();
   }
 
   return (
     <div className="flex flex-col gap-4 rounded-lg border border-black/10 bg-white p-6 shadow-card">
       <div>
-        <p className="font-display text-lg font-semibold">Set your plot size</p>
+        <p className="font-display text-lg font-semibold">{isEditing ? "Resize your plot" : "Set your plot size"}</p>
         <p className="mt-1 text-sm text-(--text-muted)">
-          Enter your plot&rsquo;s overall width and length so we can lay out your growing areas — or{" "}
-          <Link href="/garden/estimate" className="text-(--brand-primary) underline">
-            estimate it from photos
-          </Link>{" "}
-          instead.
+          {isEditing ? (
+            "Adjusting this reflows every suggested (unconfirmed) spot to fit the new size — anything you've already confirmed keeps its exact position, even if that now falls outside the new bounds."
+          ) : (
+            <>
+              Enter your plot&rsquo;s overall width and length so we can lay out your growing areas — or{" "}
+              <Link href="/garden/estimate" className="text-(--brand-primary) underline">
+                estimate it from photos
+              </Link>{" "}
+              instead.
+            </>
+          )}
         </p>
       </div>
       <div className="flex flex-wrap items-end gap-2">
@@ -158,6 +267,16 @@ function PlotBoundaryForm() {
         >
           {pending ? "Saving…" : "Save"}
         </button>
+        {isEditing && (
+          <button
+            type="button"
+            onClick={onCancel}
+            disabled={pending}
+            className="rounded-full border border-black/15 px-4 py-2 text-sm hover:bg-black/5 active:scale-95 transition disabled:opacity-60"
+          >
+            Cancel
+          </button>
+        )}
       </div>
       {error && <p className="text-sm text-red-700">{error}</p>}
     </div>
@@ -171,19 +290,28 @@ function AddAreaForm({ onAdded }: { onAdded: (area: Area) => void }) {
   const [widthCm, setWidthCm] = useState("");
   const [lengthCm, setLengthCm] = useState("");
   const [depthCm, setDepthCm] = useState("");
+  const [heightCm, setHeightCm] = useState("");
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   async function handleAdd() {
     setError(null);
     setPending(true);
+    // Snapshotted before the await — the Size/Width/Length/etc. inputs
+    // aren't themselves disabled during a pending submission (only the
+    // button is), so a user can start typing the NEXT area's dimensions
+    // while this one's request is still in flight. Clearing unconditionally
+    // once it resolves would silently wipe out whatever they'd already
+    // typed for the next entry.
+    const submitted = { sizeValue, sizeUnit, widthCm, lengthCm, depthCm, heightCm };
     const result = await addGrowingAreaFromLayoutAction({
       type,
-      sizeValue: usesSizedFields(type) && sizeValue ? Number(sizeValue) : null,
-      sizeUnit: usesSizedFields(type) && sizeValue ? sizeUnit : null,
-      widthCm: !usesSizedFields(type) && widthCm ? Number(widthCm) : null,
-      lengthCm: !usesSizedFields(type) && lengthCm ? Number(lengthCm) : null,
-      depthCm: !usesSizedFields(type) && type !== "bed" && depthCm ? Number(depthCm) : null,
+      sizeValue: usesSizedFields(type) && submitted.sizeValue ? Number(submitted.sizeValue) : null,
+      sizeUnit: usesSizedFields(type) && submitted.sizeValue ? submitted.sizeUnit : null,
+      widthCm: !usesSizedFields(type) && submitted.widthCm ? Number(submitted.widthCm) : null,
+      lengthCm: !usesSizedFields(type) && submitted.lengthCm ? Number(submitted.lengthCm) : null,
+      depthCm: !usesSizedFields(type) && hasDepth(type) && submitted.depthCm ? Number(submitted.depthCm) : null,
+      heightCm: hasHeight(type) && submitted.heightCm ? Number(submitted.heightCm) : null,
     });
     setPending(false);
     if (!result.ok) {
@@ -191,10 +319,11 @@ function AddAreaForm({ onAdded }: { onAdded: (area: Area) => void }) {
       return;
     }
     onAdded({ ...result.area, status: "available", occupant: null });
-    setSizeValue("");
-    setWidthCm("");
-    setLengthCm("");
-    setDepthCm("");
+    setSizeValue((v) => (v === submitted.sizeValue ? "" : v));
+    setWidthCm((v) => (v === submitted.widthCm ? "" : v));
+    setLengthCm((v) => (v === submitted.lengthCm ? "" : v));
+    setDepthCm((v) => (v === submitted.depthCm ? "" : v));
+    setHeightCm((v) => (v === submitted.heightCm ? "" : v));
   }
 
   return (
@@ -258,7 +387,7 @@ function AddAreaForm({ onAdded }: { onAdded: (area: Area) => void }) {
               className="w-24 rounded-md border border-black/15 px-2 py-1.5 text-sm"
             />
           </label>
-          {type !== "bed" && (
+          {hasDepth(type) && (
             <label className="flex flex-col gap-1 text-xs">
               Depth (cm)
               <input
@@ -266,6 +395,18 @@ function AddAreaForm({ onAdded }: { onAdded: (area: Area) => void }) {
                 min={1}
                 value={depthCm}
                 onChange={(e) => setDepthCm(e.target.value)}
+                className="w-24 rounded-md border border-black/15 px-2 py-1.5 text-sm"
+              />
+            </label>
+          )}
+          {hasHeight(type) && (
+            <label className="flex flex-col gap-1 text-xs">
+              Height (cm)
+              <input
+                type="number"
+                min={1}
+                value={heightCm}
+                onChange={(e) => setHeightCm(e.target.value)}
                 className="w-24 rounded-md border border-black/15 px-2 py-1.5 text-sm"
               />
             </label>
@@ -376,9 +517,28 @@ export function LayoutCanvas({
   // broken.
   const [dismissed, setDismissed] = useState<Set<string>>(() => new Set());
   const plotRef = useRef<HTMLDivElement>(null);
+  // Once a plot boundary exists, PlotBoundaryForm is hidden by default
+  // (the canvas takes over) — this brings it back, inline and pre-filled,
+  // as the only way to resize an already-set plot. Reset to false whenever
+  // the resize form itself saves/cancels, not tied to router.refresh (a
+  // fresh plotWidthCm/plotLengthCm prop arriving is what actually redraws
+  // the canvas at the new size; this flag just controls which of the two
+  // is showing).
+  const [editingPlotSize, setEditingPlotSize] = useState(false);
 
   if (!plotWidthCm || !plotLengthCm) {
     return <PlotBoundaryForm />;
+  }
+
+  if (editingPlotSize) {
+    return (
+      <PlotBoundaryForm
+        initialWidthCm={plotWidthCm}
+        initialLengthCm={plotLengthCm}
+        onSaved={() => setEditingPlotSize(false)}
+        onCancel={() => setEditingPlotSize(false)}
+      />
+    );
   }
 
   async function confirmReset() {
@@ -406,21 +566,27 @@ export function LayoutCanvas({
     x: a.positionXCm!,
     y: a.positionYCm!,
     type: a.type,
-    ...footprintCm(a),
+    ...rotatedFootprintCm(footprintCm(a), a.rotationDeg),
   }));
 
-  // Every unplaced, non-dismissed area gets an automatically suggested
-  // spot on the plot — the whole point of this feature: propose a layout
-  // instead of leaving the user to place everything by hand. Nothing here
-  // is written to the database; a suggestion only becomes real the moment
-  // the user drags it (accepting it, possibly adjusted). Recomputed fresh
-  // on every render, so it always reflects the current placed/dismissed
-  // state — cheap enough at the item counts this feature deals with.
+  // Every unplaced, non-dismissed, one-of-a-kind area gets an automatically
+  // suggested spot on the plot — the whole point of this feature: propose a
+  // layout instead of leaving the user to place everything by hand. 2+
+  // interchangeable instances of the same equipment (e.g. three 25cm pots)
+  // are deliberately excluded here (see splitStackedCandidates) — they stay
+  // in the tray as one grouped card instead of all landing on the plot as
+  // separate suggestions simultaneously, so the user drags them onto the
+  // canvas individually. Nothing here is written to the database; a
+  // suggestion only becomes real the moment the user drags it (accepting
+  // it, possibly adjusted). Recomputed fresh on every render, so it always
+  // reflects the current placed/dismissed state — cheap enough at the item
+  // counts this feature deals with.
   const suggestionCandidates = areas.filter((a) => (a.positionXCm == null || a.positionYCm == null) && !dismissed.has(a.id));
-  const { placed: suggestedSpots, overflow } = suggestPositions(plotWidthCm, plotLengthCm, placedRects, suggestionCandidates);
+  const { unique: uniqueCandidates, stackedIds } = splitStackedCandidates(suggestionCandidates);
+  const { placed: suggestedSpots, overflow } = suggestPositions(plotWidthCm, plotLengthCm, placedRects, uniqueCandidates);
   const suggestedById = new Map(suggestedSpots.map((s) => [s.id, s]));
   const overflowIds = new Set(overflow);
-  const suggestedOnPlot = suggestionCandidates.filter((a) => suggestedById.has(a.id));
+  const suggestedOnPlot = uniqueCandidates.filter((a) => suggestedById.has(a.id));
 
   // Every area actually rendered on the plot — real placements and
   // unconfirmed suggestions alike — so overlap/shade warnings and the
@@ -434,11 +600,16 @@ export function LayoutCanvas({
     }),
   ];
 
-  // Left with nowhere to go: dismissed by the user, or too big/plot too
-  // small for suggestPositions to find it a spot at all (flagged, never
-  // silently dropped).
+  // Left with nowhere to go: dismissed by the user, part of an
+  // interchangeable stack (see splitStackedCandidates — deliberately never
+  // attempted suggestPositions, so never flagged "doesn't fit" until the
+  // user actually tries dragging one out), or too big/plot too small for
+  // suggestPositions to find a genuinely unique area a spot at all
+  // (flagged, never silently dropped).
   const setAside = areas.filter(
-    (a) => (a.positionXCm == null || a.positionYCm == null) && (dismissed.has(a.id) || overflowIds.has(a.id)),
+    (a) =>
+      (a.positionXCm == null || a.positionYCm == null) &&
+      (dismissed.has(a.id) || overflowIds.has(a.id) || stackedIds.has(a.id)),
   );
 
   // Dropping inside the plot's rect places/confirms the area there
@@ -487,18 +658,33 @@ export function LayoutCanvas({
       return next;
     });
 
-    const footprint = footprintCm(area);
+    const footprint = rotatedFootprintCm(footprintCm(area), area.rotationDeg);
     const originXPx = plotRect.left + CONTAINER_BORDER_PX;
     const originYPx = plotRect.top + CONTAINER_BORDER_PX;
     const maxX = Math.max(0, plotWidthCm! - footprint.widthCm);
     const maxY = Math.max(0, plotLengthCm! - footprint.lengthCm);
-    const newX = Math.min(Math.max(0, (info.point.x - originXPx) / scale - footprint.widthCm / 2), maxX);
-    const newY = Math.min(Math.max(0, (info.point.y - originYPx) / scale - footprint.lengthCm / 2), maxY);
+    const rawX = (info.point.x - originXPx) / scale - footprint.widthCm / 2;
+    const rawY = (info.point.y - originYPx) / scale - footprint.lengthCm / 2;
+    const newX = Math.min(Math.max(0, snapToGrid(rawX)), maxX);
+    const newY = Math.min(Math.max(0, snapToGrid(rawY)), maxY);
 
     const previous = area;
     setAreas((prev) => prev.map((a) => (a.id === area.id ? { ...a, positionXCm: newX, positionYCm: newY } : a)));
     const result = await saveGrowingAreaPositionAction(area.id, newX, newY);
     if (!result.ok) setAreas((prev) => prev.map((a) => (a.id === area.id ? previous : a)));
+  }
+
+  // Independent of position — rotating a still-unconfirmed suggestion just
+  // changes the footprint suggestPositions computes for it on the next
+  // render (see rotatedFootprintCm), it never confirms a placement by
+  // itself. Same optimistic-update-then-revert-on-failure shape as
+  // handleDragEnd above.
+  async function handleRotate(area: Area) {
+    const rotationDeg = nextRotationDeg(area.rotationDeg);
+    const previous = area.rotationDeg;
+    setAreas((prev) => prev.map((a) => (a.id === area.id ? { ...a, rotationDeg } : a)));
+    const result = await setGrowingAreaRotationAction(area.id, rotationDeg);
+    if (!result.ok) setAreas((prev) => prev.map((a) => (a.id === area.id ? { ...a, rotationDeg: previous } : a)));
   }
 
   return (
@@ -507,10 +693,35 @@ export function LayoutCanvas({
         <ConfirmResetModal onConfirm={confirmReset} onCancel={() => setConfirmingReset(false)} />
       )}
 
+      <div className="flex items-center justify-between gap-2">
+        <p className="text-sm text-(--text-muted)">
+          Plot size: {plotWidthCm}×{plotLengthCm}cm
+        </p>
+        <button
+          type="button"
+          onClick={() => setEditingPlotSize(true)}
+          className="rounded-full border border-black/15 px-3 py-1 text-xs hover:bg-black/5 active:scale-95 transition"
+        >
+          Edit size
+        </button>
+      </div>
+
       <div
         ref={plotRef}
         className="relative overflow-hidden rounded-lg border-2 border-dashed border-(--brand-primary)/30 bg-(--surface-tint)"
-        style={{ width: plotWidthCm * scale, height: plotLengthCm * scale }}
+        style={{
+          width: plotWidthCm * scale,
+          height: plotLengthCm * scale,
+          // Visible grid lines at the same GRID_CM spacing findFreePosition
+          // scans in and snapToGrid snaps drags to — a background pattern
+          // rather than one DOM element per line, cheap regardless of plot
+          // size and independent of the border-color classes above (a
+          // background-image layers over background-color without a
+          // shorthand `background` clash).
+          backgroundImage:
+            "linear-gradient(to right, rgba(0,0,0,0.08) 1px, transparent 1px), linear-gradient(to bottom, rgba(0,0,0,0.08) 1px, transparent 1px)",
+          backgroundSize: `${GRID_CM * scale}px ${GRID_CM * scale}px`,
+        }}
       >
         {onPlot.length === 0 && (
           <p className="pointer-events-none absolute inset-0 flex items-center justify-center px-4 text-center text-xs text-(--text-muted)">
@@ -518,24 +729,34 @@ export function LayoutCanvas({
           </p>
         )}
         {onPlot.map(({ area, x, y, saved }) => {
-          const rect = { x, y, type: area.type, ...footprintCm(area) };
+          const rect = { x, y, type: area.type, ...rotatedFootprintCm(footprintCm(area), area.rotationDeg) };
           const overlapping = onPlot.some((other) => {
             if (other.area.id === area.id) return false;
-            const otherRect = { x: other.x, y: other.y, type: other.area.type, ...footprintCm(other.area) };
+            const otherRect = {
+              x: other.x,
+              y: other.y,
+              type: other.area.type,
+              ...rotatedFootprintCm(footprintCm(other.area), other.area.rotationDeg),
+            };
             return isTooClose(rect, otherRect);
           });
           const shaded =
             !TALL_TYPES.includes(area.type) &&
             onPlot.some((other) => {
               if (other.area.id === area.id || !TALL_TYPES.includes(other.area.type)) return false;
-              const otherWidth = footprintCm(other.area).widthCm;
+              const otherWidth = rotatedFootprintCm(footprintCm(other.area), other.area.rotationDeg).widthCm;
               const xOverlap = Math.max(rect.x, other.x) < Math.min(rect.x + rect.widthCm, other.x + otherWidth);
               return xOverlap && other.y > rect.y && other.y - rect.y < SHADE_CHECK_DISTANCE_CM;
             });
 
-          const emoji = area.occupant?.cropEmoji ?? growingAreaTypeEmoji[area.type];
+          // This canvas represents the growing areas themselves, not what's
+          // planted in them — the icon always shows the area's own type,
+          // never the occupant crop's emoji (the label text still surfaces
+          // the crop name, just not as the icon).
+          const emoji = growingAreaTypeEmoji[area.type];
           const label = area.occupant?.cropName ?? growingAreaTypeLabels[area.type];
           const size = sizeText(area);
+          const customIconSrc = CUSTOM_ICON_SRC[area.type];
 
           // Cards have a legibility floor (24px) below what their true
           // scaled cm-footprint would render at — real at a low scale (a
@@ -565,8 +786,39 @@ export function LayoutCanvas({
                 saved ? "drag off the plot to remove" : "suggested position — drag to confirm, or drag off to ignore"
               }`}
             >
-              <span className="text-lg leading-none">{emoji}</span>
-              {shaded && <span className="text-[10px] leading-none">🌥️</span>}
+              {customIconSrc ? (
+                <Image
+                  src={customIconSrc}
+                  alt=""
+                  fill
+                  sizes="200px"
+                  draggable={false}
+                  className="pointer-events-none object-contain"
+                />
+              ) : (
+                <span className="text-lg leading-none">{emoji}</span>
+              )}
+              {shaded && <span className="relative text-[10px] leading-none">🌥️</span>}
+              {/* Rotation only ever changes a width/length-based footprint
+                  (see rotatedFootprintCm) — a no-op for a pot/seed tray's
+                  sizeValue-based square, so the control is hidden for those
+                  rather than offered as a button that visibly does nothing.
+                  stopPropagation on pointerdown keeps this click from also
+                  being read as the start of the card's own drag gesture. */}
+              {!usesSizedFields(area.type) && (
+                <button
+                  type="button"
+                  onPointerDown={(e) => e.stopPropagation()}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    handleRotate(area);
+                  }}
+                  aria-label={`Rotate ${label}`}
+                  className="absolute -top-1.5 -right-1.5 flex h-4 w-4 items-center justify-center rounded-full border border-black/15 bg-white text-[10px] leading-none shadow-card hover:bg-black/5 active:scale-90 transition"
+                >
+                  ↻
+                </button>
+              )}
             </motion.div>
           );
         })}
@@ -584,10 +836,13 @@ export function LayoutCanvas({
       <p className="text-xs text-(--text-muted)">
         We&rsquo;ve suggested a layout above — faded areas are proposals, not saved yet. Drag one to
         confirm it (adjusting its spot if you like), drag it off the plot to set it aside, or just leave
-        it as it is. Pots and seed trays can sit right next to each other, but beds, raised beds, and
-        planters need roughly {WALKWAY_CLEARANCE_CM}cm of walkway around them — a red outline means
-        that&rsquo;s been broken (you can still leave it there, just watch for the warning). ☁️ means an
-        area may be shaded by a taller one to the south.
+        it as it is. Dragging snaps to the {GRID_CM}cm grid shown on the plot. If you own several of
+        the same thing, they wait together in &ldquo;Not on your plot&rdquo; below rather than all
+        landing on the plot at once — drag them onto it one at a time. Pots and seed trays can sit right
+        next to each other, but beds, raised beds, and planters need roughly {WALKWAY_CLEARANCE_CM}cm of
+        walkway around them — a red outline means that&rsquo;s been broken (you can still leave it
+        there, just watch for the warning). ☁️ means an area may be shaded by a taller one to the south.
+        Click the ↻ on a width/length-sized area to rotate it 90°.
       </p>
 
       <div className="rounded-lg border border-black/10 bg-white p-4 shadow-card">
@@ -598,9 +853,23 @@ export function LayoutCanvas({
           <div className="mt-3 flex flex-wrap gap-3">
             {groupSetAside(setAside, overflowIds).map((group) => {
               const area = group.representative;
-              const emoji = area.occupant?.cropEmoji ?? growingAreaTypeEmoji[area.type];
+              // This canvas represents the growing areas themselves, not
+              // what's planted in them — the icon always shows the area's
+              // own type, never the occupant crop's emoji.
+              const emoji = growingAreaTypeEmoji[area.type];
               const label = area.occupant?.cropName ?? growingAreaTypeLabels[area.type];
               const size = sizeText(area);
+              // The emoji already conveys type (🪴 = pot), so an
+              // unoccupied card's second line shows its actual SIZE
+              // instead of just repeating the type name — the whole point
+              // being to make the difference between, say, a 15cm and a
+              // 45cm pot legible without hovering for the title tooltip.
+              // An occupied card still shows the crop name here instead —
+              // which crop is growing where stays the more useful thing to
+              // see at a glance for those (same priority groupSetAside's
+              // own "never merge an occupied area" rule already reflects).
+              const secondaryText = area.occupant ? label : (size ?? label);
+              const customIconSrc = CUSTOM_ICON_SRC[area.type];
               return (
                 <motion.div
                   key={`${group.key}:${dragTick}`}
@@ -621,8 +890,21 @@ export function LayoutCanvas({
                       {group.count}
                     </span>
                   )}
-                  <span className="text-lg leading-none">{emoji}</span>
-                  <span className="line-clamp-1 text-[10px] leading-none">{label}</span>
+                  {customIconSrc ? (
+                    <div className="relative min-h-0 w-full flex-1">
+                      <Image
+                        src={customIconSrc}
+                        alt=""
+                        fill
+                        sizes="120px"
+                        draggable={false}
+                        className="pointer-events-none object-contain"
+                      />
+                    </div>
+                  ) : (
+                    <span className="text-lg leading-none">{emoji}</span>
+                  )}
+                  <span className="relative line-clamp-1 text-[10px] font-medium leading-none">{secondaryText}</span>
                 </motion.div>
               );
             })}
