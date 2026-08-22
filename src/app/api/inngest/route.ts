@@ -8,6 +8,7 @@ import { regenerateRecommendationFn } from "@/inngest/functions/regenerateRecomm
 import { estimateGrowingAreasFn } from "@/inngest/functions/estimateGrowingAreas";
 import { applyWeatherAdviceFn } from "@/inngest/functions/applyWeatherAdvice";
 import { generateMaintenanceTasksFn } from "@/inngest/functions/generateMaintenanceTasks";
+import { generateHealthCheckTasksFn } from "@/inngest/functions/generateHealthCheckTasks";
 
 export const { GET, POST, PUT } = serve({
   client: inngest,
@@ -20,5 +21,6 @@ export const { GET, POST, PUT } = serve({
     estimateGrowingAreasFn,
     applyWeatherAdviceFn,
     generateMaintenanceTasksFn,
+    generateHealthCheckTasksFn,
   ],
 });

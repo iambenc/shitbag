@@ -2,75 +2,47 @@
 
 import { useState } from "react";
 import Link from "next/link";
-import { MenuIcon, CloseIcon } from "@/components/icons";
+import { usePathname } from "next/navigation";
+import { MenuIcon, CloseIcon, DashboardIcon, GardenIcon, ShedIcon, JournalIcon, CalendarIcon, BellIcon } from "@/components/icons";
+import { UserMenu } from "@/components/UserMenu";
 
 type Session = { user: { email: string; role: string } } | null;
 type Tenant = { displayName: string; logoUrl: string | null };
 
-function NavItems({
-  session,
-  isPaid,
-  signOutAction,
-  onNavigate,
-}: {
-  session: Session;
-  isPaid: boolean;
-  signOutAction: () => Promise<void>;
-  onNavigate?: () => void;
-}) {
-  if (!session?.user) {
-    return (
-      <>
-        <Link href="/login" className="hover:underline" onClick={onNavigate}>
-          Log in
-        </Link>
-        <Link
-          href="/signup"
-          className="rounded-full bg-(--brand-primary) px-4 py-1.5 text-white shadow-button hover:brightness-90 active:scale-95 transition"
-          onClick={onNavigate}
-        >
-          Sign up
-        </Link>
-      </>
-    );
-  }
+const NAV_ITEMS = [
+  { href: "/dashboard", label: "Dashboard", icon: DashboardIcon },
+  { href: "/garden", label: "My Garden", icon: GardenIcon },
+  { href: "/my-shed", label: "My Shed", icon: ShedIcon },
+  { href: "/journal", label: "Journal", icon: JournalIcon },
+  { href: "/calendar", label: "Calendar", icon: CalendarIcon },
+];
 
+function isActive(pathname: string, href: string): boolean {
+  return href === "/dashboard" ? pathname === href : pathname === href || pathname.startsWith(`${href}/`);
+}
+
+function NavPills({ pathname, onNavigate }: { pathname: string; onNavigate?: () => void }) {
   return (
     <>
-      <Link href="/dashboard" className="hover:underline" onClick={onNavigate}>
-        Dashboard
-      </Link>
-      <Link href="/garden" className="hover:underline" onClick={onNavigate}>
-        My Garden
-      </Link>
-      <Link href="/journal" className="hover:underline" onClick={onNavigate}>
-        Garden Journal
-      </Link>
-      {!isPaid && (
-        <Link
-          href="/upgrade"
-          className="rounded-full bg-(--brand-secondary) px-3 py-1 font-medium text-(--text-heading) hover:brightness-90 active:scale-95 transition"
-          onClick={onNavigate}
-        >
-          Upgrade
-        </Link>
-      )}
-      {session.user.role === "tenant_admin" && (
-        <Link href="/admin" className="hover:underline" onClick={onNavigate}>
-          Admin
-        </Link>
-      )}
-      <span className="max-w-[180px] truncate text-(--text-muted)" title={session.user.email}>
-        {session.user.email}
-      </span>
-      <form action={signOutAction}>
-        <button
-          type="submit"
-          className="rounded-full border border-(--brand-primary)/30 px-3 py-1 hover:bg-(--brand-primary)/10"
-        >
-          Sign out
-        </button>
-      </form>
+      {NAV_ITEMS.map(({ href, label, icon: Icon }) => {
+        const active = isActive(pathname, href);
+        return (
+          <Link
+            key={href}
+            href={href}
+            onClick={onNavigate}
+            aria-current={active ? "page" : undefined}
+            className={`flex items-center gap-1.5 rounded-full px-3.5 py-1.5 text-sm font-medium transition ${
+              active
+                ? "bg-(--brand-primary) text-white shadow-button"
+                : "text-(--text-heading) hover:bg-(--brand-primary)/10"
+            }`}
+          >
+            <Icon className="h-4 w-4 shrink-0" />
+            {label}
+          </Link>
+        );
+      })}
     </>
   );
 }
@@ -79,14 +51,17 @@ export function SiteHeader({
   tenant,
   session,
   isPaid,
+  missedTaskCount,
   signOutAction,
 }: {
   tenant: Tenant;
   session: Session;
   isPaid: boolean;
+  missedTaskCount: number;
   signOutAction: () => Promise<void>;
 }) {
   const [open, setOpen] = useState(false);
+  const pathname = usePathname();
 
   return (
     <header
@@ -95,8 +70,8 @@ export function SiteHeader({
         if (e.key === "Escape") setOpen(false);
       }}
     >
-      <div className="flex items-center justify-between px-6 py-4">
-        <Link href="/" className="flex items-center gap-2 font-semibold text-(--brand-primary)">
+      <div className="flex items-center justify-between gap-4 px-6 py-3">
+        <Link href="/" className="flex shrink-0 items-center gap-2 font-semibold text-(--brand-primary)">
           {tenant.logoUrl ? (
             // eslint-disable-next-line @next/next/no-img-element -- tenant-admin-supplied logo URL, not a local static asset
             <img src={tenant.logoUrl} alt="" className="h-6 w-6 rounded object-contain" />
@@ -106,25 +81,59 @@ export function SiteHeader({
           {tenant.displayName}
         </Link>
 
-        <nav className="hidden items-center gap-4 text-sm md:flex">
-          <NavItems session={session} isPaid={isPaid} signOutAction={signOutAction} />
-        </nav>
+        {session?.user && (
+          <nav className="hidden items-center gap-1 md:flex">
+            <NavPills pathname={pathname} />
+          </nav>
+        )}
 
-        <button
-          type="button"
-          className="rounded-md border border-(--brand-primary)/30 p-1.5 md:hidden"
-          aria-expanded={open}
-          aria-controls="mobile-nav"
-          aria-label={open ? "Close menu" : "Open menu"}
-          onClick={() => setOpen((o) => !o)}
-        >
-          {open ? <CloseIcon className="h-5 w-5" /> : <MenuIcon className="h-5 w-5" />}
-        </button>
+        <div className="flex shrink-0 items-center gap-2">
+          {session?.user && (
+            <Link
+              href="/calendar"
+              aria-label={missedTaskCount > 0 ? `${missedTaskCount} missed task${missedTaskCount === 1 ? "" : "s"}` : "Notifications"}
+              className="relative flex h-9 w-9 shrink-0 items-center justify-center rounded-full hover:bg-(--brand-primary)/10 transition"
+            >
+              <BellIcon className="h-5 w-5 text-(--text-heading)" />
+              {missedTaskCount > 0 && (
+                <span className="absolute top-1 right-1 flex h-4 min-w-4 items-center justify-center rounded-full bg-(--color-terracotta) px-1 text-[10px] font-medium text-white">
+                  {missedTaskCount > 9 ? "9+" : missedTaskCount}
+                </span>
+              )}
+            </Link>
+          )}
+
+          <div className="hidden md:block">
+            <UserMenu session={session} isPaid={isPaid} signOutAction={signOutAction} />
+          </div>
+
+          {session?.user && (
+            <button
+              type="button"
+              className="rounded-md border border-(--brand-primary)/30 p-1.5 md:hidden"
+              aria-expanded={open}
+              aria-controls="mobile-nav"
+              aria-label={open ? "Close menu" : "Open menu"}
+              onClick={() => setOpen((o) => !o)}
+            >
+              {open ? <CloseIcon className="h-5 w-5" /> : <MenuIcon className="h-5 w-5" />}
+            </button>
+          )}
+
+          {!session?.user && (
+            <div className="md:hidden">
+              <UserMenu session={session} isPaid={isPaid} signOutAction={signOutAction} />
+            </div>
+          )}
+        </div>
       </div>
 
-      {open && (
-        <nav id="mobile-nav" className="flex flex-col items-start gap-3 border-t border-(--brand-primary)/15 px-6 py-4 text-sm md:hidden">
-          <NavItems session={session} isPaid={isPaid} signOutAction={signOutAction} onNavigate={() => setOpen(false)} />
+      {open && session?.user && (
+        <nav id="mobile-nav" className="flex flex-col items-stretch gap-1 border-t border-(--brand-primary)/15 px-4 py-3 text-sm md:hidden">
+          <NavPills pathname={pathname} onNavigate={() => setOpen(false)} />
+          <div className="mt-2 border-t border-(--brand-primary)/15 pt-2">
+            <UserMenu session={session} isPaid={isPaid} signOutAction={signOutAction} />
+          </div>
         </nav>
       )}
     </header>

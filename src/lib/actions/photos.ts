@@ -3,9 +3,10 @@
 import { z } from "zod";
 import { eq, and } from "drizzle-orm";
 import { withTenant } from "@/lib/tenant/withTenant";
-import { photoJournalEntries, photoVisibilityEnum } from "@/db/schema";
+import { photoJournalEntries, photoVisibilityEnum, growingAreas } from "@/db/schema";
 import { requireSessionAndTenant } from "@/lib/actions/shared";
 import { getPhotoStorage, ALLOWED_IMAGE_TYPES, MAX_PHOTO_BYTES } from "@/lib/storage";
+import { growingAreaBaseLabel } from "@/lib/garden/labels";
 
 const visibilitySchema = z.enum(photoVisibilityEnum);
 
@@ -14,6 +15,7 @@ export type UploadedPhoto = {
   url: string;
   caption: string | null;
   visibility: "private" | "shared_tenant";
+  tagLabel: string | null;
 };
 
 export type UploadPhotoState = { error?: string; photo?: UploadedPhoto };
@@ -39,6 +41,28 @@ export async function uploadPhotoAction(
   const caption = String(formData.get("caption") || "").trim().slice(0, 500) || null;
 
   const { userId, tenantId } = await requireSessionAndTenant();
+
+  // Optional — the user tagging their own upload with one of their own
+  // growing areas ("this is a photo of my greenhouse"). Re-validated
+  // against the user's own areas rather than trusted blindly from the
+  // hidden/select field, same defensive pattern already used for
+  // uploadAndDiagnoseAction's growingAreaId.
+  const requestedGrowingAreaId = formData.get("growingAreaId");
+  let growingAreaId: string | null = null;
+  let tagLabel: string | null = null;
+  if (typeof requestedGrowingAreaId === "string" && requestedGrowingAreaId) {
+    const [area] = await withTenant(tenantId, async (tx) =>
+      tx
+        .select()
+        .from(growingAreas)
+        .where(and(eq(growingAreas.id, requestedGrowingAreaId), eq(growingAreas.userId, userId))),
+    );
+    if (area) {
+      growingAreaId = area.id;
+      tagLabel = growingAreaBaseLabel(area);
+    }
+  }
+
   const buffer = Buffer.from(await file.arrayBuffer());
   const storage = await getPhotoStorage();
   const { key, url } = await storage.upload({
@@ -52,12 +76,14 @@ export async function uploadPhotoAction(
   const photo = await withTenant(tenantId, async (tx) => {
     const [row] = await tx
       .insert(photoJournalEntries)
-      .values({ tenantId, userId, storageKey: key, url, caption, visibility })
+      .values({ tenantId, userId, storageKey: key, url, caption, visibility, growingAreaId })
       .returning();
     return row;
   });
 
-  return { photo: { id: photo.id, url: photo.url, caption: photo.caption, visibility: photo.visibility } };
+  return {
+    photo: { id: photo.id, url: photo.url, caption: photo.caption, visibility: photo.visibility, tagLabel },
+  };
 }
 
 export async function setPhotoVisibilityAction(

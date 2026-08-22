@@ -149,6 +149,125 @@ export async function getGrowingAreasByType(
 }
 
 /**
+ * Marks a crop as "planted" for a user by inserting a minimal, already-
+ * `accepted`/`active` grow-plan/recommendation/stage chain directly — the
+ * exact shape /harvests's crop dropdown now requires (see
+ * src/app/harvests/page.tsx). Bypasses the real (slow, AI-mock-job-backed)
+ * generate-plan-then-accept UI flow entirely, since tests that only care
+ * about "this user has something planted" shouldn't need to pay that cost
+ * or depend on Inngest job timing.
+ */
+export async function plantCrop(email: string, cropSlug: string): Promise<void> {
+  const postgres = (await import("postgres")).default;
+  const sql = postgres(process.env.DATABASE_URL!, { max: 1 });
+  try {
+    const tenants = await sql`select id from tenants`;
+    for (const tenant of tenants) {
+      const planted = await sql.begin(async (tx) => {
+        await tx`select set_config('app.tenant_id', ${tenant.id}, true)`;
+        const users = await tx`select id from users where email = ${email}`;
+        if (users.length === 0) return false;
+        const [crop] = await tx`select id from crops where slug = ${cropSlug}`;
+        if (!crop) throw new Error(`No crop found with slug ${cropSlug}`);
+
+        const [growPlan] = await tx`
+          insert into grow_plans (tenant_id, user_id, status, completed_at)
+          values (${tenant.id}, ${users[0].id}, 'complete', now())
+          returning id
+        `;
+        const [recommendation] = await tx`
+          insert into plan_recommendations (tenant_id, grow_plan_id, crop_id, reasoning, status)
+          values (${tenant.id}, ${growPlan.id}, ${crop.id}, 'test fixture', 'accepted')
+          returning id
+        `;
+        await tx`
+          insert into plan_recommendation_stages (tenant_id, plan_recommendation_id, stage_index, status)
+          values (${tenant.id}, ${recommendation.id}, 0, 'active')
+        `;
+        return true;
+      });
+      if (planted) return;
+    }
+    throw new Error(`No tenant found containing user ${email}`);
+  } finally {
+    await sql.end();
+  }
+}
+
+/**
+ * Inserts a `tasks` row tied to a growing area, matching the exact shape
+ * `generateHealthCheckTasksFn` itself inserts — no UI path creates one of
+ * these directly (they only ever come from the weekly cron), so tests that
+ * want to exercise the "Add photo" flow on an existing task need to seed
+ * one this way rather than waiting for/triggering the real cron.
+ */
+export async function addHealthCheckTask(email: string, growingAreaId: string, title: string): Promise<string> {
+  const postgres = (await import("postgres")).default;
+  const sql = postgres(process.env.DATABASE_URL!, { max: 1 });
+  try {
+    const tenants = await sql`select id from tenants`;
+    for (const tenant of tenants) {
+      const id = await sql.begin(async (tx) => {
+        await tx`select set_config('app.tenant_id', ${tenant.id}, true)`;
+        const users = await tx`select id from users where email = ${email}`;
+        if (users.length === 0) return null;
+        const [row] = await tx`
+          insert into tasks (tenant_id, user_id, title, due_date, source, growing_area_id, status)
+          values (${tenant.id}, ${users[0].id}, ${title}, current_date, 'ai', ${growingAreaId}, 'pending')
+          returning id
+        `;
+        return row.id as string;
+      });
+      if (id) return id;
+    }
+    throw new Error(`No tenant found containing user ${email}`);
+  } finally {
+    await sql.end();
+  }
+}
+
+/**
+ * Inserts a `tasks` row with source: 'weather' and real notes text, matching
+ * the shape applyWeatherAdvice.ts itself writes — no UI path creates one of
+ * these directly (they only ever come from the daily weather-advice job), so
+ * a test that wants to exercise the calendar's weather-impact callout needs
+ * to seed one this way rather than waiting for/triggering the real job. Uses
+ * an explicit JS-computed date (matching src/lib/dates.ts's todayIso, the
+ * same local-timezone definition of "today" the app itself and the test
+ * browser use) rather than SQL `current_date` — the Postgres session's own
+ * timezone can disagree with the local machine's right around midnight,
+ * which would otherwise land the row one day off from what the page
+ * actually renders as "today".
+ */
+export async function addWeatherTask(email: string, title: string, notes: string): Promise<string> {
+  const now = new Date();
+  const todayIso = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
+
+  const postgres = (await import("postgres")).default;
+  const sql = postgres(process.env.DATABASE_URL!, { max: 1 });
+  try {
+    const tenants = await sql`select id from tenants`;
+    for (const tenant of tenants) {
+      const id = await sql.begin(async (tx) => {
+        await tx`select set_config('app.tenant_id', ${tenant.id}, true)`;
+        const users = await tx`select id from users where email = ${email}`;
+        if (users.length === 0) return null;
+        const [row] = await tx`
+          insert into tasks (tenant_id, user_id, title, notes, due_date, source, status)
+          values (${tenant.id}, ${users[0].id}, ${title}, ${notes}, ${todayIso}, 'weather', 'pending')
+          returning id
+        `;
+        return row.id as string;
+      });
+      if (id) return id;
+    }
+    throw new Error(`No tenant found containing user ${email}`);
+  } finally {
+    await sql.end();
+  }
+}
+
+/**
  * Reads back a user's crop shopping-list items (by crop slug) — used to
  * assert seeds only ever land on the shopping list once a recommendation
  * needing them has actually been accepted, never just from generating (or

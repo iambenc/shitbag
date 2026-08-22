@@ -28,6 +28,14 @@ test.describe("grow plan generation", () => {
   test("generating a plan (mock AI path) produces recommendations that can be accepted or rejected", async ({
     page,
   }) => {
+    // Raised from the 30s default — the assertion below already waits up to
+    // 60s for the Inngest job (confirmed via its own dev-server API that the
+    // job genuinely completes, just sometimes past 30s under load), but the
+    // outer per-test timeout was capping it short before it ever got the
+    // chance. Same "dev-server-only" latency this file's own webServer
+    // config already documents for the default 15s expect timeout.
+    test.setTimeout(90_000);
+
     await page.goto("/grow-plan");
     await page.getByRole("button", { name: "Generate my grow plan" }).click();
 
@@ -101,6 +109,46 @@ test.describe("grow plan generation", () => {
     await expect
       .poll(async () => getShoppingListCropSlugs(email))
       .not.toHaveLength(0);
+
+    await context.close();
+  });
+
+  test("the harvests page's crop dropdown only offers crops from an accepted recommendation, not the whole catalog", async ({
+    browser,
+  }) => {
+    test.setTimeout(90_000);
+    const context = await browser.newContext();
+    const page = await context.newPage();
+    const { email } = await signUpAndOnboard(page, { addPotEquipment: true });
+    await upgradeToPaid(email);
+
+    // Before any plan exists, there's nothing planted yet — the form is
+    // replaced by an explanatory empty state, not a dropdown of every crop
+    // in the catalog.
+    await page.goto("/harvests");
+    await expect(page.getByText(/once a grow plan recommendation has actually been/i)).toBeVisible();
+    await expect(page.locator('select[name="cropId"]')).toHaveCount(0);
+
+    await page.goto("/grow-plan");
+    await page.getByRole("button", { name: "Generate my grow plan" }).click();
+    const acceptButtons = page.getByRole("button", { name: "Accept" });
+    await expect(acceptButtons.first()).toBeVisible({ timeout: 60_000 });
+    await acceptButtons.first().click();
+    await expect(page.getByRole("button", { name: "✓ Accepted" }).first()).toBeVisible();
+
+    await page.goto("/harvests");
+    // Not toBeVisible() — <option> elements report as "hidden" while a
+    // <select> is closed, same false flag encountered in
+    // journal-harvest.spec.ts's growing-area-picker test. The select
+    // itself being present and populated is the real signal.
+    await expect(page.locator('select[name="cropId"]')).toBeVisible();
+    const cropOptions = page.locator('select[name="cropId"] option');
+    const optionCount = await cropOptions.count();
+    // The seeded crop catalog has dozens of entries — a real reduction to
+    // just the accepted recommendation's crop(s) is the actual behavior
+    // under test, not merely "some number of options."
+    expect(optionCount).toBeGreaterThan(0);
+    expect(optionCount).toBeLessThan(10);
 
     await context.close();
   });

@@ -1,14 +1,12 @@
 import { redirect } from "next/navigation";
 import Link from "next/link";
-import { eq, asc, isNotNull, and } from "drizzle-orm";
+import { eq, asc } from "drizzle-orm";
 import { auth } from "@/lib/auth";
 import { getCurrentTenant } from "@/lib/tenant/resolve";
 import { withTenant } from "@/lib/tenant/withTenant";
-import { userEquipment, equipmentTypes, partnerLinks, growingAreas } from "@/db/schema";
+import { userEquipment, equipmentTypes, growingAreas } from "@/db/schema";
 import { getUserProfile } from "@/lib/onboarding/profile";
 import { SLUG_TO_GROWING_AREA_TYPE } from "@/lib/garden/equipmentMapping";
-import { EquipmentPicker } from "@/components/EquipmentPicker";
-import { updateEquipmentAction } from "@/lib/actions/garden/equipment";
 import { GrowingAreaManager } from "./GrowingAreaManager";
 
 export default async function GardenPage() {
@@ -19,8 +17,8 @@ export default async function GardenPage() {
   const profile = await getUserProfile(session.user.id, tenant.id);
   if (!profile?.onboardingCompletedAt) redirect("/onboarding/location");
 
-  const { equipmentRows, areas, types, links } = await withTenant(tenant.id, async (tx) => {
-    const [equipmentRows, areas, types, links] = await Promise.all([
+  const { equipmentRows, areas } = await withTenant(tenant.id, async (tx) => {
+    const [equipmentRows, areas] = await Promise.all([
       tx
         .select({ equipment: userEquipment, type: equipmentTypes })
         .from(userEquipment)
@@ -32,17 +30,10 @@ export default async function GardenPage() {
         .from(growingAreas)
         .where(eq(growingAreas.userId, session.user.id))
         .orderBy(asc(growingAreas.createdAt)),
-      tx.select().from(equipmentTypes).where(eq(equipmentTypes.tenantId, tenant.id)).orderBy(asc(equipmentTypes.sortOrder)),
-      tx
-        .select()
-        .from(partnerLinks)
-        .where(and(eq(partnerLinks.tenantId, tenant.id), isNotNull(partnerLinks.equipmentTypeId))),
     ]);
 
-    return { equipmentRows, areas, types, links };
+    return { equipmentRows, areas };
   });
-
-  const linksByType = new Map(links.map((l) => [l.equipmentTypeId, l]));
 
   const placedCountByEquipmentId = new Map<string, number>();
   for (const area of areas) {
@@ -73,8 +64,12 @@ export default async function GardenPage() {
     <div className="mx-auto max-w-2xl px-6 py-16">
       <h1 className="font-display text-3xl font-semibold text-(--brand-primary)">Your growing space</h1>
       <p className="mt-2 text-sm text-(--text-muted)">
-        Newly added equipment is automatically ready to grow in — adjust the counts below if you
-        want to hold some back.
+        Place your owned equipment as growing space, or plan where everything sits. Add new pots,
+        trays, beds, and tools in{" "}
+        <Link href="/my-shed" className="text-(--brand-primary) underline">
+          My Shed
+        </Link>
+        .
       </p>
 
       <Link
@@ -89,37 +84,6 @@ export default async function GardenPage() {
           </p>
         </div>
       </Link>
-
-      <div className="mt-8">
-        <h2 className="text-sm font-medium text-(--text-muted)">Your equipment</h2>
-        <div className="mt-3">
-          <EquipmentPicker
-            types={types.map((t) => ({
-              id: t.id,
-              slug: t.slug,
-              name: t.name,
-              category: t.category,
-              partnerLink: linksByType.has(t.id)
-                ? { label: linksByType.get(t.id)!.label, url: linksByType.get(t.id)!.url }
-                : null,
-            }))}
-            initialRows={equipmentRows.map((r) => ({
-              id: r.equipment.id,
-              equipmentTypeId: r.equipment.equipmentTypeId,
-              quantity: r.equipment.quantity,
-              sizeValue: r.equipment.sizeValue,
-              sizeUnit: r.equipment.sizeUnit,
-              widthCm: r.equipment.widthCm,
-              lengthCm: r.equipment.lengthCm,
-              depthCm: r.equipment.depthCm,
-              heightCm: r.equipment.heightCm,
-            }))}
-            action={updateEquipmentAction}
-            submitLabel="Save equipment"
-            pendingLabel="Saving…"
-          />
-        </div>
-      </div>
 
       <div className="mt-10">
         <GrowingAreaManager equipment={placeable} />

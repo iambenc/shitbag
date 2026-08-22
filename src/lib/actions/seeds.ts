@@ -4,7 +4,7 @@ import { z } from "zod";
 import { eq, and, gte, count, sql } from "drizzle-orm";
 import { db } from "@/db/client";
 import { withTenant } from "@/lib/tenant/withTenant";
-import { seedInventory, crops, cropVarieties, seedPacketScans } from "@/db/schema";
+import { seedInventory, crops, cropVarieties, seedPacketScans, type CropCategory } from "@/db/schema";
 import { requireSessionAndTenant } from "@/lib/actions/shared";
 import { getCropFacts } from "@/lib/ai/agents/cropFacts";
 import { getVarietyFacts, type ParentCropFacts } from "@/lib/ai/agents/varietyFacts";
@@ -143,6 +143,7 @@ export type CreatedSeed = {
   cropId: string;
   cropName: string;
   cropEmoji: string;
+  cropCategory: CropCategory;
   varietyId: string | null;
   varietyName: string | null;
   quantityLabel: string;
@@ -316,6 +317,7 @@ export async function addSeedAction(_prevState: AddSeedState, formData: FormData
       cropId: crop.id,
       cropName: crop.name,
       cropEmoji: crop.emoji,
+      cropCategory: crop.category,
       varietyId,
       varietyName,
       quantityLabel: seed.quantityLabel,

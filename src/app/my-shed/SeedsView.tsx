@@ -12,8 +12,17 @@ import {
 } from "@/lib/actions/seeds";
 import { LeafAccent } from "@/components/LeafAccent";
 import { LoadingInterstitial } from "@/components/LoadingInterstitial";
+import { MoreIcon } from "@/components/icons";
+import type { ShedSeed } from "./types";
 
 const MAX_SUGGESTIONS = 8;
+const SHOWN_BY_DEFAULT = 5;
+
+const CROP_CATEGORY_LABEL: Record<ShedSeed["cropCategory"], string> = {
+  fruit: "Fruit",
+  vegetable: "Vegetable",
+  herb: "Herb",
+};
 
 // Replaces a native <datalist> dropdown (which some browsers render as a
 // full unstyled list of every option, unfiltered, rather than narrowing as
@@ -29,6 +38,7 @@ function AutocompleteTextField({
   placeholder,
   className,
   initialValue,
+  inputRef,
 }: {
   name: string;
   options: string[];
@@ -36,6 +46,7 @@ function AutocompleteTextField({
   placeholder: string;
   className?: string;
   initialValue?: string;
+  inputRef?: React.Ref<HTMLInputElement>;
 }) {
   const [value, setValue] = useState(initialValue ?? "");
   const [open, setOpen] = useState(false);
@@ -66,6 +77,7 @@ function AutocompleteTextField({
   return (
     <div ref={containerRef} className={`relative ${className ?? ""}`}>
       <input
+        ref={inputRef}
         name={name}
         type="text"
         required={required}
@@ -124,7 +136,10 @@ function AutocompleteTextField({
 // comment: the user reviews/edits everything before addSeedAction ever
 // writes anything). `capture="environment"` hints mobile browsers to open
 // the camera directly rather than a file picker, matching "photo of a
-// packet you're holding" rather than "a file already on disk".
+// packet you're holding" rather than "a file already on disk". No real
+// barcode/UPC decoding exists anywhere in this app — this is AI photo-OCR,
+// so the button is deliberately worded "Scan a seed packet", not
+// "barcode", to match what it actually does.
 function ScanPacketButton({
   onScanned,
   remainingToday,
@@ -172,8 +187,8 @@ function ScanPacketButton({
       />
       <label
         htmlFor="seed-packet-photo"
-        className={`inline-flex w-fit items-center gap-2 self-start rounded-full border border-(--brand-primary)/40 px-4 py-2 text-sm text-(--brand-primary) transition ${
-          pending ? "opacity-60" : "cursor-pointer hover:bg-(--surface-tint) active:scale-95"
+        className={`inline-flex w-fit items-center gap-2 self-start rounded-md border border-black/15 px-4 py-2 text-sm font-medium transition ${
+          pending ? "opacity-60" : "cursor-pointer hover:bg-black/5 active:scale-95"
         }`}
       >
         📷 {pending ? "Reading packet…" : "Scan a seed packet"}
@@ -276,15 +291,43 @@ function EditableQuantity({
   );
 }
 
-type Seed = {
-  id: string;
-  cropName: string;
-  cropEmoji: string;
-  varietyName: string | null;
-  quantityLabel: string;
-  seedCount: number | null;
-  source: "onboarding" | "purchased" | "shopping_list";
-};
+// The "···" actions menu, wrapping Delete — same overflow-menu pattern as
+// the calendar redesign's TaskCard.tsx, so a row's destructive action isn't
+// a bare always-visible button.
+function RowActionsMenu({ label, onDelete }: { label: string; onDelete: () => void }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <div className="relative inline-block">
+      <button
+        type="button"
+        onClick={() => setOpen((o) => !o)}
+        className="rounded-full p-1.5 text-(--text-muted) hover:bg-black/5"
+        aria-label={`More actions for ${label}`}
+        aria-expanded={open}
+      >
+        <MoreIcon className="h-4 w-4" />
+      </button>
+      {open && (
+        <div
+          className="absolute right-0 z-10 mt-1 w-32 overflow-hidden rounded-lg border border-black/10 bg-white py-1 shadow-lg"
+          onMouseLeave={() => setOpen(false)}
+        >
+          <button
+            type="button"
+            onClick={() => {
+              setOpen(false);
+              onDelete();
+            }}
+            aria-label={`Delete ${label}`}
+            className="block w-full px-3 py-2 text-left text-xs text-red-700 hover:bg-red-50"
+          >
+            Delete
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
 
 type ScanValues = {
   cropName: string;
@@ -298,19 +341,29 @@ const initialState: AddSeedState = {};
 
 export function SeedsView({
   seeds,
+  onSeedsChange,
   remainingToday,
   scansRemainingToday,
   cropNames,
   varietyNames,
+  focusToken,
 }: {
-  seeds: Seed[];
+  seeds: ShedSeed[];
+  // Seeds is a controlled list, owned by MyShedView (not local state here) —
+  // its stat cards need to reflect the same live add/delete/quantity-edit
+  // optimism this view already applies, not the stale initial server props.
+  onSeedsChange: (updater: (seeds: ShedSeed[]) => ShedSeed[]) => void;
   remainingToday: number;
   scansRemainingToday: number;
   cropNames: string[];
   varietyNames: string[];
+  // Bumped by MyShedView (e.g. from the header's "+ Add new" dropdown or the
+  // top promo banner) to scroll to and focus this form from elsewhere on the
+  // page, without this component needing to know why.
+  focusToken?: number;
 }) {
-  const [list, setList] = useState(seeds);
   const [scanValues, setScanValues] = useState<ScanValues | null>(null);
+  const [showAll, setShowAll] = useState(false);
   // Both autocomplete inputs (and, once scanned, the seed-count input too)
   // are either controlled or need a fresh initial value, so — unlike a
   // plain uncontrolled input — they won't reset/refill themselves via
@@ -318,18 +371,21 @@ export function SeedsView({
   // `key` is the simplest way to reset (after a successful add) or refill
   // (after a successful scan) their initial state together.
   const [resetToken, setResetToken] = useState(0);
+  const cropFieldRef = useRef<HTMLInputElement>(null);
   const [state, formAction] = useActionState(async (prev: AddSeedState, formData: FormData) => {
     const result = await addSeedAction(prev, formData);
     if (result.seed) {
-      setList((ss) => [
+      onSeedsChange((ss) => [
         {
           id: result.seed!.id,
           cropName: result.seed!.cropName,
           cropEmoji: result.seed!.cropEmoji,
+          cropCategory: result.seed!.cropCategory,
           varietyName: result.seed!.varietyName,
           quantityLabel: result.seed!.quantityLabel,
           seedCount: result.seed!.seedCount,
           source: "purchased",
+          addedIso: new Date().toISOString().slice(0, 10),
         },
         ...ss,
       ]);
@@ -339,13 +395,17 @@ export function SeedsView({
     return result;
   }, initialState);
 
+  useEffect(() => {
+    if (focusToken) cropFieldRef.current?.focus();
+  }, [focusToken]);
+
   async function handleDelete(id: string) {
-    setList((ss) => ss.filter((s) => s.id !== id));
+    onSeedsChange((ss) => ss.filter((s) => s.id !== id));
     await deleteSeedAction(id);
   }
 
   function handleQuantityUpdated(id: string, quantityLabel: string, seedCount: number) {
-    setList((ss) => ss.map((s) => (s.id === id ? { ...s, quantityLabel, seedCount } : s)));
+    onSeedsChange((ss) => ss.map((s) => (s.id === id ? { ...s, quantityLabel, seedCount } : s)));
   }
 
   function handleScanned(scan: SeedPacketScanClientResult) {
@@ -359,41 +419,75 @@ export function SeedsView({
     setResetToken((t) => t + 1);
   }
 
+  const visible = showAll ? seeds : seeds.slice(0, SHOWN_BY_DEFAULT);
+
   return (
-    <div className="flex flex-col gap-8">
-      <section className="flex flex-col gap-2">
-        {list.length === 0 && (
-          <div className="flex items-center gap-2 rounded-lg bg-(--surface-tint) p-3">
-            <LeafAccent className="h-5 w-5 shrink-0 text-(--brand-primary)" />
-            <p className="text-sm text-(--text-muted)">Nothing in your seed inventory yet.</p>
-          </div>
-        )}
-        {list.map((seed) => (
-          <div
-            key={seed.id}
-            className="flex items-center justify-between gap-3 rounded-lg border border-black/10 bg-white p-3 shadow-card"
-          >
-            <span className="text-sm">
-              {seed.cropEmoji} {seed.cropName}
-              {seed.varietyName ? ` (${seed.varietyName})` : ""} ·{" "}
-              <EditableQuantity
-                seedId={seed.id}
-                quantityLabel={seed.quantityLabel}
-                seedCount={seed.seedCount}
-                onUpdated={(quantityLabel, seedCount) => handleQuantityUpdated(seed.id, quantityLabel, seedCount)}
-              />
-            </span>
-            <button
-              type="button"
-              onClick={() => handleDelete(seed.id)}
-              className="text-xs text-(--text-muted) hover:text-red-700"
-              aria-label={`Delete ${seed.cropName}`}
-            >
-              Delete
-            </button>
-          </div>
-        ))}
-      </section>
+    <div className="flex flex-col gap-6">
+      <div>
+        <h2 className="font-display text-lg font-semibold">Seeds</h2>
+        <p className="text-sm text-(--text-muted)">Track your seed packets and quantities.</p>
+      </div>
+
+      {seeds.length === 0 ? (
+        <div className="flex items-center gap-2 rounded-lg bg-(--surface-tint) p-3">
+          <LeafAccent className="h-5 w-5 shrink-0 text-(--brand-primary)" />
+          <p className="text-sm text-(--text-muted)">Nothing in your seed inventory yet.</p>
+        </div>
+      ) : (
+        <div className="overflow-x-auto rounded-lg border border-black/10 bg-white shadow-card">
+          <table className="w-full min-w-[520px] text-left text-sm">
+            <thead>
+              <tr className="border-b border-black/10 text-xs text-(--text-muted)">
+                <th className="px-4 py-3 font-medium">Seed</th>
+                <th className="px-4 py-3 font-medium">Variety</th>
+                <th className="px-4 py-3 font-medium">Quantity</th>
+                <th className="px-4 py-3 font-medium">Added</th>
+                <th className="px-4 py-3 font-medium">Actions</th>
+              </tr>
+            </thead>
+            <tbody>
+              {visible.map((seed) => (
+                <tr key={seed.id} className="border-b border-black/5 last:border-0">
+                  <td className="px-4 py-3">
+                    <div className="flex items-center gap-2">
+                      <span aria-hidden="true" className="text-xl">
+                        {seed.cropEmoji}
+                      </span>
+                      <div>
+                        <p className="font-medium">{seed.cropName}</p>
+                        <p className="text-xs text-(--text-muted)">{CROP_CATEGORY_LABEL[seed.cropCategory]}</p>
+                      </div>
+                    </div>
+                  </td>
+                  <td className="px-4 py-3 text-(--text-muted)">{seed.varietyName ?? "—"}</td>
+                  <td className="px-4 py-3">
+                    <EditableQuantity
+                      seedId={seed.id}
+                      quantityLabel={seed.quantityLabel}
+                      seedCount={seed.seedCount}
+                      onUpdated={(quantityLabel, seedCount) => handleQuantityUpdated(seed.id, quantityLabel, seedCount)}
+                    />
+                  </td>
+                  <td className="px-4 py-3 text-(--text-muted)">{seed.addedIso}</td>
+                  <td className="px-4 py-3">
+                    <RowActionsMenu label={seed.cropName} onDelete={() => handleDelete(seed.id)} />
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          {seeds.length > SHOWN_BY_DEFAULT && (
+            <div className="flex items-center justify-between border-t border-black/10 px-4 py-3 text-xs text-(--text-muted)">
+              <span>
+                Showing {visible.length} of {seeds.length} seeds
+              </span>
+              <button type="button" onClick={() => setShowAll((s) => !s)} className="text-(--brand-primary) underline">
+                {showAll ? "Show less" : "View all seeds"}
+              </button>
+            </div>
+          )}
+        </div>
+      )}
 
       <form action={formAction} className="flex flex-col gap-3 rounded-lg border border-black/10 bg-white p-4 shadow-card">
         <ScanPacketButton onScanned={handleScanned} remainingToday={scansRemainingToday} />
@@ -407,6 +501,7 @@ export function SeedsView({
         <div className="flex flex-wrap gap-2">
           <AutocompleteTextField
             key={resetToken}
+            inputRef={cropFieldRef}
             name="cropName"
             options={cropNames}
             required

@@ -1,0 +1,4 @@
+ALTER TABLE "tasks" ADD COLUMN "growing_area_id" uuid;--> statement-breakpoint
+ALTER TABLE "photo_journal_entries" ADD COLUMN "growing_area_id" uuid;--> statement-breakpoint
+ALTER TABLE "tasks" ADD CONSTRAINT "tasks_growing_area_id_growing_areas_id_fk" FOREIGN KEY ("growing_area_id") REFERENCES "public"."growing_areas"("id") ON DELETE set null ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "photo_journal_entries" ADD CONSTRAINT "photo_journal_entries_growing_area_id_growing_areas_id_fk" FOREIGN KEY ("growing_area_id") REFERENCES "public"."growing_areas"("id") ON DELETE set null ON UPDATE no action;

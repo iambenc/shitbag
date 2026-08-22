@@ -38,29 +38,37 @@ test.describe("seed inventory", () => {
   }
 
   test("adding a seed with a crop already in the catalog shows up in the inventory", async ({ page }) => {
-    await page.goto("/seeds");
+    await page.goto("/my-shed");
     await addSeed(page, "Tomato", "", "25");
     await expect(page.getByText(/Tomato/).first()).toBeVisible();
     await expect(page.getByLabel(/Edit quantity: 25 seeds/i)).toBeVisible();
   });
 
   test("adding a crop that isn't in the catalog yet falls back to the mock AI backfill", async ({ page }) => {
+    // Same reasoning as grow-plan.spec.ts's own test.setTimeout bump — the
+    // assertion below already waits up to 30s, which the 30s outer default
+    // would otherwise cap short before it ever got the chance.
+    test.setTimeout(60_000);
     // GOOGLE_GENERATIVE_AI_API_KEY is cleared for this whole test run (see
     // playwright.config.ts), so this exercises addSeedAction's AI-backfill
     // path against the deterministic mock, not a real Gemini call — an
     // unusual, not-pre-seeded name is needed to force that path.
-    await page.goto("/seeds");
+    await page.goto("/my-shed");
     const unusualName = `Playwright Test Fruit ${Date.now()}`;
     await addSeed(page, unusualName, "", "10");
+    // addSeedAction awaits the mock AI backfill synchronously server-side
+    // (not a polled Inngest job) before returning — past the default 15s
+    // expect timeout under dev-server load, same class of latency
+    // playwright.config.ts's own expect.timeout comment already documents.
     // Matches both the new list row and the "wasn't in our catalog"
     // confirmation paragraph, which also echoes the crop name — either
     // confirms the row was added, so .first() is enough.
-    await expect(page.getByText(unusualName).first()).toBeVisible();
+    await expect(page.getByText(unusualName).first()).toBeVisible({ timeout: 30_000 });
     await expect(page.getByText(/wasn.t in our catalog/i)).toBeVisible();
   });
 
   test("editing the quantity inline updates the displayed count", async ({ page }) => {
-    await page.goto("/seeds");
+    await page.goto("/my-shed");
     await addSeed(page, "Carrot", "", "12");
     const editButton = page.getByLabel(/Edit quantity: 12 seeds/i);
     await expect(editButton).toBeVisible();
@@ -71,17 +79,23 @@ test.describe("seed inventory", () => {
     // the DOM — .first() is the edit input, not .last().
     const input = page.locator('input[type="number"]').first();
     await input.fill("40");
-    await page.getByRole("button", { name: "Save" }).click();
+    // exact: true — "Save" substring-matches the equipment form's own "Save
+    // equipment" button too now that both sections live on the same /my-shed
+    // page (no collision back when seeds and equipment were separate pages).
+    await page.getByRole("button", { name: "Save", exact: true }).click();
 
     await expect(page.getByLabel(/Edit quantity: 40 seeds/i)).toBeVisible();
   });
 
   test("deleting a seed removes it from the list", async ({ page }) => {
-    await page.goto("/seeds");
+    await page.goto("/my-shed");
     // A crop already in the catalog (unlike the AI-backfill test above) —
     // no "wasn't in our catalog" confirmation paragraph sticks around
     // afterward to keep echoing the crop name once the row is deleted.
     await addSeed(page, "Onion", "", "5");
+    // Delete lives behind the row's "···" overflow menu, not a bare
+    // always-visible button.
+    await page.getByRole("button", { name: "More actions for Onion" }).click();
     await expect(page.getByRole("button", { name: "Delete Onion" })).toBeVisible();
 
     await page.getByRole("button", { name: "Delete Onion" }).click();

@@ -29,6 +29,7 @@ test.describe("auth", () => {
 
     // Sign out (redirects to "/", see layout.tsx's signOutAction), then
     // attempt to sign up again with the same email.
+    await page.getByRole("button", { name: "Account menu" }).click();
     await page.getByRole("button", { name: "Sign out" }).click();
     await expect(page).toHaveURL("/");
 
@@ -46,6 +47,7 @@ test.describe("auth", () => {
     await page.getByLabel("Password").fill(TEST_PASSWORD);
     await page.getByRole("button", { name: "Create account" }).click();
     await expect(page).toHaveURL(/\/onboarding\/location/);
+    await page.getByRole("button", { name: "Account menu" }).click();
     await page.getByRole("button", { name: "Sign out" }).click();
 
     await page.goto("/login");
@@ -63,6 +65,7 @@ test.describe("auth", () => {
     await page.getByLabel("Password").fill(TEST_PASSWORD);
     await page.getByRole("button", { name: "Create account" }).click();
     await expect(page).toHaveURL(/\/onboarding\/location/);
+    await page.getByRole("button", { name: "Account menu" }).click();
     await page.getByRole("button", { name: "Sign out" }).click();
     await expect(page).toHaveURL("/");
 
@@ -75,6 +78,7 @@ test.describe("auth", () => {
     // session round-trips to the same account, not just "some" session.
     await expect(page).toHaveURL(/\/onboarding/);
 
+    await page.getByRole("button", { name: "Account menu" }).click();
     await page.getByRole("button", { name: "Sign out" }).click();
     await expect(page).toHaveURL("/");
     // A protected route, unlike "/", genuinely does bounce a logged-out

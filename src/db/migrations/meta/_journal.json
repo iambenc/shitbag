@@ -246,6 +246,27 @@
       "when": 1787091954490,
       "tag": "0034_volatile_phil_sheldon",
       "breakpoints": true
+    },
+    {
+      "idx": 35,
+      "version": "7",
+      "when": 1787261641657,
+      "tag": "0035_premium_susan_delgado",
+      "breakpoints": true
+    },
+    {
+      "idx": 36,
+      "version": "7",
+      "when": 1787295414868,
+      "tag": "0036_regular_katie_power",
+      "breakpoints": true
+    },
+    {
+      "idx": 37,
+      "version": "7",
+      "when": 1787409474220,
+      "tag": "0037_chief_wendell_vaughn",
+      "breakpoints": true
     }
   ]
 }

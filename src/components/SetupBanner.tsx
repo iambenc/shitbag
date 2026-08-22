@@ -19,12 +19,12 @@ export function SetupBanner({ hasEquipment, hasSeeds }: { hasEquipment: boolean;
       </p>
       <div className="mt-2 flex flex-wrap gap-4">
         {!hasEquipment && (
-          <Link href="/garden" className="font-medium text-(--brand-primary) underline">
+          <Link href="/my-shed" className="font-medium text-(--brand-primary) underline">
             Add equipment →
           </Link>
         )}
         {!hasSeeds && (
-          <Link href="/seeds" className="font-medium text-(--brand-primary) underline">
+          <Link href="/my-shed" className="font-medium text-(--brand-primary) underline">
             Add seeds →
           </Link>
         )}

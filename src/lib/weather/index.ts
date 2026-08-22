@@ -121,6 +121,76 @@ export async function getWeeklyForecast(
   }
 }
 
+export type CurrentWeather = {
+  temperatureC: number;
+  apparentTemperatureC: number;
+  relativeHumidityPct: number;
+  windSpeedKmh: number;
+  weatherCode: number;
+};
+
+/**
+ * Live current-conditions snapshot for the dashboard's weather widget — a
+ * separate function from getForecast()/getWeeklyForecast() for the same
+ * reason those two are separate from each other (see the weekly forecast's
+ * own comment): a distinct, purely-informational display need, not worth
+ * risking either proven code path for reuse. Same free Open-Meteo API (no
+ * key), same forced-scenario override for local dev/testing.
+ */
+export async function getCurrentWeather(
+  lat: number,
+  lon: number,
+  forceScenario?: WeatherScenario,
+): Promise<CurrentWeather | null> {
+  const forced = forceScenario ?? (process.env.WEATHER_FORCE_SCENARIO as WeatherScenario | undefined);
+  if (forced && forced in FORCED_SCENARIOS) {
+    const { maxTempC } = FORCED_SCENARIOS[forced];
+    return {
+      temperatureC: maxTempC,
+      apparentTemperatureC: maxTempC - 2,
+      relativeHumidityPct: 70,
+      windSpeedKmh: 12,
+      weatherCode: FORCED_SCENARIO_CODES[forced],
+    };
+  }
+
+  try {
+    const url = `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}&current=temperature_2m,apparent_temperature,relative_humidity_2m,wind_speed_10m,weathercode&timezone=auto`;
+    const res = await fetch(url, { cache: "no-store" });
+    if (!res.ok) return null;
+    const data = (await res.json()) as {
+      current?: {
+        temperature_2m?: number;
+        apparent_temperature?: number;
+        relative_humidity_2m?: number;
+        wind_speed_10m?: number;
+        weathercode?: number;
+      };
+    };
+    const c = data.current;
+    if (
+      !c ||
+      typeof c.temperature_2m !== "number" ||
+      typeof c.apparent_temperature !== "number" ||
+      typeof c.relative_humidity_2m !== "number" ||
+      typeof c.wind_speed_10m !== "number" ||
+      typeof c.weathercode !== "number"
+    ) {
+      return null;
+    }
+    return {
+      temperatureC: c.temperature_2m,
+      apparentTemperatureC: c.apparent_temperature,
+      relativeHumidityPct: c.relative_humidity_2m,
+      windSpeedKmh: c.wind_speed_10m,
+      weatherCode: c.weathercode,
+    };
+  } catch (err) {
+    console.error("[weather] current fetch failed", err);
+    return null;
+  }
+}
+
 export function isHotAndDry(forecast: Forecast): boolean {
   return forecast.maxTempC >= 25 && forecast.precipitationMm < 1;
 }

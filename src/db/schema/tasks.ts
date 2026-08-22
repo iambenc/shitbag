@@ -3,6 +3,7 @@ import { tenants } from "./tenant";
 import { users } from "./user";
 import { crops, cropVarieties } from "./crop";
 import { planRecommendationStages, planRecommendations } from "./grow-plan";
+import { growingAreas } from "./growing-area";
 import { tenantIsolationPolicy } from "./_rls";
 
 export const taskStatusEnum = ["pending", "completed", "missed"] as const;
@@ -52,6 +53,13 @@ export const tasks = pgTable(
     activatesStageId: uuid("activates_stage_id").references(() => planRecommendationStages.id, {
       onDelete: "set null",
     }),
+    // Set only on a recurring weekly "take a photo of this area for a
+    // health check" task (see generateHealthCheckTasks.ts) — null for every
+    // other task. This is the actual discriminator TodayTasksCard uses to
+    // render an "Add photo" action instead of a plain "Done" toggle; the
+    // task's own `source` stays "ai" (accurate provenance), not a dedicated
+    // enum value, since this column alone already identifies the task type.
+    growingAreaId: uuid("growing_area_id").references(() => growingAreas.id, { onDelete: "set null" }),
     // True for a task that sows/plants something indoors (e.g. a seed tray)
     // ahead of its outdoor season. AI-authored, same as the rest of a task's
     // scheduling details — false (the default) for manual/weather tasks and

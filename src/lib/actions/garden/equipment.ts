@@ -42,7 +42,14 @@ export async function updateEquipmentAction(
     }
   });
 
+  // Both paths, not just one: this action now runs from /my-shed's
+  // equipment form, but GrowingAreaManager's owned/placed counts still live
+  // on /garden and rely on that page's server component re-rendering with
+  // fresh props after a save (see GrowingAreaManager.tsx's own prop-sync
+  // comment) — without revalidating /garden too, its counts would go stale
+  // until an unrelated reload.
   revalidatePath("/garden");
+  revalidatePath("/my-shed");
   revalidatePath("/shopping-list");
   return { success: true };
 }

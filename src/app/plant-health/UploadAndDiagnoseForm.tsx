@@ -5,11 +5,22 @@ import { uploadAndDiagnoseAction, type UploadAndDiagnoseState } from "@/lib/acti
 
 const initialState: UploadAndDiagnoseState = {};
 
-export function UploadAndDiagnoseForm() {
+export function UploadAndDiagnoseForm({
+  growingAreaId,
+  taskId,
+  areaLabel,
+}: {
+  growingAreaId?: string;
+  taskId?: string;
+  areaLabel?: string;
+}) {
   const [state, formAction, pending] = useActionState(uploadAndDiagnoseAction, initialState);
 
   return (
     <form action={formAction} className="flex flex-col gap-3 rounded-lg border border-black/10 bg-white p-4 shadow-card">
+      {areaLabel && <p className="text-sm font-medium text-(--text-heading)">For: {areaLabel}</p>}
+      {growingAreaId && <input type="hidden" name="growingAreaId" value={growingAreaId} />}
+      {taskId && <input type="hidden" name="taskId" value={taskId} />}
       <input
         name="photo"
         type="file"

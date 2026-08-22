@@ -12,20 +12,22 @@ import { signUpAndOnboard } from "./helpers/auth";
 test.describe("garden equipment", () => {
   test("adding a pot automatically places it as growing space", async ({ page }) => {
     await signUpAndOnboard(page);
-    await page.goto("/garden");
+    // Equipment is added on /my-shed; GrowingAreaManager's owned/placed
+    // counts are shown on /garden — a genuine cross-page navigation (not a
+    // same-page reload) after saving always fetches fresh server data
+    // regardless of revalidatePath timing, since updateEquipmentAction
+    // revalidates both paths (see docs/plan.md's "My Shed" entry).
+    await page.goto("/my-shed");
 
+    await page.getByRole("button", { name: "Planting equipment", exact: true }).click();
+    await page.getByRole("button", { name: "Edit equipment" }).click();
     await page.getByRole("button", { name: "+ Add pots" }).click();
     await page.getByPlaceholder("e.g. 20").fill("25");
     await page.getByLabel("Quantity").fill("2");
     await page.getByRole("button", { name: "Save equipment" }).click();
     await expect(page.getByText("Saved.")).toBeVisible();
-    // The GrowingAreaManager section below reads from a server-fetched prop
-    // that Next's revalidatePath-driven refresh doesn't always land inside
-    // Playwright's default assertion window on a Turbopack dev server (a
-    // reload always picks up the fresh server data, confirmed directly
-    // against Postgres — the auto-placement itself is correct and immediate
-    // at the DB layer, this is purely a client-refresh-timing gap in dev).
-    await page.reload();
+
+    await page.goto("/garden");
 
     // Confirms the equipment/growingAreaSync auto-placement feature: newly
     // added growing-space equipment becomes ready-to-grow-in space without
@@ -38,13 +40,16 @@ test.describe("garden equipment", () => {
     page,
   }) => {
     await signUpAndOnboard(page);
-    await page.goto("/garden");
+    await page.goto("/my-shed");
+    await page.getByRole("button", { name: "Planting equipment", exact: true }).click();
+    await page.getByRole("button", { name: "Edit equipment" }).click();
     await page.getByRole("button", { name: "+ Add pots" }).click();
     await page.getByPlaceholder("e.g. 20").fill("15");
     await page.getByLabel("Quantity").fill("3");
     await page.getByRole("button", { name: "Save equipment" }).click();
     await expect(page.getByText("Saved.")).toBeVisible();
-    await page.reload(); // see the first test's comment on why this is needed
+
+    await page.goto("/garden");
     await expect(page.getByText("You own 3")).toBeVisible();
     await expect(page.getByText("3 placed")).toBeVisible();
 
@@ -57,10 +62,14 @@ test.describe("garden equipment", () => {
     // stepper's visible glyph is "+" but its accessible name (what the
     // increment buttons are actually keyed by, since they carry an
     // aria-label) is "Add one <Equipment Name>".
+    await page.goto("/my-shed");
+    await page.getByRole("button", { name: "Tools & equipment", exact: true }).click();
+    await page.getByRole("button", { name: "Edit equipment" }).click();
     await page.getByRole("button", { name: "Add one Watering Can" }).click();
     await page.getByRole("button", { name: "Save equipment" }).click();
     await expect(page.getByText("Saved.")).toBeVisible();
-    await page.reload();
+
+    await page.goto("/garden");
     await expect(page.getByText("2 placed")).toBeVisible();
   });
 });

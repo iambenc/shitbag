@@ -1,0 +1,2 @@
+ALTER TABLE "photo_journal_entries" ADD COLUMN "harvest_log_id" uuid;--> statement-breakpoint
+ALTER TABLE "photo_journal_entries" ADD CONSTRAINT "photo_journal_entries_harvest_log_id_harvest_log_id_fk" FOREIGN KEY ("harvest_log_id") REFERENCES "public"."harvest_log"("id") ON DELETE set null ON UPDATE no action;

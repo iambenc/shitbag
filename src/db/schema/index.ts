@@ -9,6 +9,7 @@ export * from "./tasks";
 export * from "./shopping";
 export * from "./harvest";
 export * from "./photo";
+export * from "./note";
 export * from "./subscription";
 export * from "./grow-plan";
 export * from "./task-reschedule-event";

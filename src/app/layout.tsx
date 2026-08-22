@@ -1,10 +1,14 @@
 import type { Metadata } from "next";
 import { Geist, Geist_Mono, Fraunces } from "next/font/google";
+import { eq, and } from "drizzle-orm";
 import "./globals.css";
 import { getCurrentTenant } from "@/lib/tenant/resolve";
 import { auth, signOut } from "@/lib/auth";
+import { withTenant } from "@/lib/tenant/withTenant";
+import { tasks } from "@/db/schema";
 import { getSubscription, isPaidTier } from "@/lib/billing/subscription";
 import { SiteHeader } from "@/components/SiteHeader";
+import { SiteFooter } from "@/components/SiteFooter";
 
 async function signOutAction() {
   "use server";
@@ -40,9 +44,23 @@ export async function generateMetadata(): Promise<Metadata> {
 
 export default async function RootLayout({ children }: LayoutProps<"/">) {
   const [tenant, session] = await Promise.all([getCurrentTenant(), auth()]);
-  const subscription = session?.user
-    ? await getSubscription(session.user.id, tenant.id)
-    : undefined;
+  const [subscription, missedTaskCount] = await Promise.all([
+    session?.user ? getSubscription(session.user.id, tenant.id) : Promise.resolve(undefined),
+    // Header-scoped, not dashboard-scoped — the bell badge needs to be
+    // correct on every route, so it's computed here rather than threaded
+    // down from a single page. Cheap: an indexed id-only select, same
+    // plain-select-then-.length convention used throughout this codebase
+    // rather than a SQL count() aggregate.
+    session?.user
+      ? withTenant(tenant.id, async (tx) => {
+          const rows = await tx
+            .select({ id: tasks.id })
+            .from(tasks)
+            .where(and(eq(tasks.userId, session.user.id), eq(tasks.status, "missed")));
+          return rows.length;
+        })
+      : Promise.resolve(0),
+  ]);
   const isPaid = isPaidTier(subscription);
 
   return (
@@ -60,8 +78,15 @@ export default async function RootLayout({ children }: LayoutProps<"/">) {
         className="min-h-full flex flex-col bg-(--background) text-(--text-heading)"
         suppressHydrationWarning
       >
-        <SiteHeader tenant={tenant} session={session} isPaid={isPaid} signOutAction={signOutAction} />
+        <SiteHeader
+          tenant={tenant}
+          session={session}
+          isPaid={isPaid}
+          missedTaskCount={missedTaskCount}
+          signOutAction={signOutAction}
+        />
         <main className="flex-1">{children}</main>
+        <SiteFooter />
       </body>
     </html>
   );

@@ -1,121 +1,232 @@
 "use client";
 
-import { useActionState, useRef, useState } from "react";
+import { useMemo, useState } from "react";
+import Link from "next/link";
 import {
-  uploadPhotoAction,
   setPhotoVisibilityAction,
   deletePhotoAction,
   type UploadPhotoState,
 } from "@/lib/actions/photos";
+import { deleteHarvestAction } from "@/lib/actions/harvests";
+import { setNoteVisibilityAction, deleteNoteAction, type AddNoteState } from "@/lib/actions/notes";
 import { diagnoseExistingPhotoAction, reportPhotoAction } from "@/lib/actions/plantHealth";
+import { JournalIcon, CameraIcon, CarrotIcon, BasketIcon, DashboardIcon, PeopleIcon, PlusIcon } from "@/components/icons";
 import { LeafAccent } from "@/components/LeafAccent";
-import { EyeIcon, TrashIcon } from "@/components/icons";
+import { totalKg, mostHarvestedCrop } from "@/lib/journal/aggregates";
+import { UploadForm } from "./UploadForm";
+import { Timeline } from "./Timeline";
+import { GalleryTab } from "./GalleryTab";
+import { HarvestsTab } from "./HarvestsTab";
+import { NotesTab } from "./NotesTab";
+import { CommunityTab } from "./CommunityTab";
+import { Sidebar } from "./Sidebar";
+import { StatCards, type JournalStatCard } from "./StatCards";
+import type { JournalEntry, SharedPhoto, GalleryPhoto, HarvestRow, GrowingAreaOption } from "./types";
 
-type Photo = {
-  id: string;
-  url: string;
-  caption: string | null;
-  visibility: "private" | "shared_tenant";
-  ownerEmail: string;
-  isOwn: boolean;
+type Tab = "timeline" | "gallery" | "harvests" | "notes" | "community";
+
+const TAB_LABEL: Record<Tab, string> = {
+  timeline: "Timeline",
+  gallery: "Gallery",
+  harvests: "Harvests",
+  notes: "My Notes",
+  community: "Community",
 };
-
-const initialState: UploadPhotoState = {};
-
-function UploadForm({ onUploaded }: { onUploaded: (photo: NonNullable<UploadPhotoState["photo"]>) => void }) {
-  const formRef = useRef<HTMLFormElement>(null);
-  const [state, formAction, pending] = useActionState(async (prev: UploadPhotoState, formData: FormData) => {
-    const result = await uploadPhotoAction(prev, formData);
-    if (result.photo) {
-      formRef.current?.reset();
-      onUploaded(result.photo);
-    }
-    return result;
-  }, initialState);
-
-  return (
-    <form
-      ref={formRef}
-      action={formAction}
-      className="flex flex-col gap-3 rounded-lg border border-black/10 bg-white p-4 shadow-card"
-    >
-      <input
-        name="photo"
-        type="file"
-        accept="image/jpeg,image/png,image/webp,image/gif"
-        required
-        className="text-sm file:mr-3 file:rounded-full file:border-0 file:bg-(--brand-primary) file:px-3 file:py-1.5 file:text-sm file:text-white hover:file:opacity-90"
-      />
-      <input
-        name="caption"
-        type="text"
-        placeholder="Caption (optional)"
-        className="rounded-md border border-black/15 px-3 py-2 text-sm"
-      />
-      <div className="flex gap-4 text-sm">
-        <label className="flex items-center gap-1">
-          <input type="radio" name="visibility" value="private" defaultChecked className="accent-(--brand-primary)" /> Just me
-        </label>
-        <label className="flex items-center gap-1">
-          <input type="radio" name="visibility" value="shared_tenant" className="accent-(--brand-primary)" /> Shared with everyone here
-        </label>
-      </div>
-      {state.error && <p className="text-sm text-red-700">{state.error}</p>}
-      <button
-        type="submit"
-        disabled={pending}
-        className="self-start rounded-full bg-(--brand-primary) px-6 py-2 text-sm text-white shadow-button hover:brightness-90 active:scale-95 transition disabled:opacity-60"
-      >
-        {pending ? "Uploading…" : "Upload photo"}
-      </button>
-    </form>
-  );
-}
+const TAB_ICON = { timeline: LeafAccent, gallery: DashboardIcon, harvests: CarrotIcon, notes: JournalIcon, community: PeopleIcon };
 
 export function JournalView({
-  myPhotos,
-  sharedPhotos,
   tenantName,
   currentUserEmail,
   paid,
   diagnosesRemainingToday,
+  growingAreaOptions,
+  initialEntries,
+  initialSharedPhotos,
 }: {
-  myPhotos: Photo[];
-  sharedPhotos: Photo[];
   tenantName: string;
   currentUserEmail: string;
   paid: boolean;
   diagnosesRemainingToday: number;
+  growingAreaOptions: GrowingAreaOption[];
+  initialEntries: JournalEntry[];
+  initialSharedPhotos: SharedPhoto[];
 }) {
-  const [tab, setTab] = useState<"mine" | "shared">("mine");
-  const [mine, setMine] = useState(myPhotos);
-  const [shared, setShared] = useState(sharedPhotos);
-  const [reportedIds, setReportedIds] = useState<Set<string>>(new Set());
+  const [activeTab, setActiveTab] = useState<Tab>("timeline");
+  const [addEntryOpen, setAddEntryOpen] = useState(false);
   const [diagnosingId, setDiagnosingId] = useState<string | null>(null);
 
+  // Single source of truth for everything "mine" — Gallery, Harvests, the
+  // stat cards, and the sidebar all derive from this one list (below) rather
+  // than keeping their own parallel copies, so a delete/upload/visibility
+  // change updates every view of it at once. Same class of bug this session
+  // already hit once on My Shed's stat cards reading stale server props
+  // instead of the live client list.
+  const [prevInitialEntries, setPrevInitialEntries] = useState(initialEntries);
+  const [entries, setEntries] = useState(initialEntries);
+  if (initialEntries !== prevInitialEntries) {
+    setPrevInitialEntries(initialEntries);
+    setEntries(initialEntries);
+  }
+
+  const [prevInitialShared, setPrevInitialShared] = useState(initialSharedPhotos);
+  const [sharedPhotos, setSharedPhotos] = useState(initialSharedPhotos);
+  if (initialSharedPhotos !== prevInitialShared) {
+    setPrevInitialShared(initialSharedPhotos);
+    setSharedPhotos(initialSharedPhotos);
+  }
+
+  function goToTab(tab: Tab, opts?: { addEntry?: boolean }) {
+    setActiveTab(tab);
+    if (opts?.addEntry) setAddEntryOpen(true);
+  }
+
   function handleUploaded(photo: NonNullable<UploadPhotoState["photo"]>) {
-    const asPhoto: Photo = { ...photo, ownerEmail: currentUserEmail, isOwn: true };
-    setMine((ps) => [asPhoto, ...ps]);
+    const entry: JournalEntry = {
+      id: photo.id,
+      kind: "photo",
+      dateIso: new Date().toISOString(),
+      photoId: photo.id,
+      photoUrl: photo.url,
+      caption: photo.caption,
+      visibility: photo.visibility,
+      harvestId: null,
+      noteId: null,
+      cropId: null,
+      cropName: null,
+      cropEmoji: null,
+      varietyName: null,
+      quantity: null,
+      unit: null,
+      notes: null,
+      areaLabel: photo.tagLabel,
+    };
+    setEntries((es) => [entry, ...es]);
     if (photo.visibility === "shared_tenant") {
-      setShared((ps) => [asPhoto, ...ps]);
+      setSharedPhotos((ps) => [
+        { id: photo.id, url: photo.url, body: null, caption: photo.caption, ownerEmail: currentUserEmail, isOwn: true, tagLabel: photo.tagLabel },
+        ...ps,
+      ]);
+    }
+    setAddEntryOpen(false);
+  }
+
+  function handleAddedNote(note: NonNullable<AddNoteState["note"]>) {
+    const entry: JournalEntry = {
+      id: note.id,
+      kind: "note",
+      dateIso: new Date().toISOString(),
+      photoId: null,
+      photoUrl: null,
+      caption: note.body,
+      visibility: note.visibility,
+      harvestId: null,
+      noteId: note.id,
+      cropId: null,
+      cropName: null,
+      cropEmoji: null,
+      varietyName: null,
+      quantity: null,
+      unit: null,
+      notes: null,
+      areaLabel: note.tagLabel,
+    };
+    setEntries((es) => [entry, ...es]);
+    if (note.visibility === "shared_tenant") {
+      setSharedPhotos((ps) => [
+        { id: note.id, url: null, body: note.body, caption: null, ownerEmail: currentUserEmail, isOwn: true, tagLabel: note.tagLabel },
+        ...ps,
+      ]);
     }
   }
 
-  async function handleToggleVisibility(photo: Photo) {
-    const visibility = photo.visibility === "private" ? "shared_tenant" : "private";
-    setMine((ps) => ps.map((p) => (p.id === photo.id ? { ...p, visibility } : p)));
-    setShared((ps) =>
+  async function handleToggleVisibility(entry: JournalEntry) {
+    const id = entry.photoId ?? entry.noteId;
+    if (!id || !entry.visibility) return;
+    const visibility = entry.visibility === "private" ? "shared_tenant" : "private";
+    setEntries((es) => es.map((e) => (e.id === entry.id ? { ...e, visibility } : e)));
+    setSharedPhotos((ps) =>
       visibility === "shared_tenant"
-        ? [{ ...photo, visibility }, ...ps.filter((p) => p.id !== photo.id)]
-        : ps.filter((p) => p.id !== photo.id),
+        ? [
+            entry.photoId
+              ? {
+                  id: entry.photoId,
+                  url: entry.photoUrl!,
+                  body: null,
+                  caption: entry.caption,
+                  ownerEmail: currentUserEmail,
+                  isOwn: true,
+                  tagLabel: entry.cropName ? `${entry.cropEmoji ?? ""} ${entry.cropName}`.trim() : entry.areaLabel,
+                }
+              : { id: entry.noteId!, url: null, body: entry.caption, caption: null, ownerEmail: currentUserEmail, isOwn: true, tagLabel: entry.areaLabel },
+            ...ps.filter((p) => p.id !== id),
+          ]
+        : ps.filter((p) => p.id !== id),
     );
-    await setPhotoVisibilityAction(photo.id, visibility);
+    if (entry.photoId) {
+      await setPhotoVisibilityAction(entry.photoId, visibility);
+    } else if (entry.noteId) {
+      await setNoteVisibilityAction(entry.noteId, visibility);
+    }
   }
 
-  async function handleDelete(photoId: string) {
-    setMine((ps) => ps.filter((p) => p.id !== photoId));
-    setShared((ps) => ps.filter((p) => p.id !== photoId));
+  function handleToggleGalleryVisibility(photo: GalleryPhoto) {
+    const entry = entries.find((e) => e.photoId === photo.id);
+    if (entry) handleToggleVisibility(entry);
+  }
+
+  async function handleDeletePhoto(photoId: string) {
+    // Deleting the PHOTO doesn't delete a linked harvestLog row (the FK is
+    // one-way, ON DELETE SET NULL from the photo side) — a harvest-linked
+    // entry survives as a harvest-only entry, it doesn't vanish from the
+    // Timeline. Only a plain (non-harvest) photo entry disappears entirely.
+    setEntries((es) =>
+      es.flatMap((e) => {
+        if (e.photoId !== photoId) return [e];
+        if (e.kind === "harvest") {
+          return [{ ...e, photoId: null, photoUrl: null, visibility: null, caption: null }];
+        }
+        return [];
+      }),
+    );
+    setSharedPhotos((ps) => ps.filter((p) => p.id !== photoId));
     await deletePhotoAction(photoId);
+  }
+
+  async function handleDeleteHarvest(harvestId: string) {
+    // Deleting the HARVEST doesn't delete a linked photo (same one-way FK,
+    // ON DELETE SET NULL) — if this entry had a photo, it survives as a
+    // plain photo entry instead of disappearing.
+    setEntries((es) =>
+      es.flatMap((e) => {
+        if (e.harvestId !== harvestId) return [e];
+        if (e.photoId) {
+          return [
+            {
+              ...e,
+              kind: "photo" as const,
+              harvestId: null,
+              cropId: null,
+              cropName: null,
+              cropEmoji: null,
+              varietyName: null,
+              quantity: null,
+              unit: null,
+              notes: null,
+            },
+          ];
+        }
+        return [];
+      }),
+    );
+    await deleteHarvestAction(harvestId);
+  }
+
+  async function handleDeleteNote(noteId: string) {
+    // Nothing else references a note (unlike photos/harvests), so it's a
+    // plain removal — no FK-survival case to handle.
+    setEntries((es) => es.filter((e) => e.noteId !== noteId));
+    setSharedPhotos((ps) => ps.filter((p) => p.id !== noteId));
+    await deleteNoteAction(noteId);
   }
 
   async function handleDiagnose(photoId: string) {
@@ -125,118 +236,178 @@ export function JournalView({
   }
 
   async function handleReport(photoId: string) {
-    const reason = window.prompt("Why are you reporting this photo?");
-    if (!reason) return;
-    await reportPhotoAction(photoId, reason);
-    setReportedIds((prev) => new Set(prev).add(photoId));
+    await reportPhotoAction(photoId, "Reported from Journal");
   }
 
-  return (
-    <div className="flex flex-col gap-8">
-      <UploadForm onUploaded={handleUploaded} />
+  const thisYear = new Date().getFullYear();
+  const entriesThisYear = useMemo(() => entries.filter((e) => new Date(e.dateIso).getFullYear() === thisYear), [entries, thisYear]);
+  const photosThisYear = useMemo(() => entriesThisYear.filter((e) => e.photoId), [entriesThisYear]);
+  const harvestEntries = useMemo(() => entries.filter((e) => e.kind === "harvest"), [entries]);
+  const harvestEntriesThisYear = useMemo(() => entriesThisYear.filter((e) => e.kind === "harvest"), [entriesThisYear]);
+  const kgThisYear = useMemo(
+    () => totalKg(harvestEntriesThisYear.map((e) => ({ quantity: e.quantity ?? 0, unit: e.unit ?? "" }))),
+    [harvestEntriesThisYear],
+  );
 
-      <div className="flex gap-2 text-sm">
-        <button
-          type="button"
-          onClick={() => setTab("mine")}
-          className={`rounded-full px-3 py-1 transition ${tab === "mine" ? "bg-(--brand-primary) text-white shadow-button" : "bg-black/5 text-(--text-muted) hover:bg-black/10"}`}
-        >
-          My Photos
-        </button>
-        <button
-          type="button"
-          onClick={() => setTab("shared")}
-          className={`rounded-full px-3 py-1 transition ${tab === "shared" ? "bg-(--brand-primary) text-white shadow-button" : "bg-black/5 text-(--text-muted) hover:bg-black/10"}`}
-        >
-          Shared in {tenantName}
-        </button>
+  const galleryPhotos: GalleryPhoto[] = useMemo(
+    () =>
+      entries
+        .filter((e): e is JournalEntry & { photoId: string; photoUrl: string; visibility: NonNullable<JournalEntry["visibility"]> } =>
+          Boolean(e.photoId && e.photoUrl && e.visibility),
+        )
+        .map((e) => ({
+          id: e.photoId,
+          url: e.photoUrl,
+          caption: e.caption,
+          visibility: e.visibility,
+          tagLabel: e.areaLabel ?? (e.cropName ? `${e.cropEmoji ?? ""} ${e.cropName}`.trim() : null),
+        })),
+    [entries],
+  );
+
+  const harvestRows: HarvestRow[] = useMemo(
+    () =>
+      harvestEntries.map((e) => ({
+        id: e.harvestId!,
+        cropName: e.cropName!,
+        cropEmoji: e.cropEmoji ?? "🌱",
+        varietyName: e.varietyName,
+        quantity: e.quantity ?? 0,
+        unit: e.unit ?? "",
+        harvestedAt: e.dateIso.slice(0, 10),
+        notes: e.notes,
+        hasPhoto: Boolean(e.photoId),
+      })),
+    [harvestEntries],
+  );
+
+  const noteEntries = useMemo(() => entries.filter((e) => e.kind === "note"), [entries]);
+
+  const mostHarvested = useMemo(
+    () =>
+      mostHarvestedCrop(
+        harvestEntries.map((e) => ({
+          cropId: e.cropId!,
+          cropName: e.cropName!,
+          cropEmoji: e.cropEmoji ?? "🌱",
+          quantity: e.quantity ?? 0,
+          unit: e.unit ?? "",
+        })),
+      ),
+    [harvestEntries],
+  );
+
+  const statCards: JournalStatCard[] = [
+    { key: "entries", icon: JournalIcon, value: String(entriesThisYear.length), label: "Entries", sub: "This year" },
+    { key: "photos", icon: CameraIcon, value: String(photosThisYear.length), label: "Photos", sub: "This year" },
+    { key: "harvests", icon: CarrotIcon, value: String(harvestEntriesThisYear.length), label: "Harvests", sub: "This year" },
+    { key: "kg", icon: BasketIcon, value: `${kgThisYear.toFixed(1)} kg`, label: "Harvested", sub: "This year" },
+  ];
+
+  return (
+    <div className="flex flex-col gap-6">
+      <div className="flex flex-wrap items-start justify-between gap-4">
+        <div>
+          <h1 className="flex items-center gap-2 font-display text-3xl font-semibold text-(--brand-primary)">
+            Garden Journal <LeafAccent className="h-7 w-7" />
+          </h1>
+          <p className="mt-2 text-sm text-(--text-muted)">A visual story of your garden, season by season.</p>
+        </div>
+        <div className="flex shrink-0 gap-2">
+          <button
+            type="button"
+            onClick={() => goToTab("timeline", { addEntry: true })}
+            className="flex items-center gap-1.5 rounded-md border border-black/15 px-4 py-2 text-sm font-medium hover:bg-black/5"
+          >
+            <PlusIcon className="h-4 w-4" />
+            Add journal entry
+          </button>
+          <Link
+            href="/harvests"
+            className="flex items-center gap-1.5 rounded-md bg-(--brand-primary) px-4 py-2 text-sm text-white shadow-button hover:brightness-90 active:scale-95 transition"
+          >
+            <CarrotIcon className="h-4 w-4" />
+            Record harvest
+          </Link>
+        </div>
       </div>
 
-      {tab === "mine" ? (
-        mine.length === 0 ? (
-          <div className="flex items-center gap-2 rounded-lg bg-(--surface-tint) p-3">
-            <LeafAccent className="h-5 w-5 shrink-0 text-(--brand-primary)" />
-            <p className="text-sm text-(--text-muted)">No photos yet.</p>
-          </div>
-        ) : (
-          <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-4">
-            {mine.map((photo) => (
-              <div key={photo.id} className="group flex flex-col gap-1 overflow-hidden rounded-lg border border-black/10 bg-white shadow-card">
-                <div className="relative aspect-square w-full overflow-hidden">
-                  {/* eslint-disable-next-line @next/next/no-img-element -- locally-stored user upload, not an optimizable static asset */}
-                  <img src={photo.url} alt={photo.caption ?? "Garden photo"} className="h-full w-full object-cover" />
+      <StatCards cards={statCards} />
 
-                  <span
-                    className="absolute left-1.5 top-1.5 flex items-center gap-1 rounded-full bg-black/50 px-2 py-0.5 text-[10px] font-medium text-white"
-                    title={photo.visibility === "private" ? "Only visible to you" : `Shared with everyone in ${tenantName}`}
-                  >
-                    <EyeIcon className="h-3 w-3 shrink-0" />
-                    {photo.visibility === "private" ? "Private" : "Shared"}
-                  </span>
+      <div className="flex gap-1 overflow-x-auto border-b border-black/10 pb-px">
+        {(Object.keys(TAB_LABEL) as Tab[]).map((tab) => {
+          const Icon = TAB_ICON[tab];
+          return (
+            <button
+              key={tab}
+              type="button"
+              onClick={() => goToTab(tab)}
+              className={`flex shrink-0 items-center gap-1.5 whitespace-nowrap border-b-2 px-4 py-2 text-sm font-medium transition ${
+                activeTab === tab
+                  ? "border-(--brand-primary) text-(--brand-primary)"
+                  : "border-transparent text-(--text-muted) hover:text-(--text-heading)"
+              }`}
+            >
+              <Icon className="h-4 w-4" />
+              {TAB_LABEL[tab]}
+            </button>
+          );
+        })}
+      </div>
 
-                  <div className="absolute inset-0 flex items-center justify-center gap-2 bg-black/50 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100">
-                    <button
-                      type="button"
-                      onClick={() => handleToggleVisibility(photo)}
-                      className="rounded-full bg-white/90 p-2 hover:bg-white active:scale-95 transition"
-                      aria-label={photo.visibility === "private" ? "Share this photo" : "Make this photo private"}
-                      title={photo.visibility === "private" ? "Share" : "Make private"}
-                    >
-                      <EyeIcon className="h-4 w-4 text-(--text-heading)" />
-                    </button>
-                    {paid && (
-                      <button
-                        type="button"
-                        onClick={() => handleDiagnose(photo.id)}
-                        disabled={diagnosingId !== null || diagnosesRemainingToday === 0}
-                        className="rounded-full bg-white/90 p-2 hover:bg-white active:scale-95 transition disabled:opacity-50"
-                        aria-label="Diagnose this plant"
-                        title={diagnosesRemainingToday === 0 ? "No plant checks left today" : diagnosingId === photo.id ? "Diagnosing…" : "Diagnose"}
-                      >
-                        <LeafAccent className="h-4 w-4 text-(--brand-primary)" />
-                      </button>
-                    )}
-                    <button
-                      type="button"
-                      onClick={() => handleDelete(photo.id)}
-                      className="rounded-full bg-white/90 p-2 hover:bg-red-100 active:scale-95 transition"
-                      aria-label="Delete this photo"
-                      title="Delete"
-                    >
-                      <TrashIcon className="h-4 w-4 text-red-700" />
-                    </button>
-                  </div>
-                </div>
-                {photo.caption && <p className="p-2 text-xs">{photo.caption}</p>}
-              </div>
-            ))}
-          </div>
-        )
-      ) : shared.length === 0 ? (
-        <p className="text-sm text-(--text-muted)">No one has shared a photo yet.</p>
-      ) : (
-        <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-4">
-          {shared.map((photo) => (
-            <div key={photo.id} className="flex flex-col gap-1 overflow-hidden rounded-lg border border-black/10 bg-white">
-              {/* eslint-disable-next-line @next/next/no-img-element -- locally-stored user upload, not an optimizable static asset */}
-              <img src={photo.url} alt={photo.caption ?? "Garden photo"} className="aspect-square w-full object-cover" />
-              <div className="flex flex-col gap-1 p-2 text-xs">
-                {photo.caption && <p>{photo.caption}</p>}
-                <p className="text-(--text-muted)">{photo.isOwn ? "You" : photo.ownerEmail}</p>
-                {!photo.isOwn && (
-                  reportedIds.has(photo.id) ? (
-                    <p className="text-(--text-muted)">Reported</p>
-                  ) : (
-                    <button type="button" onClick={() => handleReport(photo.id)} className="text-left text-(--text-muted) hover:text-red-700">
-                      Report
-                    </button>
-                  )
-                )}
-              </div>
-            </div>
-          ))}
+      <div className="grid grid-cols-1 gap-6 lg:grid-cols-[1fr_320px]">
+        <div className="flex flex-col gap-6">
+          {addEntryOpen && (
+            <UploadForm growingAreaOptions={growingAreaOptions} onUploaded={handleUploaded} />
+          )}
+
+          {activeTab === "timeline" && (
+            <Timeline
+              entries={entries}
+              tenantName={tenantName}
+              paid={paid}
+              diagnosingId={diagnosingId}
+              diagnosesRemainingToday={diagnosesRemainingToday}
+              onToggleVisibility={handleToggleVisibility}
+              onDiagnose={handleDiagnose}
+              onDeletePhoto={handleDeletePhoto}
+              onDeleteHarvest={handleDeleteHarvest}
+              onDeleteNote={handleDeleteNote}
+            />
+          )}
+          {activeTab === "gallery" && (
+            <GalleryTab
+              photos={galleryPhotos}
+              tenantName={tenantName}
+              paid={paid}
+              diagnosingId={diagnosingId}
+              diagnosesRemainingToday={diagnosesRemainingToday}
+              onToggleVisibility={handleToggleGalleryVisibility}
+              onDiagnose={handleDiagnose}
+              onDelete={handleDeletePhoto}
+            />
+          )}
+          {activeTab === "harvests" && <HarvestsTab harvests={harvestRows} onDelete={handleDeleteHarvest} />}
+          {activeTab === "notes" && (
+            <NotesTab
+              notes={noteEntries}
+              growingAreaOptions={growingAreaOptions}
+              tenantName={tenantName}
+              onAdded={handleAddedNote}
+              onToggleVisibility={handleToggleVisibility}
+              onDeleteNote={handleDeleteNote}
+            />
+          )}
+          {activeTab === "community" && <CommunityTab photos={sharedPhotos} onReport={handleReport} />}
         </div>
-      )}
+
+        <Sidebar
+          mostHarvested={mostHarvested}
+          recentHarvests={harvestRows.slice(0, 4)}
+          onViewAllHarvests={() => goToTab("harvests")}
+          onGoToCommunity={() => goToTab("community")}
+        />
+      </div>
     </div>
   );
 }

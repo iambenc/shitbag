@@ -1,15 +1,16 @@
 import { redirect } from "next/navigation";
 import Link from "next/link";
-import { eq, desc } from "drizzle-orm";
+import { eq, and, desc } from "drizzle-orm";
 import { auth } from "@/lib/auth";
 import { getCurrentTenant } from "@/lib/tenant/resolve";
 import { withTenant } from "@/lib/tenant/withTenant";
-import { plantDiagnoses } from "@/db/schema";
+import { plantDiagnoses, photoJournalEntries, growingAreas } from "@/db/schema";
 import { getUserProfile } from "@/lib/onboarding/profile";
 import { getSubscription, isPaidTier } from "@/lib/billing/subscription";
 import { JobInterstitial } from "@/components/JobInterstitial";
 import { UploadAndDiagnoseForm } from "./UploadAndDiagnoseForm";
 import { severityLabels, severityBadgeClasses } from "@/lib/plantHealth/labels";
+import { growingAreaBaseLabel } from "@/lib/garden/labels";
 import { getPlantDiagnosesToday } from "@/lib/actions/plantHealth";
 import { MAX_DAILY_PLANT_DIAGNOSES } from "@/lib/ai/limits";
 
@@ -19,9 +20,15 @@ type RawOutput = {
   explanation?: string;
 };
 
-export default async function PlantHealthPage() {
+export default async function PlantHealthPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ growingAreaId?: string; taskId?: string }>;
+}) {
   const session = await auth();
   if (!session?.user) redirect("/login");
+
+  const params = await searchParams;
 
   const tenant = await getCurrentTenant();
   const profile = await getUserProfile(session.user.id, tenant.id);
@@ -51,18 +58,33 @@ export default async function PlantHealthPage() {
     );
   }
 
-  const diagnoses = await withTenant(tenant.id, async (tx) =>
+  const diagnosisRows = await withTenant(tenant.id, async (tx) =>
     tx
-      .select()
+      .select({ diagnosis: plantDiagnoses, area: growingAreas })
       .from(plantDiagnoses)
+      .leftJoin(photoJournalEntries, eq(plantDiagnoses.photoJournalEntryId, photoJournalEntries.id))
+      .leftJoin(growingAreas, eq(photoJournalEntries.growingAreaId, growingAreas.id))
       .where(eq(plantDiagnoses.userId, session.user.id))
       .orderBy(desc(plantDiagnoses.createdAt)),
   );
+  const diagnoses = diagnosisRows.map((r) => ({ ...r.diagnosis, area: r.area }));
 
   const pending = diagnoses.find((d) => d.status === "pending");
 
   const diagnosesToday = await getPlantDiagnosesToday(tenant.id, session.user.id);
   const diagnosesRemainingToday = Math.max(0, MAX_DAILY_PLANT_DIAGNOSES - diagnosesToday);
+
+  // Only trust a growingAreaId param that's actually this user's own area —
+  // same defensive re-validation as uploadAndDiagnoseAction itself.
+  const requestedArea = params.growingAreaId
+    ? await withTenant(tenant.id, async (tx) => {
+        const [area] = await tx
+          .select()
+          .from(growingAreas)
+          .where(and(eq(growingAreas.id, params.growingAreaId!), eq(growingAreas.userId, session.user.id)));
+        return area ?? null;
+      })
+    : null;
 
   return (
     <div className="mx-auto max-w-4xl px-6 py-16">
@@ -80,7 +102,11 @@ export default async function PlantHealthPage() {
         </div>
       ) : diagnosesRemainingToday > 0 ? (
         <div className="mt-8">
-          <UploadAndDiagnoseForm />
+          <UploadAndDiagnoseForm
+            growingAreaId={requestedArea?.id}
+            taskId={requestedArea ? params.taskId : undefined}
+            areaLabel={requestedArea ? growingAreaBaseLabel(requestedArea) : undefined}
+          />
           <p className="mt-2 text-xs text-(--text-muted)">
             {diagnosesRemainingToday} of {MAX_DAILY_PLANT_DIAGNOSES} plant checks left today
           </p>
@@ -112,6 +138,7 @@ export default async function PlantHealthPage() {
               const raw = d.rawOutput as RawOutput | null;
               return (
                 <div key={d.id} className="rounded-lg border border-black/10 bg-white p-6 shadow-card">
+                  {d.area && <p className="text-xs text-(--text-muted)">{growingAreaBaseLabel(d.area)}</p>}
                   <p className="font-display text-lg font-semibold">
                     {d.issue}
                     {d.severity && (

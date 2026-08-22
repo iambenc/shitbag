@@ -31,6 +31,8 @@ const GARDEN_TOOL_SEEDS: EquipmentTypeSeed[] = [
   { slug: "rake", name: "Garden Rake", category: "count", partnerLinkLabel: "Shop garden rakes", partnerLinkUrl: "https://example.com/partner/rake" },
   { slug: "hoe", name: "Garden Hoe", category: "count", partnerLinkLabel: "Shop garden hoes", partnerLinkUrl: "https://example.com/partner/hoe" },
   { slug: "wheelbarrow", name: "Wheelbarrow", category: "count", partnerLinkLabel: "Shop wheelbarrows", partnerLinkUrl: "https://example.com/partner/wheelbarrow" },
+  { slug: "storage-box", name: "Storage Box", category: "count", partnerLinkLabel: "Shop storage boxes", partnerLinkUrl: "https://example.com/partner/storage-box" },
+  { slug: "measuring-tape", name: "Measuring Tape", category: "count", partnerLinkLabel: "Shop measuring tapes", partnerLinkUrl: "https://example.com/partner/measuring-tape" },
 ];
 
 // Planting equipment — physical growing space (see SLUG_TO_GROWING_AREA_TYPE

@@ -1,8 +1,6 @@
 "use client";
 
 import { useActionState, useMemo, useState } from "react";
-import Link from "next/link";
-import { motion } from "framer-motion";
 import {
   createTaskAction,
   toggleTaskCompleteAction,
@@ -11,38 +9,15 @@ import {
   type CreateTaskState,
 } from "@/lib/actions/tasks";
 import { LeafAccent } from "@/components/LeafAccent";
-import { ChevronLeftIcon, ChevronRightIcon, WarningIcon } from "@/components/icons";
-import type { TaskStatus, TaskSource } from "@/db/schema";
+import { FlagIcon } from "@/components/icons";
+import { weatherCodeIcon } from "@/lib/weather/labels";
+import { getTaskCategory } from "@/lib/calendar/taskCategory";
+import type { DailyForecast, CurrentWeather } from "@/lib/weather";
+import { CalendarGrid, isoDate } from "./CalendarGrid";
+import { AgendaView } from "./AgendaView";
+import { TaskCard } from "./TaskCard";
+import type { Task } from "./types";
 
-type Task = {
-  id: string;
-  title: string;
-  notes: string | null;
-  dueDate: string;
-  hardDeadlineDate: string | null;
-  status: TaskStatus;
-  source: TaskSource;
-  isIndoor: boolean;
-  successionSeriesId: string | null;
-  seedBlocked: boolean;
-  // True once this task's due date falls after the date a since-lapsed
-  // subscription actually ended — see getSubscriptionExpiredAt. The task
-  // itself is never deleted, just visually obscured until they resubscribe.
-  blurred: boolean;
-};
-
-const WEEKDAY_LABELS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
-const MONTH_LABELS = [
-  "January", "February", "March", "April", "May", "June",
-  "July", "August", "September", "October", "November", "December",
-];
-
-function pad(n: number) {
-  return n.toString().padStart(2, "0");
-}
-function isoDate(year: number, monthIndex: number, day: number) {
-  return `${year}-${pad(monthIndex + 1)}-${pad(day)}`;
-}
 function todayIso() {
   const d = new Date();
   return isoDate(d.getFullYear(), d.getMonth(), d.getDate());
@@ -50,7 +25,19 @@ function todayIso() {
 
 const initialCreateState: CreateTaskState = {};
 
-export function CalendarView({ initialTasks }: { initialTasks: Task[] }) {
+export function CalendarView({
+  initialTasks,
+  initialHarvestDates,
+  weeklyForecast,
+  currentWeather,
+}: {
+  initialTasks: Task[];
+  initialHarvestDates: string[];
+  weeklyForecast: DailyForecast[] | null;
+  currentWeather: CurrentWeather | null;
+  postcode: string | null;
+}) {
+  const [viewMode, setViewMode] = useState<"month" | "agenda">("month");
   const [taskList, setTaskList] = useState(initialTasks);
   const today = todayIso();
   const [selectedDate, setSelectedDate] = useState(today);
@@ -61,7 +48,25 @@ export function CalendarView({ initialTasks }: { initialTasks: Task[] }) {
     async (prev: CreateTaskState, formData: FormData) => {
       const result = await createTaskAction(prev, formData);
       if (result.task) {
-        setTaskList((ts) => [...ts, result.task!]);
+        const t = result.task;
+        setTaskList((ts) => [
+          ...ts,
+          {
+            ...t,
+            category: getTaskCategory({
+              title: t.title,
+              source: t.source,
+              growingAreaId: null,
+              estimatedSeedsUsed: null,
+              activatesStageId: null,
+            }),
+            cropEmoji: null,
+            cropName: null,
+            growingAreaId: null,
+            areaLabel: null,
+            illustrationSrc: null,
+          },
+        ]);
       }
       return result;
     },
@@ -78,13 +83,21 @@ export function CalendarView({ initialTasks }: { initialTasks: Task[] }) {
     return map;
   }, [taskList]);
 
-  const firstWeekday = new Date(viewYear, viewMonth, 1).getDay();
-  const daysInMonth = new Date(viewYear, viewMonth + 1, 0).getDate();
-  const cells: (number | null)[] = [
-    ...Array.from({ length: firstWeekday }, () => null),
-    ...Array.from({ length: daysInMonth }, (_, i) => i + 1),
-  ];
-  while (cells.length % 7 !== 0) cells.push(null);
+  const harvestCountByDate = useMemo(() => {
+    const map = new Map<string, number>();
+    for (const date of initialHarvestDates) {
+      map.set(date, (map.get(date) ?? 0) + 1);
+    }
+    return map;
+  }, [initialHarvestDates]);
+
+  const weatherByDate = useMemo(() => {
+    const map = new Map<string, DailyForecast>();
+    for (const day of weeklyForecast ?? []) {
+      map.set(day.date, day);
+    }
+    return map;
+  }, [weeklyForecast]);
 
   function changeMonth(delta: number) {
     let m = viewMonth + delta;
@@ -123,238 +136,136 @@ export function CalendarView({ initialTasks }: { initialTasks: Task[] }) {
     await cancelSuccessionSeriesAction(successionSeriesId);
   }
 
-  const selectedTasks = (tasksByDate.get(selectedDate) ?? []).slice().sort((a, b) =>
-    a.title.localeCompare(b.title),
-  );
+  const selectedTasks = (tasksByDate.get(selectedDate) ?? []).slice().sort((a, b) => a.title.localeCompare(b.title));
+  const weatherImpactTask = selectedTasks.find((t) => t.source === "weather" && t.notes);
+  const dayForecast = weatherByDate.get(selectedDate);
 
   return (
-    <div className="flex flex-col gap-8">
-      <div>
-        <div className="mb-3 flex items-center justify-between">
+    <div className="flex flex-col gap-6">
+      <div className="inline-flex w-fit items-center gap-1 self-start rounded-full bg-black/5 p-1">
+        {(
+          [
+            { mode: "month", label: "Month" },
+            { mode: "agenda", label: "List View" },
+          ] as const
+        ).map(({ mode, label }) => (
           <button
+            key={mode}
             type="button"
-            onClick={() => changeMonth(-1)}
-            className="rounded-full bg-black/5 p-1.5 hover:bg-black/10 active:scale-95 transition"
-            aria-label="Previous month"
+            onClick={() => setViewMode(mode)}
+            className={`rounded-full px-4 py-1.5 text-sm font-medium transition ${
+              viewMode === mode ? "bg-white text-(--brand-primary) shadow-card" : "text-(--text-muted) hover:text-(--text-heading)"
+            }`}
           >
-            <ChevronLeftIcon className="h-4 w-4" />
+            {label}
           </button>
-          <p className="font-medium">
-            {MONTH_LABELS[viewMonth]} {viewYear}
-          </p>
-          <button
-            type="button"
-            onClick={() => changeMonth(1)}
-            className="rounded-full bg-black/5 p-1.5 hover:bg-black/10 active:scale-95 transition"
-            aria-label="Next month"
-          >
-            <ChevronRightIcon className="h-4 w-4" />
-          </button>
-        </div>
-        <div className="grid grid-cols-7 gap-1 text-center text-xs text-(--text-muted)">
-          {WEEKDAY_LABELS.map((w) => (
-            <div key={w}>{w}</div>
-          ))}
-        </div>
-        <div className="mt-1 grid grid-cols-7 gap-1">
-          {cells.map((day, i) => {
-            if (day === null) return <div key={`blank-${i}`} />;
-            const date = isoDate(viewYear, viewMonth, day);
-            const count = tasksByDate.get(date)?.length ?? 0;
-            const isSelected = date === selectedDate;
-            const isToday = date === today;
-            return (
-              <button
-                type="button"
-                key={date}
-                onClick={() => setSelectedDate(date)}
-                className={`relative flex aspect-square flex-col items-center justify-center overflow-hidden rounded-md text-sm ${
-                  isSelected
-                    ? "text-white"
-                    : isToday
-                      ? "border border-(--brand-primary) text-(--brand-primary)"
-                      : "hover:bg-black/5"
-                }`}
-              >
-                {isSelected && (
-                  <motion.div
-                    layoutId="calendar-day-highlight"
-                    className="absolute inset-0 bg-(--brand-primary)"
-                    transition={{ type: "spring", duration: 0.35, bounce: 0.15 }}
-                  />
-                )}
-                <span className="relative">{day}</span>
-                {count > 0 && (
-                  <span
-                    className={`relative mt-0.5 h-2 w-2 rounded-full ${isSelected ? "bg-white" : "bg-(--brand-primary)"}`}
-                  />
-                )}
-              </button>
-            );
-          })}
-        </div>
+        ))}
       </div>
 
-      <section>
-        <h2 className="text-sm font-medium text-(--text-muted)">Tasks for {selectedDate}</h2>
-        {selectedTasks.length === 0 ? (
-          <div className="mt-2 flex items-center gap-2 rounded-lg bg-(--surface-tint) p-3">
-            <LeafAccent className="h-5 w-5 shrink-0 text-(--brand-primary)" />
-            <p className="text-sm text-(--text-muted)">Nothing due this day.</p>
+      <div className="grid grid-cols-1 gap-6 lg:grid-cols-[1fr_320px]">
+        {viewMode === "month" ? (
+          <div className="rounded-lg border border-black/10 bg-white p-4 shadow-card">
+            <CalendarGrid
+              viewYear={viewYear}
+              viewMonth={viewMonth}
+              onChangeMonth={changeMonth}
+              today={today}
+              selectedDate={selectedDate}
+              onSelectDate={setSelectedDate}
+              tasksByDate={tasksByDate}
+              harvestCountByDate={harvestCountByDate}
+              weatherByDate={weatherByDate}
+            />
           </div>
         ) : (
-          <ul className="mt-2 flex flex-col gap-2">
-            {selectedTasks.map((task) => (
-              <li
-                key={task.id}
-                className={`relative flex items-start justify-between gap-3 rounded-lg border p-3 ${
-                  task.status === "missed" ? "border-red-200 bg-red-50" : "border-black/10 bg-white"
-                }`}
-              >
-                {task.blurred ? (
-                  <>
-                    {/* Never deleted from the DB, just hidden from view —
-                        this is purely a display restriction, not a
-                        pointer-events:none-only one: aria-hidden plus a
-                        tabIndex-free blurred block keeps it out of the
-                        accessibility tree entirely, so a screen reader
-                        doesn't announce content the visual UI is hiding. */}
-                    <div aria-hidden="true" className="pointer-events-none flex-1 select-none text-sm blur-sm">
-                      <span>{task.title}</span>
-                      {task.notes && <p className="text-xs text-(--text-muted)">{task.notes}</p>}
-                    </div>
-                    <Link
-                      href="/upgrade"
-                      className="absolute inset-0 flex items-center justify-center rounded-lg bg-white/50 text-xs font-medium text-(--brand-primary) underline"
-                    >
-                      Resubscribe to see this
-                    </Link>
-                  </>
-                ) : (
-                  <label className="flex flex-1 items-start gap-2 text-sm">
-                    {task.status === "missed" ? (
-                      <WarningIcon className="mt-1 h-4 w-4 shrink-0 text-red-700" />
-                    ) : (
-                      <input
-                        type="checkbox"
-                        checked={task.status === "completed"}
-                        onChange={() => handleToggle(task)}
-                        className="mt-1 accent-(--brand-primary)"
-                      />
-                    )}
-                    <span>
-                      <span
-                        className={`transition-colors duration-300 ${
-                          task.status === "completed"
-                            ? "line-through text-(--text-muted)"
-                            : task.status === "missed"
-                              ? "text-red-800"
-                              : ""
-                        }`}
-                      >
-                        {task.title}
-                      </span>
-                      {task.source === "weather" && (
-                        <span className="ml-2 whitespace-nowrap rounded-full bg-(--brand-secondary)/40 px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide">
-                          Weather
-                        </span>
-                      )}
-                      {task.source === "maintenance" && (
-                        <span
-                          className="ml-2 whitespace-nowrap rounded-full bg-emerald-100 px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide text-emerald-800"
-                          title="Seasonal plot upkeep, suggested automatically"
-                        >
-                          Maintenance
-                        </span>
-                      )}
-                      {task.isIndoor && (
-                        <span
-                          className="ml-2 whitespace-nowrap rounded-full bg-(--brand-primary)/15 px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide text-(--brand-primary)"
-                          title="Sow or start this one indoors"
-                        >
-                          Indoor
-                        </span>
-                      )}
-                      {task.successionSeriesId && (
-                        <span
-                          className="ml-2 whitespace-nowrap rounded-full bg-(--brand-primary)/15 px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide text-(--brand-primary)"
-                          title="One of several staggered sowings of this crop, for a continuous harvest"
-                        >
-                          Succession
-                        </span>
-                      )}
-                      {task.status === "missed" && (
-                        <span className="ml-2 whitespace-nowrap rounded-full bg-red-200 px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide text-red-800">
-                          Missed
-                        </span>
-                      )}
-                      {task.seedBlocked && (
-                        <span
-                          className="ml-2 whitespace-nowrap rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide text-amber-800"
-                          title="Not enough seeds in your inventory — pushed back a week at a time until you have enough or order more"
-                        >
-                          Requires seeds
-                        </span>
-                      )}
-                      {task.notes && <p className="text-xs text-(--text-muted)">{task.notes}</p>}
-                      {task.hardDeadlineDate && (
-                        <p className="text-xs text-(--text-muted)">Last date: {task.hardDeadlineDate}</p>
-                      )}
-                    </span>
-                  </label>
-                )}
-                {!task.blurred && (
-                  <div className="flex flex-col items-end gap-1">
-                    {task.successionSeriesId && task.status === "pending" && (
-                      <button
-                        type="button"
-                        onClick={() => handleCancelSeries(task.successionSeriesId!)}
-                        className="text-xs text-(--text-muted) hover:text-red-700"
-                      >
-                        Cancel remaining
-                      </button>
-                    )}
-                    <button
-                      type="button"
-                      onClick={() => handleDelete(task.id)}
-                      className="text-xs text-(--text-muted) hover:text-red-700"
-                      aria-label={`Delete ${task.title}`}
-                    >
-                      Delete
-                    </button>
-                  </div>
-                )}
-              </li>
-            ))}
-          </ul>
+          <div>
+            <AgendaView
+              tasksByDate={tasksByDate}
+              today={today}
+              onToggle={handleToggle}
+              onDelete={handleDelete}
+              onCancelSeries={handleCancelSeries}
+            />
+          </div>
         )}
 
-        <form action={createFormAction} className="mt-4 flex flex-col gap-2 rounded-lg border border-black/10 bg-white p-3 shadow-card">
-          <input type="hidden" name="dueDate" value={selectedDate} readOnly />
-          <div className="flex gap-2">
-            <input
-              name="title"
-              type="text"
-              required
-              placeholder="Add a task for this day…"
-              className="flex-1 rounded-md border border-black/15 px-3 py-1.5 text-sm"
-            />
-            <button
-              type="submit"
-              className="rounded-full bg-(--brand-primary) px-4 py-1.5 text-sm text-white shadow-button hover:brightness-90 active:scale-95 transition"
-            >
-              Add
-            </button>
+        <div className="flex flex-col gap-4">
+          <div className="rounded-lg border border-black/10 bg-white p-4 shadow-card">
+            <div className="flex items-center justify-between">
+              <p className="font-display text-base font-semibold">
+                {selectedDate === today
+                  ? "Today"
+                  : new Date(selectedDate).toLocaleDateString("en-GB", { weekday: "long", day: "numeric", month: "long" })}
+              </p>
+              <span className="rounded-full bg-(--brand-primary)/10 px-2.5 py-0.5 text-xs font-medium text-(--brand-primary)">
+                {selectedTasks.length} task{selectedTasks.length === 1 ? "" : "s"}
+              </span>
+            </div>
+
+            {selectedDate === today && currentWeather ? (
+              <div className="mt-2 flex items-center gap-1.5 text-sm text-(--text-muted)">
+                {weatherCodeIcon(currentWeather.weatherCode)({ className: "h-5 w-5 text-(--brand-primary)" })}
+                {Math.round(currentWeather.temperatureC)}° · feels like {Math.round(currentWeather.apparentTemperatureC)}°
+              </div>
+            ) : selectedDate !== today && dayForecast ? (
+              <div className="mt-2 flex items-center gap-1.5 text-sm text-(--text-muted)">
+                {weatherCodeIcon(dayForecast.weatherCode)({ className: "h-5 w-5 text-(--brand-primary)" })}
+                {Math.round(dayForecast.maxTempC)}° / {Math.round(dayForecast.minTempC)}°
+              </div>
+            ) : null}
+
+            {weatherImpactTask && (
+              <div className="mt-3 rounded-md bg-blue-50 p-3">
+                <p className="flex items-center gap-1.5 text-xs font-medium text-blue-800">
+                  <FlagIcon className="h-3.5 w-3.5" />
+                  {weatherImpactTask.title}
+                </p>
+                {weatherImpactTask.notes && <p className="mt-1 text-xs text-blue-700">{weatherImpactTask.notes}</p>}
+              </div>
+            )}
           </div>
-          <input
-            name="notes"
-            type="text"
-            placeholder="Notes (optional)"
-            className="rounded-md border border-black/15 px-3 py-1.5 text-sm"
-          />
-          {createState.error && <p className="text-sm text-red-700">{createState.error}</p>}
-        </form>
-      </section>
+
+          {viewMode === "month" &&
+            (selectedTasks.length === 0 ? (
+              <div className="flex items-center gap-2 rounded-lg bg-(--surface-tint) p-3">
+                <LeafAccent className="h-5 w-5 shrink-0 text-(--brand-primary)" />
+                <p className="text-sm text-(--text-muted)">Nothing due this day.</p>
+              </div>
+            ) : (
+              <ul className="flex flex-col gap-2">
+                {selectedTasks.map((task) => (
+                  <TaskCard key={task.id} task={task} onToggle={handleToggle} onDelete={handleDelete} onCancelSeries={handleCancelSeries} />
+                ))}
+              </ul>
+            ))}
+
+          <form action={createFormAction} className="flex flex-col gap-2 rounded-lg border border-black/10 bg-white p-3 shadow-card">
+            <input type="hidden" name="dueDate" value={selectedDate} readOnly />
+            <div className="flex gap-2">
+              <input
+                name="title"
+                type="text"
+                required
+                placeholder="Add a task for this day…"
+                className="flex-1 rounded-md border border-black/15 px-3 py-1.5 text-sm"
+              />
+              <button
+                type="submit"
+                className="rounded-full bg-(--brand-primary) px-4 py-1.5 text-sm text-white shadow-button hover:brightness-90 active:scale-95 transition"
+              >
+                Add
+              </button>
+            </div>
+            <input
+              name="notes"
+              type="text"
+              placeholder="Notes (optional)"
+              className="rounded-md border border-black/15 px-3 py-1.5 text-sm"
+            />
+            {createState.error && <p className="text-sm text-red-700">{createState.error}</p>}
+          </form>
+        </div>
+      </div>
     </div>
   );
 }

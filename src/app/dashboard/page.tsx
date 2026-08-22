@@ -1,91 +1,28 @@
 import { redirect } from "next/navigation";
-import Link from "next/link";
-import { eq, and, desc, asc } from "drizzle-orm";
+import { eq, and } from "drizzle-orm";
 import { auth } from "@/lib/auth";
 import { withTenant } from "@/lib/tenant/withTenant";
-import { userFavoriteCrops, tasks, shoppingListItems, crops, equipmentTypes, plantDiagnoses, seedInventory, userEquipment } from "@/db/schema";
-import { resolveSeedStock, type SeedStockRow } from "@/lib/seeds/stock";
+import { shoppingListItems, plantDiagnoses, seedInventory, userEquipment } from "@/db/schema";
 import { todayIso } from "@/lib/dates";
 import { getCurrentTenant } from "@/lib/tenant/resolve";
 import { getUserProfile } from "@/lib/onboarding/profile";
-import { plotSizeLabels, expertiseLevelLabels } from "@/lib/onboarding/labels";
-import { getSubscription, isPaidTier, getSubscriptionExpiredAt } from "@/lib/billing/subscription";
-import { severityLabels, severityBadgeClasses } from "@/lib/plantHealth/labels";
+import { getSubscription, isPaidTier } from "@/lib/billing/subscription";
 import { UpgradeBanner } from "@/components/UpgradeBanner";
 import { SetupBanner } from "@/components/SetupBanner";
-import { CalendarView } from "@/app/calendar/CalendarView";
-import { getWeeklyForecast } from "@/lib/weather";
-import { weatherCodeLabel, weatherCodeIcon } from "@/lib/weather/labels";
-import { EquipmentIcon } from "@/components/icons";
 import { FadeIn } from "@/components/FadeIn";
-import { FEATURE_FLAGS } from "@/lib/featureFlags";
-import { groupShoppingItems } from "@/lib/shopping/grouping";
-
-const RESOURCE_LINKS = [
-  {
-    href: "/grow-plan",
-    title: "AI Grow Plan",
-    description: "A plan tailored to your plot, seeds, and experience — membership feature.",
-  },
-  {
-    href: "/seeds",
-    title: "Seed inventory",
-    description: "Add seeds you've bought — prioritised in your AI grow plan.",
-  },
-  {
-    href: "/shopping-list",
-    title: "Shopping list",
-    description: "See everything you need to pick up.",
-  },
-  {
-    href: "/plant-health",
-    title: "Plant health",
-    description: "Upload a photo of a struggling plant for an AI diagnosis — membership feature.",
-  },
-  {
-    href: "/favourites",
-    title: "Favourite crops",
-    description: "Update what fruit and veg you're most excited to grow.",
-  },
-  {
-    href: "/garden",
-    title: "Manage your garden layout",
-    description: "Tell us which pots, trays, planters, and beds are set up and ready to grow in.",
-  },
-  {
-    href: "/harvests",
-    title: "Harvests",
-    description: "Log what you've picked.",
-  },
-];
-
-// Feature-flagged, not part of the permanent list above — appended only
-// while FEATURE_FLAGS.moneySavedReport is on. The route itself also 404s
-// defensively (see src/app/savings/page.tsx) in case someone reaches it by
-// a guessed URL while this is off.
-const SAVINGS_RESOURCE_LINK = {
-  href: "/savings",
-  title: "Savings report",
-  description: "See how much you've saved growing your own — membership feature.",
-};
-
-function shoppingItemLabel(item: {
-  cropName: string | null;
-  cropEmoji: string | null;
-  equipmentTypeName: string | null;
-  freeText: string | null;
-}) {
-  if (item.cropName) return `${item.cropEmoji ?? ""} ${item.cropName}`.trim();
-  if (item.equipmentTypeName) {
-    return (
-      <span className="inline-flex items-center gap-1">
-        <EquipmentIcon className="h-3.5 w-3.5 shrink-0 text-(--text-muted)" />
-        {item.equipmentTypeName}
-      </span>
-    );
-  }
-  return item.freeText;
-}
+import { getWeeklyForecast, getCurrentWeather } from "@/lib/weather";
+import { getMyGardenAreas } from "@/lib/garden/myGarden";
+import { getGardenHealthSummary } from "@/lib/garden/health";
+import { getDashboardTasks } from "@/lib/dashboard/tasksForDashboard";
+import { GreetingHeader } from "./GreetingHeader";
+import { CurrentWeatherCard } from "./CurrentWeatherCard";
+import { TodayTasksCard } from "./TodayTasksCard";
+import { ComingUpCard } from "./ComingUpCard";
+import { MyGardenGrid } from "./MyGardenGrid";
+import { GardenHealthCard } from "./GardenHealthCard";
+import { ResourceCardsRow } from "./ResourceCardsRow";
+import { WeeklyForecastStrip } from "./WeeklyForecastStrip";
+import { FloatingActionButton } from "./FloatingActionButton";
 
 export default async function DashboardPage() {
   const session = await auth();
@@ -95,279 +32,119 @@ export default async function DashboardPage() {
   const profile = await getUserProfile(session.user.id, tenant.id);
   if (!profile?.onboardingCompletedAt) redirect("/onboarding/location");
 
-  // Free/no-key API, so shown to every user regardless of tier — unlike the
-  // AI-powered features, there's no cost to gate. Runs alongside the DB
-  // fetch below rather than after it, since it's an independent network call.
-  const forecastPromise =
-    profile.latitude != null && profile.longitude != null
-      ? getWeeklyForecast(profile.latitude, profile.longitude)
-      : Promise.resolve(null);
+  const today = todayIso();
 
-  const [{ favoriteCount, allTasks, shoppingItems, latestDiagnosis, seedRows, hasEquipment }, weeklyForecast] =
+  // Free/no-key API, so fetched regardless of tier — runs alongside the DB
+  // fetch below rather than after it.
+  const hasLocation = profile.latitude != null && profile.longitude != null;
+  const weatherPromise = hasLocation
+    ? Promise.all([
+        getWeeklyForecast(profile.latitude!, profile.longitude!),
+        getCurrentWeather(profile.latitude!, profile.longitude!),
+      ])
+    : Promise.resolve([null, null] as const);
+
+  const [{ hasEquipment, hasSeeds, seedVarietyCount, shoppingItemCount, hasDiagnosis, myGarden, health, dashboardTasks }, [weeklyForecast, currentWeather]] =
     await Promise.all([
       withTenant(tenant.id, async (tx) => {
-        const [favorites, allTasks, shoppingItems, diagnoses, seedRows, equipmentRow] = await Promise.all([
-          tx
-            .select({ liked: userFavoriteCrops.liked })
-            .from(userFavoriteCrops)
-            .where(eq(userFavoriteCrops.userId, session.user.id)),
-          tx.select().from(tasks).where(eq(tasks.userId, session.user.id)).orderBy(asc(tasks.dueDate)),
-          tx
-            .select({ item: shoppingListItems, crop: crops, equipmentType: equipmentTypes })
-            .from(shoppingListItems)
-            .leftJoin(crops, eq(shoppingListItems.cropId, crops.id))
-            .leftJoin(equipmentTypes, eq(shoppingListItems.equipmentTypeId, equipmentTypes.id))
-            .where(and(eq(shoppingListItems.userId, session.user.id), eq(shoppingListItems.status, "pending")))
-            .orderBy(asc(shoppingListItems.createdAt))
-            .limit(6),
-          tx
-            .select()
-            .from(plantDiagnoses)
-            .where(eq(plantDiagnoses.userId, session.user.id))
-            .orderBy(desc(plantDiagnoses.createdAt))
-            .limit(1),
-          tx
-            .select({ cropId: seedInventory.cropId, varietyId: seedInventory.varietyId, seedCount: seedInventory.seedCount })
-            .from(seedInventory)
-            .where(eq(seedInventory.userId, session.user.id)),
-          // Existence-only check for SetupBanner — any owned equipment row
-          // counts (matches how permissive the old onboarding equipment
-          // step was: adding even a single tool satisfied "Continue", no
-          // growing-space-specific minimum).
+        const [equipmentRow, seedRows, shoppingRows, diagnosisRows, myGardenResult] = await Promise.all([
+          // Existence-only check for SetupBanner — matches how permissive the
+          // old onboarding equipment step was.
           tx.select({ id: userEquipment.id }).from(userEquipment).where(eq(userEquipment.userId, session.user.id)).limit(1),
+          tx.select({ id: seedInventory.id }).from(seedInventory).where(eq(seedInventory.userId, session.user.id)),
+          tx
+            .select({ id: shoppingListItems.id })
+            .from(shoppingListItems)
+            .where(and(eq(shoppingListItems.userId, session.user.id), eq(shoppingListItems.status, "pending"))),
+          tx.select({ id: plantDiagnoses.id }).from(plantDiagnoses).where(eq(plantDiagnoses.userId, session.user.id)).limit(1),
+          getMyGardenAreas(tx, session.user.id),
         ]);
+
+        const areaLabelByAreaId = new Map(myGardenResult.cards.map((c) => [c.id, c.displayLabel]));
+        const [healthSummary, taskSplit] = await Promise.all([
+          getGardenHealthSummary(tx, session.user.id),
+          getDashboardTasks(
+            tx,
+            session.user.id,
+            today,
+            myGardenResult.areaLabelByRecommendationId,
+            areaLabelByAreaId,
+          ),
+        ]);
+
         return {
-          favoriteCount: favorites.filter((r) => r.liked).length,
-          allTasks,
-          shoppingItems,
-          latestDiagnosis: diagnoses[0] ?? null,
-          seedRows,
           hasEquipment: equipmentRow.length > 0,
+          hasSeeds: seedRows.length > 0,
+          seedVarietyCount: seedRows.length,
+          shoppingItemCount: shoppingRows.length,
+          hasDiagnosis: diagnosisRows.length > 0,
+          myGarden: myGardenResult.cards,
+          health: healthSummary,
+          dashboardTasks: taskSplit,
         };
       }),
-      forecastPromise,
+      weatherPromise,
     ]);
+
   const subscription = await getSubscription(session.user.id, tenant.id);
   const paid = isPaidTier(subscription);
-  // Tasks are never deleted when a subscription lapses — just visually
-  // blurred once their due date falls past the date access actually ended.
-  // See /calendar's page for the fuller comment.
-  const subscriptionExpiredAt = getSubscriptionExpiredAt(subscription);
-  function isBlurred(t: { dueDate: string }): boolean {
-    return subscriptionExpiredAt !== null && t.dueDate > subscriptionExpiredAt;
-  }
-
-  // Same batched-once approach as /calendar's page — see its comment for why
-  // this mustn't be recomputed per-task or diverge from the daily push-back
-  // job's own tri-state stock semantics.
-  const seedRowsByCrop = new Map<string, SeedStockRow[]>();
-  for (const row of seedRows) {
-    const list = seedRowsByCrop.get(row.cropId) ?? [];
-    list.push({ varietyId: row.varietyId, seedCount: row.seedCount });
-    seedRowsByCrop.set(row.cropId, list);
-  }
-  const hasSeeds = seedRows.length > 0;
-  const today = todayIso();
-  function isSeedBlocked(t: (typeof allTasks)[number]): boolean {
-    if (t.status !== "pending" || !t.cropId || !t.estimatedSeedsUsed || t.dueDate > today) return false;
-    const stock = resolveSeedStock(seedRowsByCrop.get(t.cropId) ?? [], t.varietyId);
-    return stock.known && stock.total < t.estimatedSeedsUsed;
-  }
-
-  // Same combining behavior as the full /shopping-list page — see
-  // src/lib/shopping/grouping.ts. Grouped from the already-limit(6)'d raw
-  // rows, so a preview with duplicates may show fewer than 6 lines; that's
-  // fine (arguably more correct) for a glance-only widget, not worth
-  // fetching extra rows just to guarantee a fixed count post-grouping.
-  const shoppingItemGroups = groupShoppingItems(
-    shoppingItems.map((r) => ({
-      id: r.item.id,
-      cropId: r.item.cropId,
-      cropName: r.crop?.name ?? null,
-      cropEmoji: r.crop?.emoji ?? null,
-      equipmentTypeId: r.item.equipmentTypeId,
-      equipmentTypeName: r.equipmentType?.name ?? null,
-      freeText: r.item.freeText,
-      quantityLabel: r.item.quantityLabel,
-      status: r.item.status,
-    })),
-  );
 
   return (
-    <div className="mx-auto max-w-5xl px-6 py-16">
-      <h1 className="font-display text-3xl font-semibold text-(--brand-primary)">
-        Welcome, {session.user.email}
-      </h1>
-      <p className="mt-2 text-sm text-(--text-muted)">Tenant: {tenant.displayName}</p>
-
-      <SetupBanner hasEquipment={hasEquipment} hasSeeds={hasSeeds} />
+    <div className="relative mx-auto max-w-6xl px-6 py-10">
+      <FadeIn index={0}>
+        <SetupBanner hasEquipment={hasEquipment} hasSeeds={hasSeeds} />
+      </FadeIn>
 
       {!paid && (
-        <div className={hasEquipment && hasSeeds ? "mt-8" : "mt-4"}>
-          <UpgradeBanner />
-        </div>
+        <FadeIn index={1}>
+          <div className={hasEquipment && hasSeeds ? "mt-6" : "mt-4"}>
+            <UpgradeBanner />
+          </div>
+        </FadeIn>
       )}
 
-      <div className="mt-8 grid gap-6 lg:grid-cols-3">
-        <div className="flex flex-col gap-4 lg:col-span-2">
-          <FadeIn index={0}>
-          <div className="rounded-lg border border-black/10 bg-white p-6 shadow-card">
-            <p className="font-display text-lg font-semibold">Weather this week</p>
-            <div className="mt-3">
-              {!weeklyForecast ? (
-                <p className="text-sm text-(--text-muted)">
-                  {profile.latitude != null ? "Weather is unavailable right now." : "Add your postcode to see a forecast."}
-                </p>
-              ) : (
-                <div className="grid grid-cols-4 gap-3 sm:grid-cols-7">
-                  {weeklyForecast.map((day, i) => {
-                    const WeatherIcon = weatherCodeIcon(day.weatherCode);
-                    return (
-                      <div key={day.date} className="flex flex-col items-center gap-1 text-center text-xs">
-                        <p className="text-(--text-muted)">
-                          {i === 0 ? "Today" : new Date(day.date).toLocaleDateString("en-GB", { weekday: "short" })}
-                        </p>
-                        <span role="img" aria-label={weatherCodeLabel(day.weatherCode)} title={weatherCodeLabel(day.weatherCode)}>
-                          <WeatherIcon className="h-8 w-8 text-(--brand-primary)" />
-                        </span>
-                        <p className="font-medium">{Math.round(day.maxTempC)}°</p>
-                        <p className="text-(--text-muted)">{Math.round(day.minTempC)}°</p>
-                        {day.precipitationMm >= 1 && (
-                          <p className="text-(--text-muted)">💧{Math.round(day.precipitationMm)}mm</p>
-                        )}
-                      </div>
-                    );
-                  })}
-                </div>
-              )}
-            </div>
+      <FadeIn index={2}>
+        <div className="mt-6 grid grid-cols-1 gap-6 lg:grid-cols-3">
+          <div className="lg:col-span-2">
+            <GreetingHeader jobsToday={dashboardTasks.today.length} />
           </div>
-          </FadeIn>
-
-          <FadeIn index={1}>
-          <div className="rounded-lg border border-black/10 border-t-4 border-t-(--brand-secondary) bg-white p-6 shadow-card">
-            <div className="flex items-center justify-between">
-              <p className="font-display text-lg font-semibold">Calendar</p>
-              <Link href="/calendar" className="text-sm text-(--brand-primary) underline">
-                Open full calendar →
-              </Link>
-            </div>
-            <div className="mt-3">
-              <CalendarView
-                initialTasks={allTasks.map((t) => ({
-                  id: t.id,
-                  title: t.title,
-                  notes: t.notes,
-                  dueDate: t.dueDate,
-                  hardDeadlineDate: t.hardDeadlineDate,
-                  status: t.status,
-                  source: t.source,
-                  isIndoor: t.isIndoor,
-                  successionSeriesId: t.successionSeriesId,
-                  seedBlocked: isSeedBlocked(t),
-                  blurred: isBlurred(t),
-                }))}
-              />
-            </div>
-          </div>
-          </FadeIn>
-
-          <FadeIn index={2}>
-          <div className="rounded-lg border border-black/10 bg-white p-6 shadow-card">
-            <div className="flex items-center justify-between">
-              <p className="font-display text-lg font-semibold">Shopping list</p>
-              <Link href="/shopping-list" className="text-sm text-(--brand-primary) underline">
-                View full list →
-              </Link>
-            </div>
-            <div className="mt-3">
-              {shoppingItemGroups.length === 0 ? (
-                <p className="text-sm text-(--text-muted)">Nothing pending — you&rsquo;re all stocked up.</p>
-              ) : (
-                <ul className="flex flex-col gap-1 text-sm">
-                  {shoppingItemGroups.map((group) => {
-                    const item = group.items[0];
-                    return (
-                      <li key={group.key} className="flex items-center justify-between gap-2">
-                        <span>{shoppingItemLabel({ cropName: item.cropName, cropEmoji: item.cropEmoji, equipmentTypeName: item.equipmentTypeName, freeText: item.freeText })}</span>
-                        <span className="text-(--text-muted)">{group.quantitySummary}</span>
-                      </li>
-                    );
-                  })}
-                </ul>
-              )}
-            </div>
-          </div>
-          </FadeIn>
-
-          <FadeIn index={3}>
-          <div className="rounded-lg border border-black/10 bg-white p-6 shadow-card">
-            <div className="flex items-center justify-between">
-              <p className="font-display text-lg font-semibold">Plant health</p>
-              <Link href="/plant-health" className="text-sm text-(--brand-primary) underline">
-                View plant health →
-              </Link>
-            </div>
-            <div className="mt-3 text-sm">
-              {!paid ? (
-                <p className="text-(--text-muted)">
-                  Upload a photo of a struggling plant for an AI diagnosis — membership feature.
-                </p>
-              ) : !latestDiagnosis ? (
-                <p className="text-(--text-muted)">No diagnoses yet — upload a photo to get started.</p>
-              ) : latestDiagnosis.status === "pending" ? (
-                <p className="text-(--text-muted)">Your plant is being diagnosed…</p>
-              ) : latestDiagnosis.status === "failed" ? (
-                <p className="text-red-700">Your last diagnosis failed — try again.</p>
-              ) : (
-                <p>
-                  {latestDiagnosis.issue}
-                  {latestDiagnosis.severity && (
-                    <span
-                      className={`ml-2 rounded-full px-2 py-0.5 text-xs ${severityBadgeClasses[latestDiagnosis.severity]}`}
-                    >
-                      {severityLabels[latestDiagnosis.severity]}
-                    </span>
-                  )}
-                </p>
-              )}
-            </div>
-          </div>
-          </FadeIn>
-
-          <FadeIn index={4}>
-          <div className="rounded-lg border border-black/10 bg-white p-6 shadow-card">
-            <p className="font-display text-lg font-semibold">Your garden profile is set up.</p>
-            <ul className="mt-3 flex flex-col gap-1 text-sm text-(--text-muted)">
-              <li>Plot: {profile.plotSize ? plotSizeLabels[profile.plotSize] : "—"}</li>
-              <li>Experience: {profile.expertiseLevel ? expertiseLevelLabels[profile.expertiseLevel] : "—"}</li>
-              <li>
-                Favourite crops picked: {favoriteCount}{" "}
-                <Link href="/favourites" className="text-(--brand-primary) underline">
-                  edit
-                </Link>
-              </li>
-            </ul>
-          </div>
-          </FadeIn>
+          <CurrentWeatherCard current={currentWeather} postcode={profile.postcode} />
         </div>
+      </FadeIn>
 
-        <div className="flex flex-col gap-3">
-          {[...RESOURCE_LINKS, ...(FEATURE_FLAGS.moneySavedReport ? [SAVINGS_RESOURCE_LINK] : [])].map((link, i) => (
-            <FadeIn key={link.href} index={i + 5}>
-              <Link
-                href={link.href}
-                className="flex items-center justify-between rounded-lg border border-black/10 bg-white p-4 shadow-card hover:border-(--brand-primary)/40 hover:-translate-y-0.5 hover:shadow-lg transition-all duration-200"
-              >
-                <div>
-                  <p className="font-display text-lg font-semibold">{link.title}</p>
-                  <p className="mt-1 text-sm text-(--text-muted)">{link.description}</p>
-                </div>
-              </Link>
-            </FadeIn>
-          ))}
+      <FadeIn index={3}>
+        <div className="mt-6 grid grid-cols-1 gap-6 lg:grid-cols-3">
+          <div className="lg:col-span-2">
+            <TodayTasksCard initialTasks={dashboardTasks.today} />
+          </div>
+          <ComingUpCard tasks={dashboardTasks.upcoming} />
         </div>
-      </div>
+      </FadeIn>
+
+      <FadeIn index={4}>
+        <div className="mt-6">
+          <MyGardenGrid areas={myGarden} />
+        </div>
+      </FadeIn>
+
+      <FadeIn index={5}>
+        <div className="mt-6 grid grid-cols-1 gap-6 lg:grid-cols-2">
+          <GardenHealthCard summary={health} />
+          <ResourceCardsRow
+            seedVarietyCount={seedVarietyCount}
+            shoppingItemCount={shoppingItemCount}
+            hasDiagnosis={hasDiagnosis}
+          />
+        </div>
+      </FadeIn>
+
+      <FadeIn index={6}>
+        <div className="mt-6">
+          <WeeklyForecastStrip weeklyForecast={weeklyForecast} hasPostcode={profile.postcode != null} />
+        </div>
+      </FadeIn>
+
+      <FloatingActionButton />
     </div>
   );
 }

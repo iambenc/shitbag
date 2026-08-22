@@ -5701,3 +5701,732 @@ ambiguous match).
 `ExperienceForm.tsx`, and `plot.ts`. `tests-e2e/onboarding.spec.ts` (the only e2e test touching any
 of these fields) passes end-to-end unchanged, exercising all four stepper inputs plus the new toggle
 switch's `.check()` interaction.
+
+## Feature — dashboard visual redesign (illustrated cards, pill nav, health donut, FAB)
+
+Requested: a mockup image of a much richer dashboard (pill nav with bell/avatar dropdown, current-
+weather widget, "Today's garden tasks" checklist, "Coming up" list, an illustrated grid of growing-
+area cards, a "Garden health" donut, three promo cards, the existing 7-day forecast reskinned, a
+floating "+" action button, a footer tip bar), "ensuring it will still look good on mobile browsers."
+Since `SiteHeader.tsx` is shared across every route, this became a global-chrome change, not just a
+dashboard-page one — confirmed with the user before starting (plan mode). The user supplied 8 real
+illustration PNGs for the growing-area types (now at `public/illustrations/growing-areas/*.png`,
+downscaled from ~1.2–2.5MB sources to ~6.3MB total via `sips -Z 900`); no artwork exists for seed/
+shopping/scanner promo cards, so those reuse existing icon/emoji patterns rather than fabricated art.
+
+**Data-model gaps, each resolved deliberately rather than fabricated** (all confirmed with the user
+or decided directly, documented in the approved plan):
+- **Garden Health donut** is based on growing areas, not a fabricated per-plant model (no plant
+  entity exists anywhere in the schema; photo diagnoses aren't linked to a specific plant/area at
+  all — see `plant-diagnosis.ts`). New `src/lib/garden/health.ts`'s `getGardenHealthSummary` buckets
+  each *occupied* area (one with an `active` `planRecommendationStages` row, non-rejected
+  recommendation) by tasks under **that recommendation** (`task.planRecommendationId`), not the
+  narrower `task.activatesStageId` link — the one task with `activatesStageId` set is exactly the
+  task whose completion *makes* the stage active, so for any already-active stage it's already
+  `completed` by construction; the broader join is what actually catches ongoing watering/feeding
+  tasks for the crop occupying that area. Unoccupied areas are excluded from every bucket (empty ≠
+  healthy). Copy says "areas," never "plants."
+- **No growing-area name field** (confirmed in `growing-area.ts`'s schema) → new
+  `growingAreaBaseLabel()` in `src/lib/garden/labels.ts` computes a display label from type + size
+  (e.g. "20cm Pot", "Greenhouse"); `src/lib/garden/myGarden.ts`'s `getMyGardenAreas` deduplicates
+  identical labels across a user's own areas with a numeric suffix only when a real collision exists.
+- **No user display-name field** → a generic time-of-day greeting ("Good morning/afternoon/evening
+  🌱") instead of a fabricated name.
+- **No per-task duration field** → the mockup's "estimated total time" line is omitted rather than
+  invented.
+- **No notifications table** → the header bell's badge is a derived count of the user's `missed`
+  tasks (already-queryable data, no new table), computed once in `layout.tsx` (header-scoped, not
+  dashboard-scoped, so it's correct on every route) and threaded into `SiteHeader`; links to
+  `/calendar`, no dropdown/inbox.
+- **No "add a plant instance" feature** → the mockup's 6-item FAB menu ships with 5 ("Add plant"
+  dropped — "Add seeds" and "Add garden area" already cover the two real "I have something new"
+  flows).
+- **Resource links**: the mockup shows only 3 promo cards, but the old dashboard exposed 7 — kept the
+  3 mockup'd promo cards (Seed inventory, Shopping list, Plant health scanner) as the visual
+  centerpiece, plus a slim text-link row underneath for AI Grow Plan/Favourites/Harvests/Garden
+  layout, so nothing existing became harder to reach (confirmed with the user).
+
+**New code**:
+- `src/lib/weather/index.ts` gains `getCurrentWeather()`, mirroring `getForecast()`/
+  `getWeeklyForecast()`'s exact conventions (same forced-scenario dev override, same
+  try/catch/console.error) — a separate function for the same reason those two are already separate
+  from each other, using Open-Meteo's free `current=...` param (no key). Location text is the user's
+  stored postcode verbatim — no reverse-geocoding/place-name lookup added.
+- `src/lib/garden/myGarden.ts`, `src/lib/garden/health.ts`, `src/lib/garden/illustrations.ts`,
+  `src/lib/dashboard/tasksForDashboard.ts` — new query/helper modules, detailed above.
+- `src/components/UserMenu.tsx` (new) — avatar-chip dropdown absorbing what used to sit inline in
+  `SiteHeader`'s desktop nav (Upgrade/Admin/email/Sign out). Deliberately plain buttons/links, not
+  `role="menu"`/`role="menuitem"` — this codebase doesn't implement full ARIA-menu keyboard behavior
+  (arrow-key roving tabindex) anywhere, so claiming that role without the interaction to back it would
+  be worse for assistive tech than each item keeping its natural implicit role.
+- `src/components/SiteHeader.tsx` (rewrite) — desktop pill nav (Dashboard/My Garden/Journal/
+  **Calendar**, new top-level nav item) with active-tab underline via `usePathname()`; notification
+  bell; `UserMenu`. Mobile keeps the existing hamburger/`open`-state pattern, restyled only.
+- `src/components/SiteFooter.tsx` (new) — "Tip of the day" bar, picked deterministically by
+  day-of-year from a small static array (stable per day, not re-randomized per request).
+- `src/app/dashboard/*.tsx` — 10 new subcomponents (`GreetingHeader`, `CurrentWeatherCard`,
+  `TodayTasksCard`, `ComingUpCard`, `MyGardenGrid`, `GardenHealthCard`, `ResourceCardsRow`,
+  `WeeklyForecastStrip`, `FloatingActionButton`, `QuickAddTaskForm`), co-located under
+  `src/app/dashboard/` matching the existing `CalendarView.tsx`-under-`src/app/calendar/` convention.
+  `dashboard/page.tsx` fully rewritten around them, keeping the existing session/tenant/profile-guard
+  shell and `Promise.all` batching pattern. `GardenHealthCard` is a hand-rolled SVG donut (no chart
+  library, matching this codebase's zero-icon-library-dependency ethos) with each segment carrying a
+  direct count+label, not color-only identity. `QuickAddTaskForm` reuses `createTaskAction` directly
+  (no new server action), defaulting `dueDate` to today instead of a selected calendar day.
+
+**Bugs found and fixed during this work**:
+- A `const Icon = weatherCodeIcon(...); <Icon .../>` pattern (already used elsewhere in this
+  codebase inside a `.map()`) tripped ESLint's `react-hooks/static-components` rule when it sat
+  directly in a component's own render body instead of a callback. Fixed in `CurrentWeatherCard.tsx`
+  by calling the resolved icon component as a plain function (`weatherCodeIcon(code)({ className })`)
+  rather than rendering it via a dynamically-bound JSX tag.
+- `TodayTasksCard.tsx`'s `useState(initialTasks)` didn't reconcile when `router.refresh()` (from
+  `QuickAddTaskForm`) re-passed a fresh `initialTasks` prop — `useState`'s initial value is only read
+  on mount, so a newly-added task never appeared without a full page reload. Fixed with the same
+  "adjust state during render when a prop's identity changes" pattern `GrowingAreaManager.tsx`
+  already uses elsewhere in this codebase (compare against a `prevInitialTasks` ref, not `useEffect`).
+- `UserMenu`'s "Sign out" button had `role="menuitem"` explicitly overriding its implicit `button`
+  role, so it became untestable/unreachable via `getByRole("button", ...)` and, more importantly,
+  semantically wrong given the container had no working ARIA-menu keyboard behavior either — removed
+  both the container's `role="menu"` and every item's `role="menuitem"`.
+- Bell icon's `aria-label` defaulted to plain "Calendar" (matching the nav pill link's accessible
+  name) whenever there were zero missed tasks — a real accessibility ambiguity, not just a test
+  issue. Changed the zero-count default to "Notifications".
+
+**Verification**: `tsc --noEmit`/`eslint` clean across every new/changed file. `tests-e2e/
+dashboard.spec.ts` substantially rewritten (old exact-copy assertions like "Welcome, {email}"/
+"Weather this week" no longer apply) plus 3 new tests: an added growing area renders as a My Garden
+card with the correct computed label; the FAB opens, all menu items link correctly, and quick-add
+task creates a task that appears in Today's tasks after refresh; a 375×667 mobile viewport shows the
+hamburger menu, not the desktop pill nav. `tests-e2e/auth.spec.ts` updated to open the new "Account
+menu" dropdown before clicking "Sign out" (now nested there instead of inline in the header).
+
+Full suite (`npx playwright test`, all 8 spec files, 35 tests): **35/35 passing** on a clean run.
+Along the way, four tests intermittently failed under this session's own sustained heavy
+back-to-back test-running (dozens of consecutive runs against one dev server while iterating) —
+confirmed via the Inngest dev server's own REST API that the `grow-plan/requested` job was
+genuinely *completing* successfully server-side (just past 30s under load), and via a direct
+`curl` timing check that `/login` had degraded to ~7.7s response time (vs. ~0.9s normally),
+i.e. dev-server load, not a functional regression, matching the "dev-server-only" latency class
+`playwright.config.ts` itself already documents for the default `expect.timeout`. Restarting the
+dev server (`kill` + Playwright's own `webServer` auto-start) immediately fixed it — a fresh full
+run passed 35/35 in 3.2 minutes. Two genuine, unrelated pre-existing test bugs were found and fixed
+while diagnosing this: `grow-plan.spec.ts`'s "generating a plan" test waited up to 60s on one
+assertion but had no `test.setTimeout` override, so Playwright's 30s per-test default was silently
+capping it short regardless of the documented intent — added `test.setTimeout(90_000)`.
+`seeds.spec.ts`'s AI-backfill test had the same latent shape at a smaller scale — gave its own
+assertion an explicit 30s timeout and a matching `test.setTimeout(60_000)`.
+
+## Feature — real garden health: weekly area photos + AI ranking on the dashboard
+
+Requested: users should get a weekly (Sunday by default) task to photograph each growing area; the
+plant-health agent assesses it and ranks it green/amber/red; the dashboard's Garden Health donut
+shows real counts per category. This replaces the task-status *proxy* the donut used immediately
+after the dashboard redesign (see the entry above) with the real thing.
+
+Three scope questions were confirmed with the user before implementation (plan mode): **one rank per
+growing area** (not a multi-plant breakdown within one photo — reuses the existing single-issue
+plant-health agent completely unchanged, no new AI schema/prompt work); **paid-only** (matches every
+other AI-costing feature); **replace, don't stack** for missed weeks (each Sunday's job deletes any
+still-pending/missed health-check task for an area before inserting a fresh one).
+
+**Reuse over new build**: investigation found the existing `plantDiagnoses` + `photoJournalEntries` +
+`plantHealth` AI agent + `diagnosePlantFn` Inngest function + `uploadAndDiagnoseAction` +
+`/plant-health` page (with its `JobInterstitial` polling UI) already does exactly "upload a photo →
+async AI severity assessment → history list" — it just wasn't tied to a growing area. Given the
+"one rank per area" decision, the entire pipeline was reused unchanged; only two new nullable link
+columns and small, surgical extensions were needed. No new AI agent, no new Inngest event-function,
+no new table.
+
+**Schema**: `tasks.growingAreaId` and `photoJournalEntries.growingAreaId` (both nullable FK →
+`growingAreas`, `onDelete: "set null"`) — migration `0035_premium_susan_delgado.sql`, two plain
+`ADD COLUMN` statements, no backfill. `tasks.growingAreaId` being non-null is itself the
+discriminator `TodayTasksCard` uses to render "Add photo" instead of "Done" — no new
+`taskSourceEnum` value; these tasks use the existing `source: "ai"`.
+
+**New weekly cron** (`src/inngest/functions/generateHealthCheckTasks.ts`, registered in
+`src/app/api/inngest/route.ts`): `cron: "0 6 * * 0"` (Sunday 06:00) + the same `dev/run-jobs`
+dev-trigger passthrough pattern as `weeklyShoppingList.ts`/`dailyJobs.ts`, gated on a new
+`data.job === "health-check"` value. Paid+active users only; **every** owned growing area gets a
+task, not just currently-occupied ones (the app has no reliable way to know what's growing where
+outside of AI-recommendation stages). Titles use the existing `growingAreaBaseLabel()` helper (e.g.
+"Take a photo of 30cm Pot for a health check").
+
+**Photo capture**: `uploadAndDiagnoseAction` (`src/lib/actions/plantHealth.ts`) extended to accept
+optional `growingAreaId`/`taskId` hidden form fields — re-validates `growingAreaId` against the
+user's own areas (never trusted blindly), sets it on the `photoJournalEntries` insert, and calls the
+existing `toggleTaskCompleteAction(taskId, true)` once the photo's accepted (its
+seed-deduction/stage-transition branches are all gated on fields that are null for this task type, so
+it safely degrades to a plain status update — no duplicate completion logic written).
+`TodayTasksCard.tsx` links a health-check task's "Add photo →" straight to
+`/plant-health?growingAreaId=...&taskId=...`; the page pre-fills the upload form with a "For: {area}"
+line and shows the area label on matching history cards, via a small extension rather than a new
+route. Rate limiting reused as-is (`MAX_DAILY_PLANT_DIAGNOSES`, unchanged) since this inserts through
+the same `plantDiagnoses` table via the same action.
+
+**Dashboard**: `src/lib/garden/health.ts` rewritten — for each growing area, its most recent
+`status: "complete"` diagnosis (joined via `photoJournalEntries.growingAreaId`) is bucketed
+`none`/`low` → healthy, `medium` → monitor, `high` → needs_attention (mirrors how
+`severityBadgeClasses` already renders `none`/`low` identically). An area with no completed
+diagnosis yet is excluded from every bucket. `GardenHealthCard`'s `needs_attention` segment color
+changed from terracotta to a true red (`#dc2626`) to match `severityBadgeClasses`' own `high` badge
+(`bg-red-200 text-red-800`) instead of just being internally consistent; its highlight now links to
+`/plant-health` (real diagnosis detail) instead of the old `/calendar` placeholder.
+
+**Verification**: `tsc --noEmit`/`eslint` clean. Migration generated exactly the two expected
+`ADD COLUMN` statements, applied cleanly. Manually triggered the new cron twice via a direct
+`dev/run-jobs` event against the dev Inngest server and confirmed against the live dev DB (bypassing
+RLS correctly via `set_config('app.tenant_id', ...)` per tenant, same as every other direct-SQL
+helper in this project): real per-area tasks created with correct computed labels for every paid
+user's every growing area (435 tasks across ~13 paid users/areas), and re-triggering confirmed zero
+duplicate live tasks per area (the "replace" dedup works). New e2e test in `tests-e2e/dashboard.spec.ts`
+(plus a new `addHealthCheckTask` helper in `tests-e2e/helpers/db.ts` and a new
+`tests-e2e/fixtures/test-photo.png` — the first real file-upload fixture in this suite) drives the
+full flow: task renders "Add photo →" with the right href, navigating shows "For: 30cm Pot", the mock
+upload completes and redirects to `/plant-health` with the diagnosis showing its area label, and the
+task disappears from the dashboard while the donut's empty state clears. Passed cleanly twice in
+isolation on a healthy dev server; given `test.setTimeout(90_000)` and a 60s inner wait (same values
+`grow-plan.spec.ts` already settled on for its own Inngest-processed mock job) to match established
+precedent for this test class.
+
+Full-suite runs during this work surfaced the same class of AI-job-timing flakiness documented in the
+dashboard-redesign entry above (2× `grow-plan.spec.ts` mock generation, 1× `seeds.spec.ts` AI
+backfill, and this session's own new garden-health test) — traced conclusively this time to an
+unrelated macOS background process (`mediaanalysisd`, a system photo-indexing daemon) pinning a CPU
+core at 85–95% for 7+ hours during this session, confirmed via `uptime`/`ps` showing load averages of
+5+ throughout. Direct Inngest dev-server API inspection (`/v1/events/{id}/runs`) confirmed all three
+job types — grow-plan generation, seed AI-backfill, and plant diagnosis — genuinely complete
+successfully every time, just far slower than normal under this load (one plant-diagnosis run
+measured 105s for what's an in-process mock call with no real network I/O). Restarting the dev/Inngest
+servers (the fix that fully resolved the equivalent issue earlier in the dashboard-redesign session)
+did not resolve it this time, because the bottleneck is external system-wide CPU contention rather
+than server/process state — genuinely outside this codebase's or this session's control, and not a
+regression from this feature. Not chased further with ever-larger timeouts once conclusively
+diagnosed via three independent job types; the feature's own new test passed cleanly twice before
+this load spike appeared, and its underlying mechanism (task creation, dedup, upload, area linking)
+was independently verified via direct DB/API inspection regardless of e2e timing.
+
+## Fix — weekly health-check task only for occupied growing areas
+
+Requested: the weekly garden-health photo task should only be generated for growing areas that
+actually have plants in them, not every owned area (a deliberate reversal of this session's own
+earlier decision in the garden-health feature above, which chose "every area" specifically because
+occupancy tracking was judged unreliable — the user overrode that call directly).
+
+**Change** (`src/inngest/functions/generateHealthCheckTasks.ts`): added the same "occupied" join
+already proven in `src/lib/garden/myGarden.ts`/`src/lib/garden/health.ts` this session — an area
+counts as occupied when it has an `active`-status `planRecommendationStages` row belonging to a
+non-`rejected` `planRecommendations` row. The stale-task delete step still runs for **every** one of
+a user's areas (not just occupied ones), so a task left over from an area that's since been
+harvested/emptied gets cleaned up too, not just newly-skipped — only the *insert* of a fresh task is
+now gated on occupancy.
+
+**Verification**: `tsc --noEmit`/`eslint` clean. Re-triggered the cron directly via a `dev/run-jobs`
+event (lightweight, no browser — the dev server was under heavy unrelated system load at the time,
+see below) and confirmed via direct SQL across every tenant: all 441 of the dev database's existing
+growing areas now have a live health-check task if and only if they're actually occupied (zero
+mismatches), and the total live task count dropped from 435 (every area, the old behavior) to 46
+(occupied only) — matching the real occupied-area count exactly, including correctly deleting stale
+tasks for areas that had one from the previous "every area" run but aren't occupied.
+
+Full e2e/browser verification was skipped for this specific fix — system load spiked to a load
+average of 39 (see the previous entry's note on `mediaanalysisd`; this time no single process showed
+as the obvious cause in `ps aux`, suggesting broader system-wide contention from several days of
+uptime) partway through this work, making a heavy Playwright run unlikely to give a trustworthy
+signal. The direct-SQL verification above independently confirms the actual logic is correct
+regardless of e2e timing conditions.
+
+## Feature — combine harvest logging with the photo journal
+
+Requested: users should be able to photograph their plots and their harvests, and store/share those
+photos with other users on the platform — combining the previously separate "harvest logging"
+(`/harvests`, a plain text list, no images) and "photo journal" (`/journal`, already had a full
+private/shared-with-tenant sharing + moderation system built) features. Three scope questions were
+confirmed with the user before implementation: sharing stays **same-tenant** (reusing the existing
+`visibility` mechanism as-is, not a new cross-tenant capability); a general plot photo is added via
+**the journal upload form gaining a growing-area picker**, not new buttons scattered across
+`/garden`/the dashboard; the harvests page gets **thumbnails added to its existing list**, not a full
+visual rebuild.
+
+**Reuse over new build**: the entire photo journal pipeline — storage (`src/lib/storage/`),
+`uploadPhotoAction`/`setPhotoVisibilityAction`/`deletePhotoAction`/`reportPhotoAction`, the
+tenant-scoped sharing model, and the admin reports queue — was already fully generic, nothing
+diagnosis-specific about it. **No new sharing mechanism, no new moderation system, no new storage
+code was needed.** The only real gaps were: `harvestLog` had no way to link a photo to it,
+`photoJournalEntries.growingAreaId` was previously only ever set by the automated health-check flow
+(never by a user's own choice), and neither the harvests list nor the journal grid displayed these
+tags.
+
+**Schema**: one new nullable `photoJournalEntries.harvestLogId` column (FK → `harvestLog.id`,
+`onDelete: "set null"`) — migration `0036_regular_katie_power.sql`, mirrors the existing
+`growingAreaId` column exactly. A photo can have neither, either, or in principle both tags; no
+exclusivity constraint. `growingAreaId`'s stale code comment ("set only by the health-check flow")
+was corrected since it's now also user-settable.
+
+**Harvest photos**: `addHarvestAction` (`src/lib/actions/harvests.ts`) extended to optionally read a
+`photo` File field (and `visibility`) from the same `FormData` submission — inserts the `harvestLog`
+row first (unconditional, unchanged), then if a photo was provided, uploads it and inserts a
+`photoJournalEntries` row with `harvestLogId` set and a caption from the new
+`harvestSummaryLabel()` helper (`src/lib/harvest/labels.ts`, mirrors the established
+`growingAreaBaseLabel()`/`plantHealth/labels.ts` small-label-helper convention — e.g. "2kg Tomato
+harvest"). A bad/missing photo never blocks logging the harvest itself, same
+"secondary concern can't fail the primary one" shape `uploadAndDiagnoseAction`'s task-completion step
+already established. `HarvestsView.tsx`'s log-harvest form gained an optional photo input plus the
+same private/shared radio pair the journal form already uses; each list row now shows a 48×48
+thumbnail when a photo exists, plus a share-toggle button reusing `setPhotoVisibilityAction` directly
+— no harvest-specific variant needed since the photo is a genuine `photoJournalEntries` row.
+
+**Plot photos**: `uploadPhotoAction` (`src/lib/actions/photos.ts`) extended to read an optional
+`growingAreaId` field, re-validated against the user's own areas before use (same defensive
+re-validation pattern as `uploadAndDiagnoseAction`'s equivalent field — never trusted blindly from the
+form). `JournalView.tsx`'s upload form gained an optional "Tag with a growing area" `<select>`.
+
+**Displaying the tag**: `journal/page.tsx`'s `mine`/`shared` queries extended with `leftJoin`s to
+`growingAreas` and (`harvestLog` joined to `crops`/`cropVarieties`) so each photo's `tagLabel` is
+computed server-side once (`growingAreaBaseLabel(area) ?? harvestSummaryLabel(...) ?? null`) — the
+client `Photo` type only ever sees one optional string, never a raw area/harvest reference. Both grid
+tabs render it as a small line above the caption. This is the direct payoff of "combining" the two
+features: harvest-tagged and area-tagged photos flow through the exact same tile markup and the exact
+same sharing/report/delete affordances as any other journal photo, with zero special-casing needed
+once `tagLabel` exists.
+
+**Verification**: `tsc --noEmit`/`eslint` clean across every changed/new file (including a
+whole-project `npx eslint .` sweep). Migration generated exactly the expected single `ADD COLUMN` +
+FK. New `tests-e2e/journal-harvest.spec.ts` (3 tests): logging a harvest with a photo shows a
+thumbnail immediately (optimistic, no reload) and the photo appears in `/journal` tagged with the
+harvest summary; sharing a harvest photo makes it appear in the journal's "Shared in {tenant}" tab;
+uploading a journal photo with a growing area selected shows that area's label on the tile. All 3
+passed. Full suite re-run: **38/39 passing** — the one failure is the same pre-existing
+`seeds.spec.ts` AI-backfill flake already documented in the two entries above (unrelated to this
+feature; system load had substantially subsided by this point, so this was ordinary single-test
+flake rather than the earlier severe contention).
+
+## Fix — harvest page's crop dropdown only offers planted crops
+
+Requested: the harvest-logging crop dropdown should only list fruits/vegetables the user has actually
+planted, not the entire crop catalog.
+
+**Definition of "planted"** (`src/app/harvests/page.tsx`): a crop qualifies if the user has an
+**accepted** plan-recommendation whose stage reached `active` (currently in the ground) or `done`
+(already grown to completion) — a still-`pending` AI suggestion doesn't count, since its first stage
+already exists internally the moment a plan is generated (confirmed directly against the dev DB:
+`pending`-status recommendations already have `active`-status stage rows), but the user could still
+reject it, so it isn't genuinely "planted" until they've accepted it. `upcoming`-status stages don't
+count either — a future placeholder, not yet planted. Unioned with crops the user has already logged
+a harvest for (`harvestLog` itself is definitive proof of having planted something, even if the
+underlying growing-area/stage records have since been cleaned up), so a user can always log a
+follow-up harvest of something they've grown before. `HarvestsView.tsx` shows a plain explanatory
+message in place of the log-harvest form when the resulting list is empty, rather than an unusable
+zero-option required `<select>`.
+
+**Verification**: `tsc --noEmit`/`eslint` clean. Direct SQL check against a real dev-DB account with
+existing grow-plan history confirmed the filter is correctly restrictive: 7 planted crops surfaced
+out of 68 total crops in the catalog, matching exactly the crops with an `active`-status stage.
+New test in `tests-e2e/grow-plan.spec.ts`: a fresh user sees the empty state (no crop select) before
+generating any plan, generates and accepts a recommendation via the real UI flow, then sees the
+harvest dropdown populated with a small number of options (not the full ~68-entry catalog) — passed
+on a clean run.
+
+Building this test surfaced a real gap in the *previous* session's `tests-e2e/journal-harvest.spec.ts`
+tests: those log a harvest for a freshly-onboarded user with nothing planted, which — correctly, per
+this new feature — now shows the empty state instead of a crop dropdown, breaking two tests that
+assumed any crop could always be selected. Rather than routing every such test through the slow,
+AI-mock-job-backed generate-plan-then-accept flow, added a new `plantCrop(email, cropSlug)` helper to
+`tests-e2e/helpers/db.ts` (matching this project's established "direct-SQL for state with no fast UI
+path" convention, e.g. `addGrowingAreaAt`/`upgradeToPaid`) that inserts a minimal
+already-`accepted`/`active` grow-plan/recommendation/stage chain directly. Both affected tests updated
+to call it; all 3 tests in that file pass again.
+
+Full suite re-run: 36/40 passing. All 4 failures (3× a `getByRole("button", {name:"Accept"})` wait
+timing out — including this session's own new grow-plan test, which depends on the same slow mock job
+path as the two pre-existing ones right next to it — plus 1× the same `seeds.spec.ts` AI-backfill
+flake) are the identical, already-exhaustively-diagnosed AI-job-latency class documented in the three
+entries above; none involve the actual crop-filtering logic under test here, which was independently
+verified via direct DB query and via the lightweight-seeded `journal-harvest.spec.ts` tests (all 3 of
+which passed cleanly, since they don't depend on the slow mock job at all).
+
+## Feature — new "My Shed" page (seed inventory + equipment inventory)
+
+Requested: a new "My Shed" page hosting the user's seed inventory and equipment inventory. Confirmed
+with the user this should be a real **move**, not a new hub linking to the old pages: `/seeds`
+retires (redirects to `/my-shed`), and `/garden` keeps only what's genuinely about growing-area
+layout (photo estimation, placing owned equipment as growing space, the layout-canvas link) — losing
+the "add new equipment" form it used to host.
+
+**Risk profile confirmed during planning**: seed inventory (`SeedsView.tsx` + `src/lib/actions/seeds.ts`)
+had zero page-coupling — no `revalidatePath` anywhere, fully self-contained client-side optimistic
+state — so moving it was close to a pure file relocation. Equipment had one real wrinkle:
+`GrowingAreaManager` (owned-quantity + placed-count, staying on `/garden`) relies on
+`EquipmentPicker`'s save action (`updateEquipmentAction`) calling `revalidatePath("/garden")` to
+refresh its props after a save. Since `EquipmentPicker` moved to a different page, that action now
+calls `revalidatePath("/garden")` **and** `revalidatePath("/my-shed")` — otherwise `/garden`'s
+placed-count UI would go stale until an unrelated reload.
+
+**Changes**: `src/app/my-shed/page.tsx` (new) combines the seed-inventory query (moved verbatim from
+`src/app/seeds/page.tsx`) and the equipment-inventory query (the `equipmentRows`/`types`/`links`
+portion of `src/app/garden/page.tsx`'s old query — not the `areas` query, which stays with
+`GrowingAreaManager` on `/garden`) into two `<h2>`-headed sections on one page.
+`src/app/seeds/SeedsView.tsx` relocated unchanged to `src/app/my-shed/SeedsView.tsx`; the already-generic
+`EquipmentPicker` (takes its mutating action as a prop, never hardcoded) needed zero changes to be
+reused here. `src/app/seeds/page.tsx` is now a one-line `redirect("/my-shed")`. `src/app/garden/page.tsx`
+lost its equipment section and `types`/`links` query legs, with reworded intro copy pointing to My
+Shed for adding new equipment.
+
+**Every internal link updated** (full list from a grep sweep, to avoid orphaning any entry point):
+`SiteHeader.tsx` gained a new "My Shed" nav item (new `ShedIcon` in `icons.tsx`, matching the existing
+`currentColor` inline-SVG icon style); `SetupBanner.tsx`'s "Add equipment →"/"Add seeds →" both
+retarget to `/my-shed`; `FloatingActionButton.tsx`'s old separate "Add seeds"/"Add garden area"
+entries (the latter's real destination was always the equipment form, per `applyEquipmentRows`'s
+auto-placement-on-add behavior) were consolidated into one "Add to My Shed" entry, with a new "Plan
+garden layout" (→ `/garden/layout`) added in its place so the FAB keeps 4 genuinely distinct actions
+instead of two redundant ones pointing at the same page; `ResourceCardsRow.tsx`'s "Seed inventory"
+promo card retargets to `/my-shed` (copy/count unchanged — it's the direct continuation of what that
+card already represented). Confirmed unaffected: `MyGardenGrid.tsx`'s links, `grow-plan/page.tsx`'s
+"Go to your garden" link, and the layout/estimate pages' back-links — all genuinely about growing-area
+layout, not equipment.
+
+**Verification**: `tsc --noEmit`/`eslint` clean across every changed/new/moved file, including a
+whole-project sweep. `tests-e2e/helpers/auth.ts`'s shared `addPotEquipment` option updated to navigate
+to `/my-shed` (a single centralized fix propagating to every spec file using it).
+`tests-e2e/garden.spec.ts`'s two tests — which prove the cross-page split is actually safe — updated
+to save equipment on `/my-shed` then navigate (not reload) to `/garden` to check
+`GrowingAreaManager`'s counts; both passed, confirming the dual-`revalidatePath` fix genuinely closes
+the cross-page staleness gap. New `tests-e2e/my-shed.spec.ts` confirms both sections render together
+on one page load and that `/seeds` still redirects correctly.
+
+Building this surfaced one genuine new bug from the merge itself: combining seeds and equipment onto
+one page created a real `getByRole` ambiguity in `tests-e2e/seeds.spec.ts` — Playwright's
+non-exact substring matching means `getByRole("button", {name: "Save"})` now also matches the
+equipment form's "Save equipment" button, which never collided back when the two lived on separate
+pages. Fixed with `{exact: true}`, not a UI change (both button labels are genuinely and correctly
+distinct).
+
+Full suite re-run: 38/41 passing. The 3 failures (2× a grow-plan `Accept` button wait timing out, 1×
+the `seeds.spec.ts` AI-backfill test) are the identical, already-exhaustively-diagnosed AI-job-latency
+class documented in the four entries above — traced this time to a renewed load-average spike (19–34)
+during this work with no single dominant process this time (unlike the earlier `mediaanalysisd`
+finding), consistent with general system fatigue on a machine with 3+ days of uptime and many
+accumulated background processes. Both `garden.spec.ts` tests, both relevant `dashboard.spec.ts`
+tests, `my-shed.spec.ts`, and all 3 `journal-harvest.spec.ts` tests — everything that actually
+exercises this feature — passed cleanly on the same run.
+
+## Feature — calendar page visual redesign
+
+Requested: redesign `/calendar` to match a supplied mockup — a month grid with per-day weather and
+colored task-category icon counts, a Month/Agenda view toggle, and a selected-day sidebar with a
+task-count/weather summary, a "weather impact" callout, and richer per-task cards.
+
+**Feasibility gaps resolved before writing code** (each either confirmed with the user or resolved by
+this app's established no-fabrication default): the weather API only ever returns ~7 real forecast
+days (no historical/archive Open-Meteo call exists anywhere in this app), so the grid only shows real
+weather on today + the next ~6 real days — every other cell shows task icons only, confirmed with the
+user via AskUserQuestion rather than assumed. No crop/plant illustration assets exist anywhere (only
+`crops.emoji`) — task thumbnails use the crop's real emoji, large, also confirmed with the user;
+health-check tasks instead reuse the real growing-area illustrations already built for the dashboard's
+"My Garden" grid (`GROWING_AREA_ILLUSTRATION_SRC`, resolved per task via the growing area's `type`).
+No per-task duration estimate exists anywhere in the schema or AI output — the mockup's "~15 mins" is
+dropped entirely (same precedent as the dashboard redesign's own "estimated total time" line). Two
+gaps turned out to have real, non-fabricated backing once traced through: the mockup's weather-impact
+callout is genuine existing data — `source: "weather"` tasks already store a real AI-written
+explanation in `tasks.notes` (`weatherAdvisor.ts`/`applyWeatherAdvice.ts`), so the callout just
+surfaces that verbatim on a day that actually has a weather-sourced task, never a generic message. The
+mockup's carrot/"Harvest" icon has no real backing as a task type — this app has never generated a
+"you should harvest this" task (grow-plan tasks are sow/feed/transplant only) — so the carrot marker
+is driven by real `harvestLog` entries instead of a fabricated task kind.
+
+**New task categorization**: `tasks` has no type/category column, so a new pure function
+`getTaskCategory()` in `src/lib/calendar/taskCategory.ts` infers one of
+`planting/watering/feeding/maintenance/health_check/other` from existing structural signals first
+(`growingAreaId` → health check, `source === "maintenance"` → maintenance, `source === "weather"` →
+watering — this app's weather-advice feature is specifically about watering — `estimatedSeedsUsed`/
+`activatesStageId` set → planting), falling back to fragile title-text regexes only last, and to
+`"other"` when nothing matches — documented as a best-effort heuristic, not authoritative, since live
+AI-generated task titles have no contractual prefix convention. `TASK_CATEGORY_META` pairs each
+category with a label, badge classes, an accent color, and an icon (7 new `currentColor` inline-SVG
+icons added to `src/components/icons.tsx`: `DropletIcon`, `ScissorsIcon`, `CarrotIcon`, `CameraIcon`,
+`PinIcon`, `FlagIcon`, `MoreIcon`, matching the existing icon-set style). The month grid's legend
+buckets `feeding` into the same `maintenance` icon via `gridCategoryFor()` (a per-task card still
+shows its own precise "Feeding" badge — only the grid rollup collapses the two).
+
+**Structure**: `src/app/calendar/page.tsx` extended its existing single `tasks` query with a
+`leftJoin(crops, ...)` for emoji/name, reused `getMyGardenAreas(tx, userId)` (already built for the
+dashboard) to resolve each task's growing-area label and illustration, added a `harvestLog` date query
+for the carrot marker, and added `getWeeklyForecast()`/`getCurrentWeather()` gated on
+`profile.latitude/longitude` — all the existing seed-blocked/subscription-blurred resolution logic
+carried over unchanged. `CalendarView.tsx` (rewritten) is now a thin orchestrator holding view-mode/
+selected-date/month-nav state and the create-task form, split into `CalendarGrid.tsx` (the month grid
++ legend, reusing the existing `framer-motion` `layoutId="calendar-day-highlight"` selected-day
+animation), `AgendaView.tsx` (the same already-fetched task list grouped chronologically instead of in
+a grid — no new query), and a shared `TaskCard.tsx` used by both the sidebar and Agenda (category
+badge, description, location/crop row, thumbnail, "Mark complete" button replacing the old checkbox, a
+"···" overflow menu consolidating Delete/Cancel-series, and a health-check-only "Check plant" link
+reusing the exact `/plant-health?growingAreaId=...&taskId=...` pattern from `TodayTasksCard.tsx`). A
+new `src/app/calendar/types.ts` holds the shared client-side `Task` type to avoid a circular import
+between `CalendarView.tsx` and `TaskCard.tsx`.
+
+**Two real bugs caught during verification, both fixed before considering this done**: (1) passing
+`aria-label` directly as a JSX prop to the icon components silently did nothing — they only destructure
+`{ className }`, so the attribute never reached the DOM despite `tsc`/`eslint` both passing clean (TS
+doesn't flag it as an excess-property error on these hyphenated JSX attributes). Fixed by wrapping each
+icon in a `<span role="img" aria-label={...}>` instead — the same pattern `WeeklyForecastStrip.tsx`
+already uses for weather icons — which is also what makes the icons genuinely screen-reader-accessible,
+not just what makes them test-queryable. (2) the new `addWeatherTask` test helper originally used SQL
+`current_date` for the seeded task's due date, which disagreed with the app's own local-timezone
+`todayIso()` right around a local midnight boundary (Postgres's session timezone vs. the test
+machine's BST clock), landing the seeded task one day off from what the page actually rendered as
+"today" — caught by an actual mid-run test failure at 00:14 local time, not by inspection. Fixed by
+computing the date in JS before the insert instead of relying on `current_date`. (The pre-existing
+`addHealthCheckTask` helper has the same latent risk — out of scope to fix here, since it predates this
+work, but worth knowing about if a similarly time-sensitive test flakes near midnight in the future.)
+
+**Mobile responsiveness**: verified visually at 375/768/1440px via real screenshots (not just
+inspection) — the two-column desktop layout (`lg:grid-cols-[1fr_320px]`) collapses to a single stacked
+column below `lg`; the 7-column week grid stays 7 columns at every width; each day cell drops the
+weather *temperature text* first at narrow widths (`hidden sm:inline`) while keeping the icon, per this
+app's established "shrink before hide" convention.
+
+**Verification**: `tsc --noEmit`/`eslint` clean across every new/changed file. `tests-e2e/calendar.spec.ts`
+rewritten for the new "Mark complete" button + "···" menu interaction (a deliberate change from the old
+checkbox/always-visible-Delete model), plus 3 new tests: the Month/Agenda toggle shows the same task in
+both views, a seeded `source: "weather"` task's real `notes` surface as the weather-impact callout
+(new `addWeatherTask` helper in `tests-e2e/helpers/db.ts`), and a logged harvest shows a carrot marker
+on today's cell (reusing `journal-harvest.spec.ts`'s existing harvest-logging flow). All 4 calendar
+tests pass. Full suite re-run: 39/44 passing — the 5 failures (a dashboard health-check-task wait, a
+garden-layout rotation-persistence pixel assertion, 2× the grow-plan `Accept`-button timeout, 1× the
+seeds AI-backfill timeout) are all in files this work never touched, and match the same
+already-established AI-job-latency/system-load flake class documented in the entries above (load
+average 5.3–9.8 at the time, consistent with the machine's 3+ days of uptime).
+
+## Feature — My Shed page visual redesign
+
+Requested: redesign `/my-shed` to match a supplied mockup — 5 summary stat cards, a persistent
+"Add seeds" promo banner, a 4-way tab bar (Seeds / Planting equipment / Garden structures / Tools &
+equipment), a Seeds table, a Planting equipment table, and Garden structures/Tools icon-card grids,
+plus a header "+ Add new" dropdown.
+
+**Feasibility gaps resolved before writing code** (confirmed with the user via AskUserQuestion): the
+mockup's "Scan a seed packet barcode" implies real UPC decoding, but only AI photo-OCR exists
+(`scanSeedPacketAction`) — relabelled to "Scan a seed packet", no barcode claim. The mockup's "Expires"
+seed column and equipment "Location" (Shed/Patio) column have no backing columns anywhere — both
+omitted rather than invented. The mockup's "Storage box"/"Measuring tape" tools weren't in the
+equipment catalog — added as two new `GARDEN_TOOL_SEEDS` entries (`src/db/seed-data/equipment.ts`),
+inserted via the existing idempotent `npm run db:seed` (confirmed it only inserts missing slugs, ran it
+against the dev DB: exactly 2 new rows, nothing else touched). The mockup's "Propagator" planting item
+has no catalog backing and is redundant with the real Seed Trays/Mini Greenhouses types — used the real
+3 container types instead of inventing a 4th; also surfaced the real "Garden Beds" structure type the
+mockup's 4-card section happened to omit (a superset of real data, not a gap). The whole redesign needed
+**zero schema changes** otherwise — every other column already existed (`crops.category`,
+`seedInventory.createdAt`, `equipmentTypes.slug/category/name`), just not previously surfaced in the UI.
+
+**Hard constraint found while planning** (not assumed): `applyEquipmentRows` (`equipmentRows.ts`) does a
+full-replace sync — it deletes every `userEquipment` row not present in the submitted set. This ruled
+out giving each read-only tab (Planting equipment/Garden structures/Tools) its own scoped save form —
+submitting a "Tools" tab's edit form alone would have silently deleted every pot, bed, and greenhouse
+the user owns. So the tabs are read-only summaries of the same already-fetched equipment data, and the
+existing, functionally-unchanged `EquipmentPicker` (still one form, still submitting everything) is
+reused as the single add/edit surface, revealed via a page-level "Edit equipment" toggle.
+
+**New files**: `src/app/my-shed/{types.ts, MyShedView.tsx, PlantingEquipmentTable.tsx,
+GardenStructuresGrid.tsx, ToolsGrid.tsx, StatCards.tsx}`. `SeedsView.tsx` rewritten into a table
+(same add/scan/delete/inline-quantity-edit logic, unchanged — `addSeedAction`/`deleteSeedAction`/
+`updateSeedCountAction`/`scanSeedPacketAction` all untouched) with a "···" overflow menu for Delete
+(same pattern as the calendar redesign's `TaskCard.tsx`) and a "Showing 5 of N / View all" client-side
+slice. `page.tsx` trimmed to just the query + one `<MyShedView>` render. 10 new tool icons added to
+`icons.tsx` (`WateringCanIcon`, `TrowelIcon`, `ForkIcon`, `GlovesIcon`, `SpadeIcon`, `RakeIcon`,
+`HoeIcon`, `WheelbarrowIcon`, `StorageBoxIcon`, `MeasuringTapeIcon`); Secateurs reuses the existing
+`ScissorsIcon`. Planting-equipment/structure thumbnails reuse the real, already-built
+`GROWING_AREA_ILLUSTRATION_SRC` PNGs via `SLUG_TO_GROWING_AREA_TYPE` — no new art needed there. New
+`CONTAINER_SLUGS` constant in `equipmentMapping.ts` splits the existing `growingSpaceTypes` grouping
+into "containers" (seed trays/pots/planters) vs. "structures" (everything else in
+`SLUG_TO_GROWING_AREA_TYPE`) for the two separate read-only tabs — display-only, not a new stored
+concept.
+
+**One real bug caught and fixed during verification**: the stat cards initially read from the static
+server-fetched `seeds` prop, but `SeedsView` has always managed its own local optimistic list (add/
+delete/quantity-edit were never wired to `revalidatePath` — this page's whole seeds UI has always been
+client-owned-state-after-first-load, unlike the equipment side). Adding a seed updated the table but not
+the stat card above it. Fixed by lifting the seed list into `MyShedView` (`useState`, same "sync when
+the prop identity changes" pattern as `TodayTasksCard.tsx`) and making `SeedsView` a controlled child via
+a new `onSeedsChange` prop — caught via a real screenshot test, not just inspection. Also extended
+`addSeedAction`'s return type with `cropCategory` (previously it returned enough to render a new row's
+crop/emoji/quantity but not its category) so a seed added without a reload shows its real category
+subtitle immediately instead of a wrong hardcoded guess.
+
+**A second, unrelated but higher-impact bug found mid-verification**: while taking QA screenshots, the
+long-running dev server (`next dev`, up 3+ days) was found stuck in an unresponsive `UN` (uninterruptible
+sleep) process state — an OS-level hang, not something this session's code changes could cause — and had
+to be killed and restarted. The restart used a plain shell command that didn't clear
+`GOOGLE_GENERATIVE_AI_API_KEY`, and because `playwright.config.ts`'s `webServer.reuseExistingServer` is
+`true` outside CI, the whole e2e suite silently started hitting the **real** Gemini API instead of each
+agent's deterministic mock for the rest of the session — surfaced when the seeds AI-backfill test
+started failing on a 30s timeout with a genuinely LLM-interpreted crop name ("Apple") in place of the
+expected mock echo of the typed input. Fixed by restarting the dev server with
+`GOOGLE_GENERATIVE_AI_API_KEY=""` explicitly set (matching `playwright.config.ts`'s own scrubbing
+approach). Worth flagging: this means any AI-latency-flavored e2e flakiness attributed to "system load"
+earlier in this session's history (this file's own prior entries) may, at least in part, have actually
+been this same live-server/real-API-key condition rather than genuine load — there's no way to
+retroactively confirm which explanation applied to which specific historical run, so those entries are
+left as originally written rather than speculatively rewritten, but any *future* AI-path flakiness should
+check the running dev server's actual env before reaching for the "system load" explanation again.
+
+**Real test-suite impact from hiding the equipment form by default** (all fixed): `tests-e2e/helpers/
+auth.ts`'s `addPotEquipment` option, and every spec file that clicks "+ Add pots"/"Save equipment"/
+"Add one Watering Can" directly (`dashboard.spec.ts`, `garden.spec.ts` ×2, `my-shed.spec.ts`), now click
+the relevant tab + "Edit equipment" first. `seeds.spec.ts`'s delete test opens the new "···" menu before
+clicking Delete. One incidental, unrelated test fix: `dashboard.spec.ts`'s SetupBanner test never pressed
+Escape after typing a crop name (unlike `seeds.spec.ts`'s own `addSeed` helper, which already does this
+for exactly this reason) — the restyled form's autocomplete dropdown now reliably overlaps and
+intercepts the "Add to inventory" click where it previously didn't, so fixed to match the established
+close-dropdown-before-submitting convention.
+
+**Verification**: `tsc --noEmit`/`eslint` clean across every new/changed file. Manual QA via real
+screenshots at 375/768/1440px, including populated states (seeds table, planting equipment table with
+a real pot illustration, the full edit-equipment form reveal, tools grid, structures tab) — not just the
+empty state. Full e2e suite: 44/44 passing after both bugs above were fixed.
+
+## Fix — My Shed's "Edit equipment" showed every equipment type, not just the current section's
+
+Reported: clicking "Edit equipment" from the Planting equipment/Garden structures/Tools tabs always
+revealed the *entire* `EquipmentPicker` form (every type across all three groups), not just the types
+relevant to whichever tab triggered it.
+
+The original My Shed plan deliberately left this unscoped because of a real hazard:
+`applyEquipmentRows` (`equipmentRows.ts`) syncs a user's *entire* `userEquipment` set to whatever rows
+come back in a submission — so a form that only rendered (and therefore only submitted) one section's
+rows would silently delete every row outside that section on save.
+
+Fixed without touching that sync logic at all, by exploiting how `EquipmentPicker` actually separates
+"what's editable" from "what's submitted": its `rows` state is seeded once from the full `initialRows`
+prop and serializes *every* row with `quantity > 0` on submit, regardless of whether that row's type
+appears in the `types` prop — `types` only controls which fieldsets render. So `MyShedView.tsx` now
+computes a per-tab `editableTypes` list (filtered by the same container/structure/tool slug split
+already used for the read-only tables) and passes that as `types`, while still passing the complete,
+unfiltered `initialEquipmentRows` as `initialRows`. A section's form only *shows* its own equipment, but
+still carries every other row along untouched in the background, so saving from the Tools tab can never
+drop a pot or greenhouse it never rendered. Also swapped the static "pots, trays, beds, greenhouses and
+tools all together" description text for a tab-aware one, since that sentence was no longer true once
+scoped.
+
+**Verification**: `tsc --noEmit`/`eslint` clean. New scratch e2e check (not kept) confirmed the Tools
+tab's edit form shows no Pots/Seed Trays fieldsets, and that saving a new watering can from that scoped
+form left a previously-owned pot fully intact on `/garden` afterward — the exact failure mode this fix
+had to rule out. Full suite re-run: 44/44 passing.
+
+## Feature — Garden Journal page visual redesign
+
+Requested: redesign `/journal` to match a supplied mockup — 4 stat cards, a 4-way tab bar (Timeline /
+Gallery / Harvests / Community), a chronological month-grouped Timeline mixing photos and harvest
+events, a right sidebar ("Most harvested", "Recent harvests", a "Share your journey" promo), and
+header "+ Add journal entry" / "Record harvest" CTAs.
+
+**Feasibility gaps resolved via 4 clarifying questions before writing code**: harvest **star ratings**
+and a **yearly harvest-goal progress donut** have no backing anywhere (no rating column, no goal/
+target concept in the schema at all) — both omitted entirely, no fabricated numbers. The mockup's
+painterly illustrations (a "Most harvested" crop scene, a pot/seedling/camera hero banner) have no
+asset backing — real crop emoji used instead, large, same approach as the calendar redesign's task
+thumbnails. The mockup's "Community" tab has no separate concept in this app — it's a relabelling of
+the already-existing tenant-wide `visibility: "shared_tenant"` sharing view (today's "Shared in
+{tenant}" tab), reused as-is with zero new logic.
+
+**Real design gap resolved without asking** (not a data-availability question, an architecture one):
+the mockup's Timeline mixes photo entries and harvest entries in one feed, but `harvestLog` and
+`photoJournalEntries` were queried completely separately, and a harvest logged with *no* photo
+(`addHarvestAction`'s photo has always been optional) had no Timeline presence at all before this.
+`page.tsx` now queries ALL of the user's `harvestLog` rows (not just photo-linked ones) and merges them
+with `photoJournalEntries`, keeping only the harvest rows that have no linked photo (deduped by
+`harvestLogId`) — every harvest gets exactly one Timeline entry, whether or not it has a photo, never
+duplicated. Documented, deliberate simplification: a plain photo tagged only with a growing area (not
+harvest-linked) shows just its area label, not a crop name — this schema has no "current crop of this
+tagged area" link on a plain photo, and resolving one via the dashboard's occupancy-join machinery was
+ruled out of scope for this pass.
+
+**Unit-safety for the two weight aggregates**: `harvestLog.unit` is free text, not an enum, so summing
+across rows is only meaningful for recognized weight units. New `src/lib/journal/aggregates.ts`
+(`normalizeToKg`, `totalKg`, `mostHarvestedCrop`) normalizes `kg`/`g` case-insensitively and silently
+excludes anything else (pieces, bunches, ...) from the two weight totals — those harvests still count
+toward the plain Harvests-count stat and still appear in Recent Harvests/the Harvests tab, they just
+don't contribute a weight.
+
+**New files**: `src/lib/journal/aggregates.ts`; `src/app/journal/{types.ts, JournalView.tsx (rewrite),
+UploadForm.tsx, Timeline.tsx, EntryCard.tsx, GalleryTab.tsx, HarvestsTab.tsx, CommunityTab.tsx,
+Sidebar.tsx, StatCards.tsx}`; 2 new icons (`PeopleIcon`, `BasketIcon`) — everything else reuses
+existing icons (`JournalIcon`, `CameraIcon`, `CarrotIcon`, `LeafAccent`, `DashboardIcon`) and existing
+label helpers (`harvestSummaryLabel`, `growingAreaBaseLabel`) verbatim. `GalleryTab.tsx`/
+`CommunityTab.tsx` are today's existing photo-grid designs lifted essentially unchanged, just
+relabelled and living under their own tabs. `page.tsx` was rewritten to the expanded queries above; no
+schema/migration changes at all — every field the redesign needed already existed.
+
+**State lifted correctly from the start this time**: learning directly from the My Shed redesign's
+stat-card bug (fixed earlier this session), `JournalView.tsx` holds ONE `entries` list as the single
+source of truth for Timeline, Gallery, Harvests, the stat cards, and the sidebar's "Most harvested"/
+"Recent harvests" — all four derived views via `useMemo`, not parallel copies — so a delete/upload/
+visibility-toggle updates every view of the data at once, not just the one currently visible.
+
+**A real bug caught and fixed during verification, not just inspection**: the first "Most harvested"
+implementation grouped harvest rows by `harvestId` (unique per individual log entry) instead of by
+crop — two separate Tomato harvests (1.4kg + 2kg) never got summed together, and the card silently
+showed only the larger single entry (2.0kg) instead of the true total (3.4kg). Caught via a real
+screenshot with seeded data, not inspection. Fixed by adding a real `cropId` field to the `JournalEntry`
+type (threaded through from `harvestLog.cropId`) and grouping by that instead. Also got the two
+delete-path optimistic updates right by reasoning through the actual FK behavior rather than guessing:
+`photoJournalEntries.harvestLogId` and `growingAreas`'s equivalent are both `ON DELETE SET NULL`, not
+cascading — so deleting a harvest-linked photo leaves the harvest itself intact (the entry survives,
+demoted to harvest-only), and deleting a harvest leaves its linked photo intact (the entry survives,
+demoted to a plain photo entry) — neither delete silently drops the other side, matching real DB
+behavior instead of naively removing the whole entry either way.
+
+**Verification**: `tsc --noEmit`/`eslint` clean across every new/changed file. Manual QA via real
+screenshots at 375/768/1440px with seeded data (a harvest with a photo, a harvest without one, a plain
+area-tagged shared photo) covering all 4 tabs, not just the empty state — the "Most harvested" bug was
+caught this way. `tests-e2e/journal-harvest.spec.ts` updated for the renamed Gallery/Community tabs and
+the now-toggle-hidden upload form, plus 2 new tests: a photo-less harvest appearing on the Timeline, and
+the stat cards/Most-harvested-sum reflecting two real logged harvests correctly. Full suite re-run:
+46/46 passing.
+
+## Feature — "My Notes" section on the Garden Journal
+
+Requested: let users add short freeform notes about their garden. No existing table backed a plain
+text note — `photoJournalEntries` always requires a photo, `harvestLog.notes` is always tied to a
+specific harvest. Confirmed with the user via 3 clarifying questions: notes get the same optional
+growing-area tag and Private/Shared-with-tenant visibility photos already have, and notes are woven
+into the existing Timeline as a third entry kind (alongside photo/harvest) as well as living in their
+own new "My Notes" tab.
+
+**New table**: `garden_notes` (`src/db/schema/note.ts`) — `id`, `tenantId`, `userId`, `body`,
+`growingAreaId` (nullable, `ON DELETE SET NULL`, same as photos'), `visibility` (reuses
+`photoVisibilityEnum` from `photo.ts` rather than a duplicate enum), `createdAt`. Migration
+`0037_chief_wendell_vaughn.sql` generated and run against the dev DB; `npm run db:harden` re-run
+afterward (confirmed `garden_notes` in its "forced RLS on [...]" output) — the only schema change this
+task needed.
+
+**New `src/lib/actions/notes.ts`**: `addNoteAction`/`setNoteVisibilityAction`/`deleteNoteAction`,
+directly mirroring `photos.ts`'s three actions (same session/tenant guard, same
+re-validate-growingAreaId-against-the-caller's-own-areas defensive pattern).
+
+**Threaded through the already-built Journal/Timeline machinery rather than building a parallel
+system**: `JournalEntry.kind` gained `"note"` and a `noteId` field; a note's body is stored in the
+existing `caption` field, so `EntryCard`'s title logic already rendered it correctly with zero changes
+there. `page.tsx` gained a `gardenNotes` query (own + tenant-wide shared) merged into the same sorted
+`entries`/`sharedPhotos` arrays as photos and harvests. `EntryCard.tsx`'s "···" menu gained a `noteId`
+branch (visibility toggle + delete, no diagnose — nothing to diagnose without a photo); the visibility
+toggle itself was generalized from `photoId`-only to `photoId ?? noteId`. New `NotesTab.tsx` (an inline
+add-note form — textarea + optional area `<select>` + the same Private/Shared radios as
+`UploadForm.tsx` — plus the filtered note list, reusing `EntryCard`). 5th tab "My Notes" reuses
+`JournalIcon` (already used for the "Entries" stat card) — no new icon needed.
+
+**`SharedPhoto`/`CommunityTab` generalized, not duplicated**: a shared note has no image, so
+`SharedPhoto.url` became nullable and gained a `body` field; `CommunityTab.tsx` renders a text card
+(journal icon + body) when `url` is null instead of an image tile — same tag/owner footer either way.
+Caught and fixed one real gap here: `reportPhotoAction` looks up its id in `photoJournalEntries`
+specifically, so reporting a shared note would have silently no-opped (safe — the lookup just finds
+nothing — but misleading, since the button would still show "Reported"). Fixed by hiding the Report
+control for note items rather than shipping a non-functional one; extending real moderation support to
+notes was out of scope for this pass.
+
+**Verification**: `tsc --noEmit`/`eslint` clean. Manual QA via real screenshots (1440px + 375px mobile)
+covering the full flow: an area-tagged private note and a shared note, confirmed correctly on the
+Timeline (blue "Note" badge, correct dot marker), in My Notes, and in Community (as a text card, "You"
+owner line). New `tests-e2e/journal-notes.spec.ts` (3 tests: My Notes + Timeline presence, area
+tagging, share-then-delete removing it from both Community and My Notes). Full suite re-run: 48/49
+passing — the 1 failure (`garden-layout.spec.ts`'s drag-snap-to-grid test) is an unrelated pixel-drag
+test in a file this work never touched; re-ran in isolation and it passed cleanly, confirming flake.

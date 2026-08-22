@@ -72,7 +72,13 @@ export async function signUpAndOnboard(
   await page.waitForURL("**/dashboard");
 
   if (addPotEquipment) {
-    await page.goto("/garden");
+    // Equipment inventory lives on /my-shed now (moved off /garden, which
+    // keeps only growing-area placement/layout). The full add/edit form is
+    // hidden by default behind the My Shed redesign's read-only tabs — reach
+    // it via the Planting equipment tab's "Edit equipment" toggle.
+    await page.goto("/my-shed");
+    await page.getByRole("button", { name: "Planting equipment", exact: true }).click();
+    await page.getByRole("button", { name: "Edit equipment" }).click();
     await page.getByRole("button", { name: "+ Add pots" }).click();
     // getByLabel("Size") would be ambiguous — that <label> wraps both the
     // number input and the cm/litres <select>, so it's scoped by

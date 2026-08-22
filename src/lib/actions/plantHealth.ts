@@ -4,13 +4,14 @@ import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
 import { eq, and, gte, count, ne } from "drizzle-orm";
 import { withTenant } from "@/lib/tenant/withTenant";
-import { plantDiagnoses, photoJournalEntries, photoReports } from "@/db/schema";
+import { plantDiagnoses, photoJournalEntries, photoReports, growingAreas } from "@/db/schema";
 import { requireSessionAndTenant } from "@/lib/actions/shared";
 import { getSubscription, isPaidTier } from "@/lib/billing/subscription";
 import { getPhotoStorage, ALLOWED_IMAGE_TYPES, MAX_PHOTO_BYTES } from "@/lib/storage";
 import { inngest } from "@/inngest/client";
 import { startOfTodayLocal } from "@/lib/dates";
 import { MAX_DAILY_PLANT_DIAGNOSES } from "@/lib/ai/limits";
+import { toggleTaskCompleteAction } from "@/lib/actions/tasks";
 
 export type UploadAndDiagnoseState = { error?: string };
 
@@ -76,10 +77,30 @@ export async function uploadAndDiagnoseAction(
     extension,
   });
 
+  // Present only when this upload came from a growing-area health-check
+  // task (see TodayTasksCard.tsx's "Add photo" link and
+  // generateHealthCheckTasks.ts) — absent for the page's own free-standing
+  // "diagnose any photo" form. Re-validated against the user's own areas
+  // rather than trusted blindly from the hidden field, matching this
+  // codebase's ownership-scoping convention everywhere else; an
+  // invalid/foreign id is silently ignored rather than erroring the whole
+  // upload.
+  const requestedGrowingAreaId = formData.get("growingAreaId");
+  const taskId = formData.get("taskId");
+
   const diagnosis = await withTenant(tenantId, async (tx) => {
+    let growingAreaId: string | null = null;
+    if (typeof requestedGrowingAreaId === "string" && requestedGrowingAreaId) {
+      const [area] = await tx
+        .select({ id: growingAreas.id })
+        .from(growingAreas)
+        .where(and(eq(growingAreas.id, requestedGrowingAreaId), eq(growingAreas.userId, userId)));
+      if (area) growingAreaId = area.id;
+    }
+
     const [photo] = await tx
       .insert(photoJournalEntries)
-      .values({ tenantId, userId, storageKey: key, url, visibility: "private" })
+      .values({ tenantId, userId, storageKey: key, url, visibility: "private", growingAreaId })
       .returning();
     const [row] = await tx
       .insert(plantDiagnoses)
@@ -87,6 +108,16 @@ export async function uploadAndDiagnoseAction(
       .returning();
     return row;
   });
+
+  // The task's job was "take the photo," not "wait for the AI result" — it
+  // completes the instant the photo is accepted, same as every other task
+  // in this app completing on the user's own action. toggleTaskCompleteAction
+  // is reused as-is: its seed-deduction/stage-transition branches are all
+  // gated on task.cropId/task.activatesStageId, both null for a health-check
+  // task, so it safely degrades to a plain ownership-scoped status update.
+  if (typeof taskId === "string" && taskId) {
+    await toggleTaskCompleteAction(taskId, true);
+  }
 
   await inngest.send({
     name: "plant-diagnosis/requested",
