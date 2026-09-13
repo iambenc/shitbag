@@ -1,0 +1,2 @@
+ALTER TABLE "growing_areas" ADD COLUMN "parent_growing_area_id" uuid;--> statement-breakpoint
+ALTER TABLE "growing_areas" ADD CONSTRAINT "growing_areas_parent_growing_area_id_growing_areas_id_fk" FOREIGN KEY ("parent_growing_area_id") REFERENCES "public"."growing_areas"("id") ON DELETE set null ON UPDATE no action;

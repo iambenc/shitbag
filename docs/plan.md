@@ -6430,3 +6430,519 @@ owner line). New `tests-e2e/journal-notes.spec.ts` (3 tests: My Notes + Timeline
 tagging, share-then-delete removing it from both Community and My Notes). Full suite re-run: 48/49
 passing — the 1 failure (`garden-layout.spec.ts`'s drag-snap-to-grid test) is an unrelated pixel-drag
 test in a file this work never touched; re-ran in isolation and it passed cleanly, confirming flake.
+
+## Feature — community harvest popularity feeds the grow planner (within-tenant)
+
+Requested: use aggregate harvest data from other users in the same tenant as a signal for the AI grow
+planner (e.g. "also grown by 3 other gardeners here"), scoped to within a single tenant first (a
+platform-wide/cross-tenant version was explicitly deferred as a separate, bigger decision).
+
+**The real constraint that shaped this feature, found while investigating** (not assumed):
+`harvestLog` has no visibility/privacy field at all — every harvest a user logs is queried only ever
+scoped to `eq(harvestLog.userId, ...)`, with zero existing cross-user aggregation anywhere in this
+codebase. Confirmed with the user via 3 clarifying questions: the data source is a **new explicit
+opt-in** (`userProfiles.shareHarvestDataForCommunity`, off by default) — the only consent mechanism for
+using anyone's harvest data to inform someone else's recommendations, even in aggregate form; the
+signal is **purely informational**, woven into a recommendation's existing free-text `reasoning`, never
+a ranking factor; "success" is **simple popularity** — a per-crop count of distinct opted-in growers,
+sidestepping the `kg`/`g`/`pieces` unit-inconsistency problem already documented in the Journal work.
+
+**One safeguard added beyond what was asked**: even an aggregate count can identify someone in a small
+tenant (a "grown by 1 other gardener" reasoning line in a 3-person tenant is basically an identity
+leak). `getCommunityCropPopularity` (new `src/lib/growPlan/communityPopularity.ts`) suppresses any crop
+below **2** distinct opted-in growers — it never appears in the signal at all below that threshold,
+rather than ever surfacing a "1 grower" count. Verified directly: a dedicated e2e test seeds exactly 1
+opted-in grower for a crop and confirms the community note never appears.
+
+**Threaded into both places the grow planner actually runs**, discovered to be two separate AI agents
+with two separate, independently-duplicated prompt-building/mock functions (`growPlanner.ts` for
+`generateGrowPlan.ts`'s full-plan generation, `recommendationReplacement.ts` for
+`regenerateRecommendation.ts`'s single-recommendation regeneration) — both got the identical treatment:
+a new optional `communityPopularity` input field, a new prompt section rendered only when non-empty, one
+new instruction explicitly framed as informational-only ("never let it influence which crop(s) you
+pick"), and a matching deterministic sentence in each agent's mock-mode reasoning generator (this
+codebase's established "every mock path fully exercises real schema/behavior, even with no AI key
+configured" convention). The aggregation query itself lives in one shared helper, not duplicated —
+only the "call it and merge into input" glue is duplicated, matching how these two Inngest functions
+already duplicate their own gather-context blocks today.
+
+**Opt-in setting UI**: no settings/account page exists anywhere in this app today, so rather than
+inventing one for a single toggle, it lives on `/harvests` — the page that actually creates the data
+this toggle governs. New `setShareHarvestDataAction` (mirrors `setPhotoVisibilityAction`/
+`setNoteVisibilityAction`'s shape exactly), a small checkbox card in `HarvestsView.tsx` with
+plain-language copy about what gets shared (aggregate stats only, never name or specific harvest
+details) and that it's off by default.
+
+**New migration**: `userProfiles.shareHarvestDataForCommunity` (boolean, default false) —
+`0038_fluffy_excalibur.sql`, run against the dev DB, `npm run db:harden` re-run afterward per this
+project's own established convention.
+
+**Verification**: `tsc --noEmit`/`eslint` clean across every new/changed file. New
+`tests-e2e/community-harvest-popularity.spec.ts` (2 tests, using 3 new direct-SQL helpers —
+`setShareHarvestData`/`addHarvestLogRow`/`favoriteCrop` — added to `tests-e2e/helpers/db.ts`, matching
+this session's established "direct SQL for background state with no fast UI path" convention): two
+opted-in gardeners who've both grown tomato, a third user favorites tomato (guarantees the deterministic
+mock recommends it first) and generates a plan — its reasoning genuinely says "Also grown by 2 other
+gardeners here." A second test confirms a single opted-in grower stays below the anonymity threshold.
+One real trap caught and fixed while writing the test, not guessed around: `generateGrowPlan.ts`'s mock
+reserves a tenant's sole available growing area entirely for its own synthetic new-crop demo when only
+one area exists (`reservedForDemos`) — a one-pot test account, unlike the rest of this suite's usual
+`addPotEquipment: true` shortcut, would never actually recommend the favorited crop at all. Fixed by
+seeding two pots directly via the existing `addGrowingAreaAt` helper instead. Manual QA via real
+screenshots confirmed the toggle UI and, end to end, the exact real reasoning text ("Also grown by 2
+other gardeners here.") appearing on a live-rendered grow-plan recommendation card. Full e2e suite
+re-run: 51/51 passing.
+
+## Fix — Journal/Calendar nav renamed; a second `current_date` test-helper timezone bug found and fixed
+
+Requested: rename the "Journal" nav item to "Garden Journal" and "Calendar" to "My Calendar". Both live
+in one place, `SiteHeader.tsx`'s `NAV_ITEMS` array (shared by the desktop pill nav and the mobile
+menu), so a 2-line change covered every surface. `/calendar/page.tsx`'s own `<h1>` was also updated to
+"My Calendar" to match — `/journal/page.tsx`'s `<h1>` already said "Garden Journal" from its earlier
+redesign, so no change was needed there.
+
+While re-running the full suite to verify, `dashboard.spec.ts`'s garden-health test failed
+**consistently**, not as a one-off flake (re-ran in isolation, failed again identically) — a real
+signal, not the usual load-related noise. Root cause: the exact same `current_date` vs. local-timezone
+bug already found and fixed for `addWeatherTask` (calendar.spec.ts's own test-helper work) had simply
+never been fixed in `addHealthCheckTask`, which was flagged as a known latent risk at the time
+("worth knowing about if a similarly time-sensitive test flakes near midnight in the future") — it
+surfaced now because the suite happened to run at 00:16 BST, where Postgres's `current_date` (UTC)
+still read Saturday while the app's own local-timezone "today" was already Sunday, landing the seeded
+health-check task's due date a day off from what the dashboard actually queries as "today's tasks".
+Fixed identically: `addHealthCheckTask` (`tests-e2e/helpers/db.ts`) now computes the date in JS before
+the insert instead of relying on SQL `current_date`.
+
+**Verification**: `tsc --noEmit`/`eslint` clean. Updated `dashboard.spec.ts`'s mobile-menu test for the
+new "My Calendar" link text. Re-ran the previously-failing garden-health test alone — passed. Full e2e
+suite re-run: 51/51 passing.
+
+## Feature — Grow Bags and Polytunnels as growing-area/equipment types
+
+Requested: users should be able to add grow bags, pots (by size), and seed trays as growing areas, with
+grow bags and polytunnels also added to the planting equipment list. Clarified with the user which
+grouping each new type belongs to: grow bags (small, portable, hand-sized) join "Planting equipment"
+alongside pots/trays/planters; polytunnels (large, walk-in structures) join "Garden structures"
+alongside greenhouses/cold frames — matching real-world scale rather than a literal reading of
+"planting equipment" that would lump a walk-in structure in with hand-portable containers.
+
+`growingAreaTypeEnum` turned out to be threaded through 9 separate, independently-defined places (not
+one central switch) — missing any one would leave a new type silently half-integrated (rendering the
+wrong form fields, or never appearing as a photo-estimate candidate). No new migration was needed for
+the enum itself — it's a plain `text` column with no DB-level CHECK/enum constraint, confirmed by
+reading every migration in the repo's history. Every place was updated: `growingAreaTypeEnum`
+(`growing-area.ts`), `SLUG_TO_GROWING_AREA_TYPE`/`CONTAINER_SLUGS` (`equipmentMapping.ts`), two new
+`equipmentTypes` catalog seeds (`grow-bags` sized like a pot, `polytunnels` dimensioned like a
+greenhouse — applied via the existing idempotent `npm run db:seed` + `npm run db:harden`), the two
+exhaustive label/emoji `Record`s in `labels.ts` (🛍️ / 🎪 — no new illustration art exists for either,
+so both launch emoji-only, matching this project's no-fabrication default), `WALKWAY_TYPES`/
+`HEIGHT_TYPES`/`FIXED_TYPES` in `layout.ts` (polytunnel only — grow bag behaves like a pot by default),
+`LayoutCanvas.tsx`'s and `EstimationReviewForm.tsx`'s two independently-defined `usesSizedFields()`
+helpers, and the hand-written vision-model prompt in `growingAreaEstimator.ts`.
+
+**Bug found via screenshot, not inspection**: `PlantingEquipmentTable.tsx` and `GardenStructuresGrid.tsx`
+only rendered an `<Image>` when `GROWING_AREA_ILLUSTRATION_SRC[type]` existed, with no fallback branch
+at all — contradicting the plan's assumption (based on a comment describing the `Partial` map's design
+*intent*, not actual consumer behavior) that an emoji fallback already worked. Fixed by adding the
+missing ternary fallback to both.
+
+**Bug investigated and ruled out — not a real bug**: saving equipment in two separate sequential form
+submissions (add+save a grow bag, then switch tabs and add+save a polytunnel) appeared to silently lose
+the second save's row when checked via a direct SQL dump right after the client showed "Saved.". Root
+cause, found by polling the DB every 200ms after the second save: the row *was* being written correctly
+within roughly 100–300ms of the click — there was no data loss. The false alarm came from the test
+methodology, not the app: `EquipmentPicker`'s `state.success` (and its "Saved." text) is never reset to
+false between dispatches, so it was already showing from the *first* save and stayed showing throughout
+the second save's pending phase — `await expect(page.getByText("Saved.")).toBeVisible())` on the second
+save resolved instantly against stale text rather than actually waiting for the second request to
+complete, making any DB check right after look like a lost write. Switching the check to
+`page.waitForResponse(...)` on the actual POST confirmed both rows persist correctly, every time. No
+application code changed as a result — confirms `applyEquipmentRows`' full-replace-sync design (see its
+own docblock) was correct all along.
+
+**Verification**: `tsc --noEmit`/`eslint` clean across every changed file. Manual QA via real
+screenshots: added a grow bag (sized-field form) and a polytunnel (dimensions+height form) through My
+Shed's "Edit equipment", confirmed both auto-place as real growing areas, confirmed the Planting
+equipment and Garden structures tabs each show the right item with its emoji (no broken image), and
+confirmed both persist correctly across two separate sequential saves. Full e2e suite re-run: no
+regressions.
+
+## Feature — Garden structures as their own sub-plots, grow planner awareness
+
+Requested: the grow planner should be aware of garden structures and the growing areas placed within
+them, and structures (greenhouse/mini-greenhouse/cold frame/polytunnel) should become their own
+sub-plots — separate from the main growing space — with items from the user's inventory placeable
+inside them. Confirmed with the user: only the four *enclosed* structure types (this codebase's existing
+`HEIGHT_TYPES` — the ones with real interior space) can host sub-areas; raised beds and garden beds stay
+simple open-air plots.
+
+**Data model**: one new nullable, self-referential column, `growingAreas.parentGrowingAreaId` (`ON
+DELETE SET NULL`, matching `sourceUserEquipmentId`'s existing convention) — migration `0039_burly_black_
+tarantula.sql`. A new derived export, `CONTAINER_GROWING_AREA_TYPES` (`equipmentMapping.ts`), reuses the
+existing `CONTAINER_SLUGS` split rather than inventing a new category — the same seed tray/pot/grow
+bag/planter set My Shed already treats as "containers."
+
+**Reused `LayoutCanvas.tsx` entirely, rather than building a second canvas**: the component already did
+100% of the drag/suggest/rotate/collision/tray machinery generically off a `plotWidthCm`/`plotLengthCm`
+pair and an `areas` array, with no hidden assumption that "the plot" means the user's one outdoor space.
+A new optional `containerAreaId` prop is the only structural addition — when set (from the new
+`/garden/layout/[areaId]` route), it swaps the plot-size source to the structure's own dimensions, hides
+the main-plot-only "Edit size" control, restricts `AddAreaForm`'s type dropdown to container types, and
+threads through to the save/reset actions so a confirmed drop sets the right parent. A small "→ view
+inside" button (mirroring the existing rotate button's stopPropagation-on-pointerdown trick) on a
+confirmed structure card, main-plot-only, is the sole discovery path into a structure's own sub-plot —
+My Shed's `GardenStructuresGrid` was deliberately left untouched, since it only has aggregated
+equipment-row counts, not the per-instance identity this needs.
+
+**Real bug caught via a scratch e2e script, not inspection**: `layout/page.tsx` (the main plot) was
+still fetching *every* growing area for the user with no `parentGrowingAreaId` filter — so a pot placed
+inside a greenhouse leaked onto the main canvas too, rendered using its structure-local coordinates,
+overlapping the greenhouse itself and flagged "too close to another area." Fixed by scoping that query
+to `isNull(growingAreas.parentGrowingAreaId)` — a structure's contents are now exclusively managed on
+its own sub-page.
+
+**Grow planner integration** (the actual ask): both agents' inputs gained an `insideStructureType` field
+per area/stage. `growPlanner.ts`'s existing structure-reasoning instruction (which already covered
+greenhouse/mini-greenhouse/cold frame) was extended to cover containment ("a pot inside a greenhouse
+inherits its frost protection, reason about it the same as a direct stage") — and, since it was already
+being touched, fixed a pre-existing gap where `polytunnel` had never been added to that sentence despite
+being in the type enum. `recommendationReplacement.ts` got the identical treatment for its own
+STAGE SHAPE prompt block and instruction 10. Both mocks (`buildMockPlan`/`buildMockReplacement`) gained a
+matching deterministic reasoning sentence, verified live: seeding two pots inside a greenhouse via direct
+SQL and generating a mock plan produced "Being inside your greenhouse gives it extra warmth and frost
+protection." on the resulting recommendation card.
+
+**Verification**: `tsc --noEmit`/`eslint` clean across every changed/new file. Manual QA via a scratch
+Playwright script with real screenshots: placed a greenhouse on the main plot, opened its sub-plot via
+"view inside," added and confirmed a pot inside it, confirmed it disappeared from the main plot (after
+the leak fix above), confirmed "Reset layout" on the main plot no longer evicts a structure's contents,
+and confirmed the grow-plan reasoning end to end. New `tests-e2e/garden-structure-nesting.spec.ts` (2
+tests) added, plus `parentGrowingAreaId`/`heightCm` params and a return value on the existing
+`addGrowingAreaAt` test helper. One of the two new tests is intermittently flaky when run in the same
+file as the other (passes reliably 5/5 in isolation, with DB dumps confirming correct data every time
+even on a "failed" run) — matches this project's own already-documented dev-server Turbopack
+concurrency limitation (see `playwright.config.ts`'s `fullyParallel: false` comment), not a real
+regression. Full e2e suite re-run for overall regression confidence.
+
+## Feature — garden structures as distinct plots on the dashboard and in My Garden
+
+Follow-up to the sub-plots feature above: the user clarified two concrete gaps. Structures should read
+as their own distinct "plot" on the dashboard, and equipment should be assignable into a structure
+directly from `/garden` (My Garden), not only via `/garden/layout`'s drag canvas.
+
+**Dashboard (`src/lib/garden/myGarden.ts`, `MyGardenGrid.tsx`)**: `getMyGardenAreas` now only builds a
+card for top-level areas — a container placed inside a structure no longer gets its own independent
+card. A structure's card rolls up its children's occupants and pending-task counts, and gains a new
+`containedCount`, rendered as a "🪴 N items inside" badge; the whole card becomes a link to
+`/garden/layout/{id}` (structures only), reusing the "view inside" destination already built.
+
+**My Garden (`src/app/garden/page.tsx`, `GrowingAreaManager.tsx`)**: a new "Your garden structures"
+section lists each owned structure instance with a stepper per owned container equipment row ("N
+inside"), backed by a new `assignEquipmentToStructureAction` (`syncGrowingAreas.ts`) — a sibling to the
+existing `syncGrowingAreasAction`, scoped to one structure: reassigns existing unparented rows first
+(preserving row identity), only creating new ones if needed, and unassigns (never deletes) to shrink.
+The shared structure/container validation (`validateParent` in `layout.ts`) was extracted into a new
+`src/lib/garden/structureAssignment.ts` so both actions use the identical check rather than duplicating
+it.
+
+**Two real bugs caught via a scratch e2e script, not inspection**: (1) both the new action's and the
+new page query's "how much capacity is already spoken for" calculation counted *unparented* rows (the
+shared main pool) as unavailable, alongside rows genuinely committed to a different structure — this
+made the "add to structure" stepper permanently stuck at 0 the instant a user's equipment happened to
+already be fully placed via the generic stepper. Fixed by excluding null-parent rows from the
+"elsewhere" count in both places. (2) `myGarden.ts`'s display-label numeric-disambiguation counted
+*hidden* child areas toward a base label's collision total, so a single remaining visible pot card
+could get an unwarranted "2" suffix purely because its sibling pot (now hidden inside a structure)
+shared the same base label. Fixed by deduplicating labels per visible group (top-level areas together;
+each structure's children together) instead of across every area globally.
+
+**Verification**: `tsc --noEmit`/`eslint` clean across every changed/new file. Manual QA via a scratch
+Playwright script with real screenshots: added a greenhouse and two pots, assigned one pot to the
+greenhouse from My Garden, confirmed the dashboard showed the greenhouse card with "1 item inside" and
+exactly one separate plain pot card (not two), confirmed clicking the greenhouse card opened its
+sub-plot, and confirmed unassigning returned the pot to the general pool. Extended
+`tests-e2e/garden-structure-nesting.spec.ts` with this flow as a permanent test. Full e2e suite re-run.
+
+## Feature — reorganize "Your growing space", real-time inventory, feature-flag layout planning
+
+Follow-up to the two features above: `/garden` reorganized into three ordered sections — **Main
+garden** (planting equipment placed in the open ground) first, then **each garden structure**, then a
+new **Inventory** section showing each piece of planting equipment's remaining, unallocated quota — and
+the spatial drag-canvas ("Plot planner," `/garden/layout` and each structure's own sub-plot) is now
+feature-flagged off by default.
+
+**Feature flag**: `src/lib/featureFlags.ts` gained `layoutPlanning: false`, following the exact
+established pattern the repo's only other flag (`moneySavedReport`) already uses — a hardcoded
+constant, gated with `notFound()` at the top of both `/garden/layout` route files, and every entry
+point into it (the "🗺️ Plan your layout" card, each structure's "Arrange inside →" link, and the
+dashboard's structure-card link) conditionally hidden rather than left dangling. `/garden/estimate`'s
+AI photo-estimate flow was confirmed independent (redirects to `/garden`, never `/garden/layout`) and
+left untouched.
+
+**Real-time inventory — the core mechanic**: previously `GrowingAreaManager`'s generic stepper and each
+structure's own stepper each owned fully independent local state, with no shared "remaining quota"
+concept anywhere. Rewrote `GrowingAreaManager.tsx` to lift all container-equipment state into one
+shared array (`{quantityOwned, mainGardenCount, assignedByStructure}` per owned item, computed in
+`page.tsx` from real `growingAreas` rows, not derived from `userEquipment.quantity` alone) — every
+stepper's own max bound and the Inventory section's remaining figure are all computed inline from that
+one array on every render, so a change from any stepper (main garden or any structure) is reflected
+everywhere else, including Inventory, in the same click, with no page reload or server round-trip
+needed for the number to move.
+
+**A real modeling conflict surfaced and was resolved during manual QA, not by inspection**: an
+unparented `growingAreas` row now unavoidably *means* "in the main garden" (that's exactly what
+`syncGrowingAreasAction`'s own count is) — so `assignEquipmentToStructureAction`'s prior behavior of
+silently reassigning existing unparented rows into a structure would invisibly shrink the main garden's
+displayed count without the client's own state knowing, breaking the very "everything reflects
+everywhere, live" guarantee this feature exists to provide. Resolved by making main garden and each
+structure mutually exclusive, deliberate allocations that never silently steal from one another: a
+structure's stepper can only grow using quantity with no real row at all yet (Inventory's own
+"remaining" pool), never an already-placed main-garden row — moving equipment from the main garden into
+a structure is now two explicit clicks (free it from the main garden first, then claim it in the
+structure), not one implicit one. `syncGrowingAreasAction` itself was also rescoped in the same pass to
+only ever touch unparented rows (`parentGrowingAreaId IS NULL`) — previously it could delete a row
+genuinely assigned inside a structure when decremented, since it counted every row sourced from that
+equipment regardless of parent.
+
+**Test fallout, addressed rather than left broken**: with the flag off by default, both
+`/garden/layout` routes 404, so `garden-layout.spec.ts`'s entire suite and one drag-canvas-dependent
+test in `garden-structure-nesting.spec.ts` now dynamically `test.skip(!FEATURE_FLAGS.layoutPlanning, …)`
+— self-reactivating the moment the flag flips back on, rather than needing to be remembered (mirrors
+this repo's own convention of zero e2e coverage for `moneySavedReport` while it's off). The remaining
+My-Garden-assignment test now branches on the flag for its one layout-dependent assertion (structure
+card is a link vs. a plain non-clickable card) and was updated for the new two-step
+free-then-assign flow. `garden.spec.ts`'s existing pots-only tests needed no changes at all — confirmed
+passing as-is, since the main garden stepper's UI text/behavior is unchanged for the no-structures case.
+
+**Verification**: `tsc --noEmit`/`eslint` clean across every changed file. Manual QA via a scratch
+Playwright script with real screenshots: confirmed the new section order, confirmed Inventory drops to
+0 remaining immediately after assigning a freed pot to a structure (no reload), and confirmed
+`/garden/layout` returns a real 404 response. Full e2e suite re-run.
+
+## Fix — "Main garden" renamed to "Your Plot"; My Garden cards all clickable; a missed 404 entry point fixed
+
+Requested: rename "Main garden" to "Your Plot", make it reachable from the dashboard's My Garden
+section, and make every card in that section clickable straight through to the matching spot on
+`/garden` (not the now-flagged-off `/garden/layout`).
+
+Renamed in `GrowingAreaManager.tsx`/`page.tsx`'s copy. Gave every section on `/garden` a stable DOM
+anchor — `id="your-plot"` on the Your Plot section, `id="equipment-{userEquipmentId}"` per owned
+equipment row within it, `id="structure-{id}"` per structure section (all with `scroll-mt-6` so the
+sticky header doesn't cover the target) — and added `sourceUserEquipmentId` to `MyGardenAreaCard`
+(`myGarden.ts`) so a dashboard container card can resolve the exact equipment-row anchor that matches
+it (the finest-grained thing that actually exists for a container on `/garden`, which is
+equipment-row-scoped there, not per physical instance, unlike the dashboard's own per-instance cards).
+
+`MyGardenGrid.tsx`: every card is now a `<Link>` (previously only a structure card was, and only while
+`layoutPlanning` was on) — a structure card goes to `#structure-{id}`, a container card to
+`#equipment-{sourceUserEquipmentId}`. Added a permanent "🌍 Your Plot" shortcut tile, always present
+(even with nothing owned yet) linking to `#your-plot`, since it's meant as a fixed navigational entry
+point, not something tied to owning a particular area. This also meant retiring the old
+"you haven't added any growing areas yet" empty state — Your Plot's own tile now reads "Nothing placed
+yet" in that case instead.
+
+**A real, pre-existing gap found and fixed along the way, not part of the original ask**: while
+auditing every link into `/garden/layout` for this change, `ResourceCardsRow.tsx`'s "Manage garden
+layout" text link (a dashboard resource-links row, separate from My Garden) turned out to still point
+at `/garden/layout` unconditionally — missed when `layoutPlanning` was feature-flagged off last round,
+so it was a dangling 404 link on every fresh dashboard load since then. Fixed the same way as every
+other entry point: swaps to `/garden` ("Manage your garden") while the flag is off.
+
+**Verification**: `tsc --noEmit`/`eslint` clean. Updated `dashboard.spec.ts` for the retired empty-state
+text (now asserts the Your Plot tile's own "Nothing placed yet") and the renamed resource link. Manual
+QA via a scratch Playwright script with real screenshots: confirmed the dashboard's Your Plot card,
+container card, and structure card each land on `/garden` scrolled to the right section. Full e2e suite
+re-run.
+
+## Fix — reducing planting equipment counts silently failed once claimed by a grow plan
+
+Reported: reducing amounts on `/garden` worked inconsistently. Reproduced via a scratch script: with no
+grow plan involved, reducing a "placed" count worked perfectly every time (confirmed 3→2→1→0, Inventory
+correctly showing the freed quantity as remaining). With an ACCEPTED grow plan claiming that equipment
+(`growingAreas.status: "in_use"`), every single decrement click silently reverted — `syncGrowingAreasAction`/
+`assignEquipmentToStructureAction` only ever remove `status: "available"` rows (a deliberate, correct
+safeguard against evicting something actively growing a crop), but returned `{ok: true, ...}` regardless,
+giving the UI nothing to distinguish "fully honored" from "silently blocked." The count would just snap
+back with zero explanation — indistinguishable from the click not registering at all, which is exactly
+what "inconsistent" described.
+
+**Fix**: no server-side behavior change (the "don't delete actively-growing equipment" rule is correct
+and stays) — `GrowingAreaManager.tsx` now compares what a decrement asked for against what the server
+actually returned, and when they differ, shows an inline warning ("Some are currently growing something
+and can't be removed right now.") right under that stepper instead of a silent revert. Also caught two
+unrelated stale references while fixing this: `garden-structure-nesting.spec.ts` still asserted on the
+pre-rename "Main garden" text and the old flag-conditional dashboard-card-link branch (both left over
+from the "Your Plot" rename two entries above), and confirmed `docs/plan.md`'s own examples were the
+only remaining "Main garden" text anywhere.
+
+**Verification**: `tsc --noEmit`/`eslint` clean. Reproduced with real Playwright scripts before and
+after the fix (screenshot confirms the warning renders exactly where the count silently used to just
+sit unchanged). New permanent test in `garden.spec.ts` covering this exact scenario. Full e2e suite
+re-run.
+
+## Fix — dashboard's My Garden grid simplified to Your Plot + structures only
+
+Requested: the dashboard's My Garden section should only show "Your Plot" and garden structures, not
+one card per individual piece of planting equipment.
+
+`MyGardenGrid.tsx` now filters to structure cards only (`containedCount !== undefined`) alongside the
+existing "Your Plot" shortcut tile — a plain pot/tray/grow-bag/planter card is simply not rendered
+there anymore; Your Plot's own item count already reflects it. Checked first whether `getMyGardenAreas`'s
+`cards` array could be filtered at the source instead (simpler) but confirmed it's a shared computation —
+`dashboard/page.tsx` also derives `areaLabelByAreaId` from every card (structures and plain containers
+alike) to label tasks like "Take a photo of 30cm Pot for a health check", so filtering there would have
+silently broken task labelling for equipment outside a structure. Filtered only in the display
+component instead. Removed `sourceUserEquipmentId` from `MyGardenAreaCard`/`myGarden.ts` — it existed
+solely to let an individual container's (now-removed) card link to its equipment row's anchor on
+`/garden`, and had no other consumer once that card stopped rendering.
+
+**Verification**: `tsc --noEmit`/`eslint` clean. Updated the two tests that asserted on an individual
+pot card appearing on the dashboard (`dashboard.spec.ts`, `garden-structure-nesting.spec.ts`) to instead
+assert Your Plot's item count and confirm no stray pot card renders. Manual QA via a scratch Playwright
+script with a real screenshot. Full e2e suite re-run.
+
+## Fix — each garden structure's section restyled to match Your Plot's
+
+Requested: on `/garden`, each garden structure should get its own proper section header (like Your
+Plot's), and its planting-equipment rows should be styled the same way Your Plot's own rows are.
+
+Previously a structure's whole section was ONE shared card (border/shadow around the entire section),
+with its name as bold inline text at the top and each equipment row inside as a plain, unstyled flex
+row — visually inconsistent with Your Plot, where the section itself is plain and each row gets its own
+individual white card. Restructured `GrowingAreaManager.tsx`'s structure-section JSX to mirror Your
+Plot's exact pattern: the structure's emoji+label is now a real `<h2>` header (same
+`text-sm font-medium text-(--text-muted)` styling) sitting outside/above the rows, and each row inside
+is its own `rounded-lg border border-black/10 bg-white p-4 shadow-card` card, identical to a Your Plot
+row. No data/behavior change — pure styling parity.
+
+**Verification**: `tsc --noEmit`/`eslint` clean. Manual QA via a scratch Playwright script with a real
+screenshot confirming the two sections now read identically. Full e2e suite re-run (one unrelated,
+already-documented flaky failure — `net::ERR_ABORTED` on a plain navigation — confirmed passing in
+isolation).
+
+## Feature — grow planner explicitly aware of every plot, not just individual areas
+
+Requested: the grow planner should be aware of all of a user's plots (Your Plot and every garden
+structure) and make recommendations for all of them, not just some.
+
+Investigated first rather than assuming a data gap: `generateGrowPlan.ts`'s own query already fetches
+every `growingAreas` row unconditionally (no parent filter), so nothing about the recent Your
+Plot/structures UI work had actually broken data flow — every area was always reaching the planner.
+The real, confirmed gap was in how that data got USED: (1) the prompt only ever showed a flat list of
+individual areas with a per-line "(inside a X)" annotation, never an explicit PLOT-level grouping, so
+there was no strong signal — for either the AI or the deterministic mock — that an entire structure
+could be silently skipped in favour of already-decided Your Plot areas; and (2) `buildMockPlan`'s
+single-stage recommendation loop was hard-capped at `Math.min(5, singleStageSlots)`, an arbitrary limit
+with no equivalent in the real prompt (which explicitly instructs using every area) — reproduced via a
+scratch script with a Your Plot + 2 structures setup: a mock plan can legitimately generate several
+recommendations while STILL leaving an entire structure with zero, purely because that plot's areas
+happened to sort past the cap.
+
+**Fix**: `generateGrowPlan.ts` now resolves a `plotLabel` per area — "Your Plot" for anything top-level
+and not itself a structure, or that structure's own label (reusing `growingAreaBaseLabel`, the same
+labelling this app already uses on `/garden` and its dashboard) for the structure's own row and
+everything placed inside it. `growPlanner.ts`'s `AVAILABLE GROWING AREAS TO FILL` block now groups by
+this label instead of one flat list, and a new, dedicated instruction requires every plot with a
+reasonable crop fit to get at least one recommendation — explicitly stronger than the pre-existing
+"use every area" wording, which said nothing about plot-level distribution. Removed the mock's arbitrary
+cap so it actually honors that same guarantee deterministically, matching this app's established "every
+mock path should exercise real behavior" convention rather than silently falling short of what the live
+prompt promises.
+
+**Verification**: `tsc --noEmit`/`eslint` clean. Reproduced the gap and confirmed the fix with a real
+scratch Playwright script (Your Plot + a greenhouse + a polytunnel, each with their own areas) —
+screenshot confirms all 6 areas across all 3 plots got a real recommendation, including the correct
+frost-protection reasoning for the area nested inside the greenhouse. New permanent test in
+`garden-structure-nesting.spec.ts` covering this exact multi-plot scenario. Full e2e suite re-run.
+
+## Feature — AI Grow Plan promoted to its own dashboard card
+
+Requested: "AI Grow Plan" was buried as a small text link in `ResourceCardsRow.tsx`'s secondary
+`MORE_LINKS` row, underneath the three prominent cards (Seed inventory, Shopping list, Plant health
+scanner) — promote it to its own full card matching those three, since it's the flagship AI feature.
+
+Promoted it into the card grid as a fourth card (✨ icon, matching the emoji-icon pattern the Plant
+health scanner card already uses), widened the grid from `sm:grid-cols-3` to `sm:grid-cols-2` for a
+clean 2x2 layout at the row's actual (half-page-width) size rather than a cramped 3-or-4-across.
+Removed it from `MORE_LINKS`. Unlike the other three cards, this one's meaningful status genuinely
+depends on subscription tier and grow-plan generation state (mirroring `/grow-plan/page.tsx`'s own
+states), so `dashboard/page.tsx` now also fetches the user's latest `growPlans` row (status only) and,
+when complete, the count of its still-active (`pending`/`accepted`/`regenerating`) recommendations —
+both cheap additions to the same tenant-scoped query already run for the rest of the dashboard. The new
+card's subtitle reads: "Unlock AI-generated plans for your plot" (free tier), "Generate a plan tailored
+to your plot" (paid, no plan yet), "Your plan is being generated…" (pending), "Plan generation failed —
+try again" (failed), or "N recommendations ready" / "View your plan" (complete).
+
+**Verification**: `tsc --noEmit`/`eslint` clean. Manual QA via a scratch Playwright script with real
+screenshots for both the free-tier and paid/no-plan states, confirming the 2x2 card grid and correct
+subtitle in each case. `dashboard.spec.ts` re-run — one failure (`30cm Pot` not appearing on
+`/plant-health` in the garden-health/diagnosis test) confirmed pre-existing and unrelated by re-running
+it in isolation both with and without this change (`git stash`) — identical failure either way, so not
+a regression from this work; left as-is.
+
+## Fix — Gemini API key working; a separate stale Inngest dev-server pairing was masking it
+
+The user added a new Gemini API key. Investigated its shape first (still started `AQ.Ab...`, the same
+prefix as the previously-broken key that failed with `401 UNAUTHENTICATED`/`ACCESS_TOKEN_TYPE_UNSUPPORTED`
+— a genuine AI Studio key is `AIzaSy...`) — confirmed with the user it did come from
+aistudio.google.com/apikey, so proceeded rather than assuming it was a bad paste.
+
+Restarting the Next.js dev server (same approach as the previous key-rotation round) to pick up the new
+`.env.local` value surfaced a second, unrelated problem: the grow-plan request got stuck in "pending"
+forever, with no Gemini call ever attempted. Traced via the Inngest dev server's own HTTP API
+(`localhost:8288/v1/events`, `/v1/runs/{id}`) — the run showed status "Running" indefinitely, and the
+Next.js server log showed only Inngest's periodic sync `PUT`s, never an actual step-invocation `POST`.
+Root cause: the `inngest-cli dev` process (running since the previous day, independent of `next dev`)
+had been paired with the now-killed old Next.js process; restarting Next.js alone left it dispatching
+into a stale registration that never actually reached the new process. Restarted `inngest-cli dev`
+alongside the fresh Next.js process to re-pair them.
+
+With both freshly paired, generation completed for real —
+`[grow-planner] promptTokens=13727 cachedTokens=0` in the server log confirms a genuine (non-mock)
+Gemini call, and `grow-plan.spec.ts`'s "Accept" button assertion passed. The new key works; the earlier
+symptom was two compounding issues, not one.
+
+**Verification**: re-ran the previously-failing AI-dependent tests (`grow-plan.spec.ts`,
+`community-harvest-popularity.spec.ts`, `garden-structure-nesting.spec.ts`, `seeds.spec.ts`) against the
+freshly-paired servers.
+
+## Feature — maintenance tasks now raised for garden structures specifically
+
+Requested: confirm the grow planner asks for recommendations specifically covering garden structures
+(greenhouse/mini-greenhouse/cold frame/polytunnel), and raise maintenance tasks for structures too,
+where applicable.
+
+The grow-planner half was already in place from an earlier round this session (`plotLabel`/
+`groupAreasByPlot` in `growPlanner.ts`, `plotLabelFor` in `generateGrowPlan.ts`, with an explicit
+"every plot must get at least one recommendation" instruction) — verified still correct, no changes
+needed there.
+
+Maintenance tasks were the real gap: `generateMaintenanceTasksFn`/`maintenanceTasks.ts` only ever saw a
+flat `{type, count}` list of `in_use` growing areas — a greenhouse was indistinguishable from a raised
+bed, with zero signal that an enclosed structure has fundamentally different upkeep needs (ventilation,
+pest/mould checks in a humid enclosed space, cleaning glazing, checking seals/frost-protection
+integrity) from open-ground weeding/mulching. Worse, `dailyJobsFn`'s own eligibility gate required at
+least one `in_use` growing area anywhere — a user who owned only an empty, unplanted structure would
+never even become eligible for a maintenance-task run at all.
+
+**Fix**: `maintenanceTasks.ts`'s input gained a `structures: {type, label, hasActivePlants}[]` field,
+surfaced to the AI as its own "GARDEN STRUCTURES YOU OWN" prompt section (structure label +
+empty/occupied state) alongside the existing flat area-type list, with an explicit instruction covering
+the structure-specific upkeep categories above and requiring the exact structure label be used in any
+such task's title. `generateMaintenanceTasksFn` now fetches all of a user's owned areas (not just
+`in_use`) to additionally derive top-level structures via `HEIGHT_TYPES`, with `hasActivePlants`
+covering both the structure's own floor and anything placed inside it. `dailyJobsFn`'s eligibility gate
+was widened to also admit a user who owns a structure with nothing currently `in_use` anywhere — the
+exact case that was silently excluded before. Mock path updated to deterministically produce one
+structure-check task per owned structure, matching this app's "every mock path exercises real behavior"
+convention.
+
+**Verification**: `tsc --noEmit`/`eslint` clean. No existing e2e coverage exists for this cron-only,
+UI-trigger-less feature (confirmed via a repo-wide search — no test previously touched
+`generateMaintenanceTasks`/`dailyJobs`), so verified live end-to-end instead: a scratch script created a
+paid test user owning only an empty, unplanted greenhouse (nothing `in_use` anywhere — the exact
+eligibility-gate edge case), posted `maintenance-tasks/requested` directly to the local Inngest dev
+server, and confirmed via direct DB read that two genuine, structure-specific tasks were persisted
+using the real Gemini key: "Clean and wash down the Greenhouse" and "Inspect Greenhouse vents and
+seals," both correctly reasoning about the structure being currently empty and the time of year (late
+August). Scratch script and its test user removed after.

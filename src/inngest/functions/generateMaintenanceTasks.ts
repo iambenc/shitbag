@@ -4,6 +4,8 @@ import { withTenant } from "@/lib/tenant/withTenant";
 import { userProfiles, growingAreas, equipmentTypes, userEquipment, shoppingListItems, tasks } from "@/db/schema";
 import { generateMaintenanceTasks } from "@/lib/ai/agents/maintenanceTasks";
 import { SLUG_TO_GROWING_AREA_TYPE } from "@/lib/garden/equipmentMapping";
+import { HEIGHT_TYPES } from "@/lib/garden/layout";
+import { growingAreaBaseLabel } from "@/lib/garden/labels";
 import { todayIso } from "@/lib/dates";
 import type { GrowingAreaType } from "@/db/schema";
 
@@ -33,19 +35,38 @@ export const generateMaintenanceTasksFn = inngest.createFunction(
 
     const context = await step.run("gather-context", async () => {
       return withTenant(tenantId, async (tx) => {
-        const [profile, areas, allEquipmentTypes, owned] = await Promise.all([
+        const [profile, allAreas, allEquipmentTypes, owned] = await Promise.all([
           tx.select().from(userProfiles).where(eq(userProfiles.userId, userId)),
-          // Only areas something is actually growing in — an available/
-          // reserved pot has nothing to weed or mulch yet.
-          tx.select().from(growingAreas).where(and(eq(growingAreas.userId, userId), eq(growingAreas.status, "in_use"))),
+          // Every owned area regardless of status — structures need their
+          // own upkeep considered whether or not anything's currently
+          // planted (see structures below), unlike the in_use-only
+          // growingAreaCounts filter beneath it.
+          tx.select().from(growingAreas).where(eq(growingAreas.userId, userId)),
           tx.select().from(equipmentTypes).where(eq(equipmentTypes.tenantId, tenantId)),
           tx.select({ equipmentTypeId: userEquipment.equipmentTypeId }).from(userEquipment).where(eq(userEquipment.userId, userId)),
         ]);
 
+        // Only areas something is actually growing in — an available/
+        // reserved pot has nothing to weed or mulch yet.
+        const inUseAreas = allAreas.filter((a) => a.status === "in_use");
         const countByType = new Map<GrowingAreaType, number>();
-        for (const area of areas) {
+        for (const area of inUseAreas) {
           countByType.set(area.type, (countByType.get(area.type) ?? 0) + 1);
         }
+
+        // Garden structures (greenhouse/mini-greenhouse/cold frame/
+        // polytunnel) the user owns, top-level only (a structure never
+        // nests inside another). hasActivePlants covers both the
+        // structure's own floor being in_use and anything placed inside it
+        // (a contained pot/tray/etc. with parentGrowingAreaId pointing at
+        // it) — see maintenanceTasks.ts for why this needs to be tracked
+        // separately from growingAreaCounts above.
+        const structureAreas = allAreas.filter((a) => !a.parentGrowingAreaId && HEIGHT_TYPES.includes(a.type));
+        const structures = structureAreas.map((s) => ({
+          type: s.type,
+          label: growingAreaBaseLabel(s),
+          hasActivePlants: inUseAreas.some((a) => a.id === s.id || a.parentGrowingAreaId === s.id),
+        }));
 
         // Tools only — growing-space equipment (pots/trays/planters/beds)
         // isn't something you'd need for a weeding/mulching task.
@@ -55,19 +76,21 @@ export const generateMaintenanceTasksFn = inngest.createFunction(
         return {
           expertiseLevel: profile[0]?.expertiseLevel ?? null,
           growingAreaCounts: [...countByType.entries()].map(([type, count]) => ({ type, count })),
+          structures,
           toolTypes: toolTypes.map((t) => ({ id: t.id, slug: t.slug, name: t.name })),
           ownedToolSlugs: toolTypes.filter((t) => ownedEquipmentTypeIds.has(t.id)).map((t) => t.slug),
         };
       });
     });
 
-    if (context.growingAreaCounts.length === 0) return;
+    if (context.growingAreaCounts.length === 0 && context.structures.length === 0) return;
 
     try {
       const maintenanceTasks = await step.run("call-agent", async () => {
         const result = await generateMaintenanceTasks(tenantId, {
           today: todayIso(),
           growingAreaCounts: context.growingAreaCounts,
+          structures: context.structures,
           toolCatalog: context.toolTypes.map((t) => ({ slug: t.slug, name: t.name })),
           ownedToolSlugs: context.ownedToolSlugs,
           expertiseLevel: context.expertiseLevel,

@@ -2,8 +2,8 @@ import "server-only";
 import { z } from "zod";
 import { generateObject } from "ai";
 import { getModelForTenant } from "@/lib/ai/provider";
-import { formatSizeValue } from "@/lib/garden/labels";
-import type { SizeUnit } from "@/db/schema";
+import { formatSizeValue, growingAreaTypeLabels } from "@/lib/garden/labels";
+import type { SizeUnit, GrowingAreaType } from "@/db/schema";
 
 export const GrowPlanOutputSchema = z.object({
   summary: z.string(),
@@ -159,6 +159,21 @@ export type GrowPlannerInput = {
     lengthCm: number | null;
     depthCm: number | null;
     heightCm: number | null;
+    // Set when this area is physically placed inside a structure (a
+    // greenhouse/mini-greenhouse/cold frame/polytunnel — see
+    // parentGrowingAreaId on growingAreas) — that structure's own type, so
+    // the AI can extend it the same frost-protection/season-extension
+    // reasoning the structure itself gets. Null for a top-level area,
+    // including a structure itself.
+    insideStructureType: GrowingAreaType | null;
+    // Which physical PLOT this area belongs to — "Your Plot" (the open
+    // ground) or a specific structure's own label (shared by that
+    // structure's own row and everything placed inside it). Used to group
+    // AVAILABLE GROWING AREAS TO FILL by plot rather than as one flat list,
+    // so the AI can reason about (and BASE_INSTRUCTIONS can require)
+    // coverage per plot, not just per individual area — see /garden's own
+    // Your Plot / per-structure section split this mirrors.
+    plotLabel: string;
   }[];
   unplacedEquipment: { type: string; count: number }[];
   // varietySlug null means "owns this crop's seeds but no specific variety
@@ -168,6 +183,13 @@ export type GrowPlannerInput = {
   favoriteCropSlugs: string[];
   dislikedCropSlugs: string[];
   harvestHistory: { cropSlug: string; quantity: number; unit: string; harvestedAt: string }[];
+  // Anonymized, opt-in-only popularity counts from OTHER users in the same
+  // tenant (see src/lib/growPlan/communityPopularity.ts) — purely
+  // informational colour for a recommendation's reasoning, never a
+  // selection/ranking input (see BASE_INSTRUCTIONS' own item on this).
+  // Undefined/empty is the common case (most tenants will have few or no
+  // opted-in growers yet).
+  communityPopularity?: { cropSlug: string; growerCount: number }[];
   availableCrops: AvailableCrop[];
   // "Try something new" toggle from the generate-plan button — see the
   // WANTS UNUSUAL SUGGESTION prompt section, only included when true.
@@ -184,8 +206,34 @@ function areaSizeText(area: GrowPlannerInput["growingAreas"][number]): string {
   const sized = formatSizeValue(area.sizeValue, area.sizeUnit);
   const dims =
     sized ?? (area.widthCm && area.lengthCm ? `${area.widthCm}x${area.lengthCm}${area.depthCm ? `x${area.depthCm}` : ""}cm` : null);
-  if (!dims) return "size unknown";
-  return area.heightCm ? `${dims}, ${area.heightCm}cm tall` : dims;
+  return !dims ? "size unknown" : area.heightCm ? `${dims}, ${area.heightCm}cm tall` : dims;
+}
+
+// Groups AVAILABLE GROWING AREAS TO FILL by plotLabel — "Your Plot" first
+// (if present), then each structure in first-seen order — rather than one
+// flat list. This is what lets the plot-coverage instruction below actually
+// mean something to the AI: it can see exactly which areas belong to the
+// same physical plot, not just infer it from each area's own
+// insideStructureType.
+function groupAreasByPlot(growingAreas: GrowPlannerInput["growingAreas"]): string {
+  if (growingAreas.length === 0) return "- none available";
+  const order: string[] = [];
+  const byPlot = new Map<string, GrowPlannerInput["growingAreas"]>();
+  for (const area of growingAreas) {
+    if (!byPlot.has(area.plotLabel)) {
+      order.push(area.plotLabel);
+      byPlot.set(area.plotLabel, []);
+    }
+    byPlot.get(area.plotLabel)!.push(area);
+  }
+  order.sort((a, b) => (a === "Your Plot" ? -1 : b === "Your Plot" ? 1 : 0));
+  return order
+    .map((plotLabel) => {
+      const areas = byPlot.get(plotLabel)!;
+      const lines = areas.map((a) => `  - id ${a.id}: ${a.type}, ${areaSizeText(a)}`).join("\n");
+      return `${plotLabel}:\n${lines}`;
+    })
+    .join("\n");
 }
 
 // Static across every single call, for every tenant and user — never
@@ -201,7 +249,8 @@ function areaSizeText(area: GrowPlannerInput["growingAreas"][number]): string {
 const BASE_INSTRUCTIONS: string[] = [
   "Recommend crops that will thrive given the space, sunlight, and season (relative to today's date and the sow-month windows above). Prioritise owned seeds; anything else needed must be marked requiresPurchase: true.",
   "Maximise the household's value return: where several crops would suit the same space and season roughly equally well, prefer the one with a higher estimated retail cost (est. retail £/kg in the catalog above) — growing high-cost-to-buy crops (soft fruit, fresh herbs, specialty salad leaves) saves the user more money than growing cheap staples (potatoes, onions, cabbage) they could buy inexpensively anyway. This is secondary to genuine fit, season, owned seeds, favourites, and dislikes — never recommend a crop that's a poor fit, out of season, disliked, or unsuited to the available space just because it's expensive to buy. Where cost was a meaningful factor in a choice, you may briefly note the value angle in that recommendation's reasoning.",
-  'Decide, per crop, how many growing-area stages it needs — most just need one (sown directly in its final growing space, exactly what "stages" with a single entry means). Some crops, especially ones with an indoor sowing window (sowIndoorFromMonth/ToMonth set in the catalog), are better started in a seed tray or pot before moving to their final growing space — for these, list every stage in order from where it starts to its final home (2 or 3 entries). Only use more than one stage when you actually have suitable areas of each needed type available — never invent a stage there\'s no real space for. Prefer matching a crop\'s spacingCm/soilDepthCm to an area\'s dimensions where both are known (e.g. don\'t put a deep-rooted crop in a shallow tray) — a pot\'s size may be given as a diameter in cm or a volume in litres (L); for a litres figure, use general horticultural judgement for fit (roughly: ~1-2L suits small herbs/seedlings, ~5-10L suits most vegetables, 15L+ suits larger plants) rather than comparing it arithmetically against spacingCm/soilDepthCm, which only makes sense for a cm diameter. Every area must still get used by some stage of some recommendation if there\'s a reasonable crop for it — don\'t leave areas unused just because the fit isn\'t perfect. If there are no available growing areas, produce no recommendations. A greenhouse, mini-greenhouse, or cold frame extends the growing season by protecting from frost and giving extra warmth — treat a greenhouse as capable of being either a genuine final growing space (for tender/heat-loving crops that couldn\'t survive outdoors) or a hardier crop\'s early-season start; treat a mini-greenhouse or cold frame primarily as a season-extension or hardening-off stage before a crop\'s final growing space, rarely a final home itself, similar in role to a pot or seed tray but for larger or already-potted plants rather than seedlings.',
+  'Decide, per crop, how many growing-area stages it needs — most just need one (sown directly in its final growing space, exactly what "stages" with a single entry means). Some crops, especially ones with an indoor sowing window (sowIndoorFromMonth/ToMonth set in the catalog), are better started in a seed tray or pot before moving to their final growing space — for these, list every stage in order from where it starts to its final home (2 or 3 entries). Only use more than one stage when you actually have suitable areas of each needed type available — never invent a stage there\'s no real space for. Prefer matching a crop\'s spacingCm/soilDepthCm to an area\'s dimensions where both are known (e.g. don\'t put a deep-rooted crop in a shallow tray) — a pot\'s size may be given as a diameter in cm or a volume in litres (L); for a litres figure, use general horticultural judgement for fit (roughly: ~1-2L suits small herbs/seedlings, ~5-10L suits most vegetables, 15L+ suits larger plants) rather than comparing it arithmetically against spacingCm/soilDepthCm, which only makes sense for a cm diameter. Every area must still get used by some stage of some recommendation if there\'s a reasonable crop for it — don\'t leave areas unused just because the fit isn\'t perfect. If there are no available growing areas, produce no recommendations. A greenhouse, mini-greenhouse, cold frame, or polytunnel extends the growing season by protecting from frost and giving extra warmth — treat a greenhouse or polytunnel as capable of being either a genuine final growing space (for tender/heat-loving crops that couldn\'t survive outdoors) or a hardier crop\'s early-season start; treat a mini-greenhouse or cold frame primarily as a season-extension or hardening-off stage before a crop\'s final growing space, rarely a final home itself, similar in role to a pot or seed tray but for larger or already-potted plants rather than seedlings. An area listed under one of these structures\' own PLOT heading in AVAILABLE GROWING AREAS TO FILL (a pot, seed tray, grow bag, or planter placed within it) gets that structure\'s frost protection and warmth too — reason about it exactly as you would a direct stage in that structure (tender/early-start crops, season extension), never as if it were sitting outdoors on its own.',
+  'AVAILABLE GROWING AREAS TO FILL is grouped by PLOT — "Your Plot" (the open ground) and each named garden structure are each their own plot, exactly matching how the user manages them on the garden page. Every plot that has at least one area with a reasonable crop fit must get at least one recommendation using some area within it — never leave an entire plot (especially a garden structure the user has set up) completely empty of recommendations while other plots get several, unless that plot genuinely has no remaining reasonable fit for anything available. This is a stronger requirement than "use every area": it\'s specifically about making sure no plot is silently skipped.',
   "Explain your reasoning per recommendation, in language appropriate to the user's expertise level.",
   'Generate tasks (sowing, feeding where feeding notes exist, and transplanting where relevant) each with an explanation of why/when and an absolute last date (hardDeadlineDate) after which it\'s too late. For any crop with more than one stage, also add a transplant task for each stage after the first (e.g. "Pot on your Tomato seedlings", "Plant out your Tomato into its raised bed"), with activatesGrowingAreaId set to that stage\'s growing area id — completing this task is what actually moves the crop, so get its timing right relative to the previous stage. Leave activatesGrowingAreaId null on every other task. Every task must also set recommendationIndex to the 0-based position of its crop\'s entry in the recommendations array above. Growing area ids (the uuids from AVAILABLE GROWING AREAS TO FILL) are for the activatesGrowingAreaId/stages fields only — never write one into a task\'s title or explanation, even to disambiguate between two areas of the same type; refer to areas there only by type and size (e.g. "a seed tray", "the 20cm pot", "your raised bed").',
   "On every task that sows or plants seeds (the crop's first sowing and any succession re-sow), set estimatedSeedsUsed to your best-guess seed count for that specific sowing — the growing area's size divided by the crop's spacingCm, plus a 20-30% margin for germination failure. Leave it null on every other task (feeding, transplanting, potting on).",
@@ -213,6 +262,7 @@ const BASE_INSTRUCTIONS: string[] = [
   'If a crop you\'d genuinely recommend isn\'t in the catalog above, you may propose it: set newCropName to its common name (e.g. "Swiss Chard") and give it a lowercase-hyphenated cropSlug (e.g. "swiss-chard"), used identically in this recommendation and in any of its tasks. Only propose well-established, common home-garden crops you\'re confident about — never an obscure or fictional one. Leave newCropName null for every crop already in the catalog.',
   'VARIETIES: picking a specific cultivar (varietySlug) is entirely optional — leave it null for a plain species-level recommendation, which is fine and the normal case. Only pick one when you have a genuine reason: the user already owns seeds for that specific variety (see SEEDS ALREADY OWNED), a listed variety\'s growthHabit genuinely fits the target area better (e.g. a compact/bush cultivar for a small pot), it has notable disease resistance worth calling out, or it\'s a well-established, clearly superior choice you\'re confident about. If you pick a variety not in that crop\'s listed varieties, propose it via newVarietyName (its real name, e.g. "Moneymaker") the same way newCropName works for a new crop — only for well-established, real cultivars, never invented ones. Never set newVarietyName without varietySlug also set, and never set either when the recommendation is for a newCropName crop not yet in the catalog (a variety can\'t be resolved against a crop that doesn\'t exist yet).',
   "Every recommendation must set isUnusualSuggestion — false unless it's the one exception described below.",
+  "If COMMUNITY HARVEST POPULARITY data is present below and a crop you're already recommending for genuine fit/season/value reasons appears in it, you may mention that popularity as supporting colour in that recommendation's reasoning (e.g. \"also grown successfully by N other gardeners here\"). This is informational only — never let it influence WHICH crops you pick, never recommend a crop primarily because it's popular, and never mention it for a crop you wouldn't otherwise have recommended.",
 ];
 
 // The static prefix: role framing, injection-hardening framing, the full
@@ -263,8 +313,8 @@ USER PROFILE
 - Indoor seedling space available: ${profile.hasIndoorSeedlingSpace ? "yes" : "no"}
 - Time available: ${profile.weekdayHoursAvailable ?? "unknown"}h/weekday, ${profile.weekendHoursAvailable ?? "unknown"}h/weekend day
 
-AVAILABLE GROWING AREAS TO FILL (assign a sequence of one or more of these to each recommendation's stages, by id; never invent an id, never reuse one across two stages or two recommendations, and never claim more areas in total than are listed here)
-${growingAreas.length ? growingAreas.map((a) => `- id ${a.id}: ${a.type}, ${areaSizeText(a)}`).join("\n") : "- none available"}
+AVAILABLE GROWING AREAS TO FILL (grouped by PLOT — "Your Plot" is the open ground, every other heading is a named garden structure; assign a sequence of one or more of these to each recommendation's stages, by id; never invent an id, never reuse one across two stages or two recommendations, and never claim more areas in total than are listed here — see the plot-coverage instruction below)
+${groupAreasByPlot(growingAreas)}
 
 EQUIPMENT OWNED BUT NOT YET PLACED AS GROWING SPACE (mention in the summary if placing it would let the user grow more — don't assign recommendations to it, it isn't a growing area yet)
 ${unplacedEquipment.length ? unplacedEquipment.map((e) => `- ${e.count}x ${e.type}`).join("\n") : "- none"}
@@ -280,6 +330,11 @@ ${dislikedCropSlugs.length ? dislikedCropSlugs.join(", ") : "none"}
 
 PRIOR HARVEST HISTORY (use to judge whether to recommend the same crop again; the unit after each quantity is <user-text>)
 ${harvestHistory.length ? harvestHistory.map((h) => `- ${h.cropSlug}: ${h.quantity}<user-text>${h.unit}</user-text> on ${h.harvestedAt}`).join("\n") : "- no history yet"}`;
+
+  if (input.communityPopularity && input.communityPopularity.length > 0) {
+    section += `\n\nCOMMUNITY HARVEST POPULARITY (anonymized counts of other opted-in gardeners in this same community who've harvested each crop — informational only, see the instruction on this above)
+${input.communityPopularity.map((c) => `- ${c.cropSlug}: grown by ${c.growerCount} other gardeners here`).join("\n")}`;
+  }
 
   if (input.wantsUnusualCrop) {
     section += `\n\nADDITIONAL INSTRUCTION\n${BASE_INSTRUCTIONS.length + 1}. WANTS UNUSUAL SUGGESTION: the user has asked to try something new this time. Include exactly ONE additional recommendation for a genuinely unusual/uncommon crop that isn't commonly grown in UK home gardens — avoid common staples (tomatoes, lettuce, potatoes, carrots, onions, beans, peas, courgettes, cucumbers, common herbs) — but IS realistically growable outdoors in the UK climate, e.g. oca, achocha, yacon, cape gooseberries (Physalis), tomatillos, cucamelons, salsify, or kohlrabi. This recommendation must use exactly ONE growing area (a single-entry stages array — never start it in a seed tray or pot first, even if it would otherwise benefit from that), and must still genuinely fit the available space and season like any other recommendation — never force a poor fit just to satisfy this. Set isUnusualSuggestion: true on this one recommendation only. If there's no genuine space/season fit for anything unusual, skip it rather than forcing a bad pick — it's fine for every recommendation to be false.`;
@@ -364,12 +419,21 @@ function buildMockPlan(input: GrowPlannerInput): GrowPlanOutput {
     }
     return Math.max(3, Math.round(300 / crop.spacingCm));
   }
-  function reasoningFor(crop: AvailableCrop, requiresPurchase: boolean): string {
+  function reasoningFor(
+    crop: AvailableCrop,
+    requiresPurchase: boolean,
+    finalArea?: GrowPlannerInput["growingAreas"][number] | null,
+  ): string {
+    const popularity = input.communityPopularity?.find((c) => c.cropSlug === crop.slug);
+    const communityNote = popularity ? ` Also grown by ${popularity.growerCount} other gardeners here.` : "";
+    const structureNote = finalArea?.insideStructureType
+      ? ` Being inside your ${growingAreaTypeLabels[finalArea.insideStructureType].toLowerCase()} gives it extra warmth and frost protection.`
+      : "";
     return `${crop.name} suits a ${input.profile.plotSize ?? "small"} plot with your ${expertise} experience level. ${
       requiresPurchase
         ? "You'll need to add seeds to your shopping list for this one."
         : "You already have seeds for this, so it's ready to go."
-    } [Mock plan — connect a Gemini API key for real AI-generated recommendations.]`;
+    }${communityNote}${structureNote} [Mock plan — connect a Gemini API key for real AI-generated recommendations.]`;
   }
 
   // Pool of unclaimed areas grouped by type, consumed as recommendations are
@@ -418,7 +482,7 @@ function buildMockPlan(input: GrowPlannerInput): GrowPlanOutput {
         varietySlug: null,
         newVarietyName: null,
         stages,
-        reasoning: reasoningFor(crop, requiresPurchase),
+        reasoning: reasoningFor(crop, requiresPurchase, finalArea),
         requiresPurchase,
         estimatedHarvestStart: addDays(crop.daysToHarvestMin),
         estimatedHarvestEnd: addDays(crop.daysToHarvestMax),
@@ -469,13 +533,17 @@ function buildMockPlan(input: GrowPlannerInput): GrowPlanOutput {
     }
   }
 
-  // Remaining single-stage recommendations, one area each, capped at 5 and
-  // reserving one leftover area (if any) for the synthetic new-crop demo
-  // below, plus a second one when wantsUnusualCrop needs its own demo area.
+  // Remaining single-stage recommendations, one area each — every remaining
+  // area gets a real recommendation here (no arbitrary cap: this mock must
+  // actually honor "every plot gets used," same as the live prompt's own
+  // instruction, or a user with several garden structures would see some
+  // silently skipped even in mock mode), reserving one leftover area (if
+  // any) for the synthetic new-crop demo below, plus a second one when
+  // wantsUnusualCrop needs its own demo area.
   const remainingAreas = [...pool.values()].flat();
   const reservedForDemos = 1 + (input.wantsUnusualCrop ? 1 : 0);
   const singleStageSlots = Math.max(0, remainingAreas.length - reservedForDemos);
-  const singleStagePicked = candidates.slice(candidateIndex, candidateIndex + Math.min(5, singleStageSlots));
+  const singleStagePicked = candidates.slice(candidateIndex, candidateIndex + singleStageSlots);
   // Demonstrates the "pick an existing known variety" pathway once, for the
   // first candidate that has any — every mock path in this app should be
   // exercised, not just the crop-only default. Proposing a brand-new
@@ -496,7 +564,7 @@ function buildMockPlan(input: GrowPlannerInput): GrowPlanOutput {
       varietySlug: demoVariety?.slug ?? null,
       newVarietyName: null,
       stages: [{ growingAreaId: area.id }],
-      reasoning: reasoningFor(crop, requiresPurchase),
+      reasoning: reasoningFor(crop, requiresPurchase, area),
       requiresPurchase,
       estimatedHarvestStart: addDays(crop.daysToHarvestMin + i * 5),
       estimatedHarvestEnd: addDays(crop.daysToHarvestMax + i * 5),

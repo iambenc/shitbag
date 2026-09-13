@@ -22,10 +22,12 @@ import {
   suggestPositions,
   hasHeight,
   hasDepth,
+  HEIGHT_TYPES,
   WALKWAY_CLEARANCE_CM,
   GRID_CM,
   type PositionedRect,
 } from "@/lib/garden/layout";
+import { CONTAINER_GROWING_AREA_TYPES } from "@/lib/garden/equipmentMapping";
 import { growingAreaTypeLabels, growingAreaTypeEmoji, formatSizeValue } from "@/lib/garden/labels";
 import { growingAreaTypeEnum, type GrowingAreaType, type GrowingAreaStatus, type SizeUnit } from "@/db/schema";
 
@@ -75,7 +77,7 @@ const TRAY_CARD_PX = 64;
 // has no hemisphere handling anywhere else despite already storing
 // latitude, so that's a known, deliberate simplification here, not an
 // oversight.
-const TALL_TYPES: GrowingAreaType[] = ["raised_bed", "planter", "greenhouse", "mini_greenhouse"];
+const TALL_TYPES: GrowingAreaType[] = ["raised_bed", "planter", "greenhouse", "mini_greenhouse", "polytunnel"];
 const SHADE_CHECK_DISTANCE_CM = 150;
 
 // Custom per-type icons for this canvas only — deliberately NOT touching
@@ -102,7 +104,7 @@ function sizeText(row: Pick<Area, "sizeValue" | "sizeUnit" | "widthCm" | "length
 }
 
 function usesSizedFields(type: GrowingAreaType) {
-  return type === "pot" || type === "seed_tray";
+  return type === "pot" || type === "seed_tray" || type === "grow_bag";
 }
 
 function statusClasses(status: GrowingAreaStatus) {
@@ -283,7 +285,20 @@ function PlotBoundaryForm({
   );
 }
 
-function AddAreaForm({ onAdded }: { onAdded: (area: Area) => void }) {
+function AddAreaForm({
+  onAdded,
+  allowedTypes = growingAreaTypeEnum,
+  parentGrowingAreaId = null,
+}: {
+  onAdded: (area: Area) => void;
+  allowedTypes?: readonly GrowingAreaType[];
+  parentGrowingAreaId?: string | null;
+}) {
+  // "pot" is always a member of both the full enum (main plot) and
+  // CONTAINER_GROWING_AREA_TYPES (a structure's own sub-plot) — a single
+  // fixed default, unaffected by allowedTypes, preserves the main plot's
+  // existing default rather than switching it to whatever happens to sort
+  // first in growingAreaTypeEnum.
   const [type, setType] = useState<GrowingAreaType>("pot");
   const [sizeValue, setSizeValue] = useState("");
   const [sizeUnit, setSizeUnit] = useState<SizeUnit>("cm");
@@ -312,6 +327,7 @@ function AddAreaForm({ onAdded }: { onAdded: (area: Area) => void }) {
       lengthCm: !usesSizedFields(type) && submitted.lengthCm ? Number(submitted.lengthCm) : null,
       depthCm: !usesSizedFields(type) && hasDepth(type) && submitted.depthCm ? Number(submitted.depthCm) : null,
       heightCm: hasHeight(type) && submitted.heightCm ? Number(submitted.heightCm) : null,
+      parentGrowingAreaId,
     });
     setPending(false);
     if (!result.ok) {
@@ -335,7 +351,7 @@ function AddAreaForm({ onAdded }: { onAdded: (area: Area) => void }) {
           onChange={(e) => setType(e.target.value as GrowingAreaType)}
           className="rounded-md border border-black/15 px-2 py-1.5 text-sm"
         >
-          {growingAreaTypeEnum.map((t) => (
+          {allowedTypes.map((t) => (
             <option key={t} value={t}>
               {growingAreaTypeLabels[t]}
             </option>
@@ -480,11 +496,21 @@ export function LayoutCanvas({
   plotWidthCm,
   plotLengthCm,
   areas: initialAreas,
+  containerAreaId,
 }: {
   plotWidthCm: number | null;
   plotLengthCm: number | null;
   areas: Area[];
+  // Set only when this canvas represents a structure's own interior (see
+  // /garden/layout/[areaId]/page.tsx), not the user's one main plot —
+  // plotWidthCm/plotLengthCm then come from that structure's own
+  // widthCm/lengthCm, not the editable userProfiles plot boundary, so the
+  // "Edit size"/PlotBoundaryForm affordance (which writes to that profile
+  // field) is hidden in this mode; resizing a structure goes through owning
+  // it, same as any other equipment.
+  containerAreaId?: string;
 }) {
+  const router = useRouter();
   const [areas, setAreas] = useState(initialAreas);
   // Resyncs when the parent Server Component re-renders with fresh data
   // (e.g. after router.refresh()) — same "adjusting state when a prop
@@ -530,7 +556,7 @@ export function LayoutCanvas({
     return <PlotBoundaryForm />;
   }
 
-  if (editingPlotSize) {
+  if (editingPlotSize && !containerAreaId) {
     return (
       <PlotBoundaryForm
         initialWidthCm={plotWidthCm}
@@ -544,7 +570,7 @@ export function LayoutCanvas({
   async function confirmReset() {
     setConfirmingReset(false);
     setResetting(true);
-    const result = await resetLayoutAction();
+    const result = await resetLayoutAction(containerAreaId ?? null);
     setResetting(false);
     if (result.ok) {
       setAreas((prev) => prev.map((a) => ({ ...a, positionXCm: null, positionYCm: null })));
@@ -670,7 +696,7 @@ export function LayoutCanvas({
 
     const previous = area;
     setAreas((prev) => prev.map((a) => (a.id === area.id ? { ...a, positionXCm: newX, positionYCm: newY } : a)));
-    const result = await saveGrowingAreaPositionAction(area.id, newX, newY);
+    const result = await saveGrowingAreaPositionAction(area.id, newX, newY, containerAreaId ?? null);
     if (!result.ok) setAreas((prev) => prev.map((a) => (a.id === area.id ? previous : a)));
   }
 
@@ -695,15 +721,17 @@ export function LayoutCanvas({
 
       <div className="flex items-center justify-between gap-2">
         <p className="text-sm text-(--text-muted)">
-          Plot size: {plotWidthCm}×{plotLengthCm}cm
+          {containerAreaId ? "Interior size" : "Plot size"}: {plotWidthCm}×{plotLengthCm}cm
         </p>
-        <button
-          type="button"
-          onClick={() => setEditingPlotSize(true)}
-          className="rounded-full border border-black/15 px-3 py-1 text-xs hover:bg-black/5 active:scale-95 transition"
-        >
-          Edit size
-        </button>
+        {!containerAreaId && (
+          <button
+            type="button"
+            onClick={() => setEditingPlotSize(true)}
+            className="rounded-full border border-black/15 px-3 py-1 text-xs hover:bg-black/5 active:scale-95 transition"
+          >
+            Edit size
+          </button>
+        )}
       </div>
 
       <div
@@ -819,6 +847,25 @@ export function LayoutCanvas({
                   ↻
                 </button>
               )}
+              {/* Only on the main plot, for a confirmed (not merely
+                  suggested) structure — the sole discovery path into that
+                  structure's own sub-plot (see /garden/layout/[areaId]).
+                  Same stopPropagation-on-pointerdown trick as the rotate
+                  button above, so tapping it doesn't start a drag. */}
+              {!containerAreaId && saved && HEIGHT_TYPES.includes(area.type) && (
+                <button
+                  type="button"
+                  onPointerDown={(e) => e.stopPropagation()}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    router.push(`/garden/layout/${area.id}`);
+                  }}
+                  aria-label={`View inside ${label}`}
+                  className="absolute -bottom-1.5 -right-1.5 flex h-4 w-4 items-center justify-center rounded-full border border-black/15 bg-white text-[10px] leading-none shadow-card hover:bg-black/5 active:scale-90 transition"
+                >
+                  →
+                </button>
+              )}
             </motion.div>
           );
         })}
@@ -846,7 +893,9 @@ export function LayoutCanvas({
       </p>
 
       <div className="rounded-lg border border-black/10 bg-white p-4 shadow-card">
-        <p className="text-sm font-medium text-(--text-muted)">Not on your plot</p>
+        <p className="text-sm font-medium text-(--text-muted)">
+          {containerAreaId ? "Not in this structure" : "Not on your plot"}
+        </p>
         {setAside.length === 0 ? (
           <p className="mt-2 text-sm text-(--text-muted)">Nothing set aside.</p>
         ) : (
@@ -912,7 +961,11 @@ export function LayoutCanvas({
         )}
       </div>
 
-      <AddAreaForm onAdded={(area) => setAreas((prev) => [...prev, area])} />
+      <AddAreaForm
+        onAdded={(area) => setAreas((prev) => [...prev, area])}
+        allowedTypes={containerAreaId ? CONTAINER_GROWING_AREA_TYPES : undefined}
+        parentGrowingAreaId={containerAreaId ?? null}
+      />
     </div>
   );
 }

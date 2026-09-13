@@ -45,17 +45,23 @@ export async function upgradeToPaid(email: string): Promise<void> {
  * edge-to-edge when their width/length is itself a multiple of 15cm).
  * Accepts either a sizeValue+sizeUnit area (a pot/seed tray) or a
  * widthCm+lengthCm one (anything else) — whichever the row's own type
- * actually uses, matching footprintCm's own two branches.
+ * actually uses, matching footprintCm's own two branches. Optional
+ * heightCm (a structure's own height) and parentGrowingAreaId (placing it
+ * inside a structure's own sub-plot — see parentGrowingAreaId on
+ * growingAreas) — both nullable/unset by every existing caller, added for
+ * garden-structure-nesting.spec.ts. Returns the new row's id (needed to
+ * then place something inside a just-created structure).
  */
 export async function addGrowingAreaAt(
   email: string,
-  params: { type: string; positionXCm: number; positionYCm: number } & (
+  params: { type: string; positionXCm: number; positionYCm: number; heightCm?: number; parentGrowingAreaId?: string } & (
     | { sizeValue: number; sizeUnit: "cm" | "litres"; widthCm?: never; lengthCm?: never }
     | { sizeValue?: never; sizeUnit?: never; widthCm: number; lengthCm: number }
   ),
-): Promise<void> {
+): Promise<string | undefined> {
   const postgres = (await import("postgres")).default;
   const sql = postgres(process.env.DATABASE_URL!, { max: 1 });
+  let newId: string | undefined;
   try {
     const tenants = await sql`select id from tenants`;
     for (const tenant of tenants) {
@@ -63,20 +69,23 @@ export async function addGrowingAreaAt(
         await tx`select set_config('app.tenant_id', ${tenant.id}, true)`;
         const users = await tx`select id from users where email = ${email}`;
         if (users.length === 0) return;
-        await tx`
-          insert into growing_areas (tenant_id, user_id, type, size_value, size_unit, width_cm, length_cm, status, position_x_cm, position_y_cm)
+        const [row] = await tx`
+          insert into growing_areas (tenant_id, user_id, type, size_value, size_unit, width_cm, length_cm, height_cm, status, position_x_cm, position_y_cm, parent_growing_area_id)
           values (
             ${tenant.id}, ${users[0].id}, ${params.type},
             ${params.sizeValue ?? null}, ${params.sizeUnit ?? null},
-            ${params.widthCm ?? null}, ${params.lengthCm ?? null},
-            'available', ${params.positionXCm}, ${params.positionYCm}
+            ${params.widthCm ?? null}, ${params.lengthCm ?? null}, ${params.heightCm ?? null},
+            'available', ${params.positionXCm}, ${params.positionYCm}, ${params.parentGrowingAreaId ?? null}
           )
+          returning id
         `;
+        newId = row.id;
       });
     }
   } finally {
     await sql.end();
   }
+  return newId;
 }
 
 /**
@@ -116,7 +125,14 @@ export async function getGrowingAreasByType(
   email: string,
   type: string,
 ): Promise<
-  { id: string; positionXCm: number | null; positionYCm: number | null; heightCm: number | null; rotationDeg: number }[]
+  {
+    id: string;
+    positionXCm: number | null;
+    positionYCm: number | null;
+    heightCm: number | null;
+    rotationDeg: number;
+    parentGrowingAreaId: string | null;
+  }[]
 > {
   const postgres = (await import("postgres")).default;
   const sql = postgres(process.env.DATABASE_URL!, { max: 1 });
@@ -128,7 +144,7 @@ export async function getGrowingAreasByType(
         const users = await tx`select id from users where email = ${email}`;
         if (users.length === 0) return null;
         return tx`
-          select id, position_x_cm as "positionXCm", position_y_cm as "positionYCm", height_cm as "heightCm", rotation_deg as "rotationDeg"
+          select id, position_x_cm as "positionXCm", position_y_cm as "positionYCm", height_cm as "heightCm", rotation_deg as "rotationDeg", parent_growing_area_id as "parentGrowingAreaId"
           from growing_areas
           where user_id = ${users[0].id} and type = ${type}
         `;
@@ -140,6 +156,7 @@ export async function getGrowingAreasByType(
           positionYCm: number | null;
           heightCm: number | null;
           rotationDeg: number;
+          parentGrowingAreaId: string | null;
         }[];
     }
     return [];
@@ -202,6 +219,16 @@ export async function plantCrop(email: string, cropSlug: string): Promise<void> 
  * one this way rather than waiting for/triggering the real cron.
  */
 export async function addHealthCheckTask(email: string, growingAreaId: string, title: string): Promise<string> {
+  // Uses an explicit JS-computed date (matching src/lib/dates.ts's
+  // todayIso, the same local-timezone definition of "today" the app itself
+  // and the test browser use) rather than SQL `current_date` — the
+  // Postgres session's own timezone can disagree with the local machine's
+  // right around midnight, which would otherwise land the row one day off
+  // from what the dashboard actually renders as "today's tasks" (the same
+  // bug already found and fixed for addWeatherTask in calendar.spec.ts).
+  const now = new Date();
+  const todayIso = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
+
   const postgres = (await import("postgres")).default;
   const sql = postgres(process.env.DATABASE_URL!, { max: 1 });
   try {
@@ -213,7 +240,7 @@ export async function addHealthCheckTask(email: string, growingAreaId: string, t
         if (users.length === 0) return null;
         const [row] = await tx`
           insert into tasks (tenant_id, user_id, title, due_date, source, growing_area_id, status)
-          values (${tenant.id}, ${users[0].id}, ${title}, current_date, 'ai', ${growingAreaId}, 'pending')
+          values (${tenant.id}, ${users[0].id}, ${title}, ${todayIso}, 'ai', ${growingAreaId}, 'pending')
           returning id
         `;
         return row.id as string;
@@ -294,6 +321,96 @@ export async function getShoppingListCropSlugs(email: string): Promise<string[]>
       if (rows) return rows.map((r) => r.slug as string);
     }
     return [];
+  } finally {
+    await sql.end();
+  }
+}
+
+/**
+ * Direct-SQL toggle for the community-harvest-popularity opt-in
+ * (userProfiles.shareHarvestDataForCommunity) — the real UI path is a single
+ * checkbox on /harvests (fast), but tests seeding "another opted-in
+ * gardener" as a background account never need to visit that page
+ * themselves, matching the direct-SQL-for-background-state convention every
+ * other helper in this file already follows.
+ */
+export async function setShareHarvestData(email: string, share: boolean): Promise<void> {
+  const postgres = (await import("postgres")).default;
+  const sql = postgres(process.env.DATABASE_URL!, { max: 1 });
+  try {
+    const tenants = await sql`select id from tenants`;
+    for (const tenant of tenants) {
+      await sql.begin(async (tx) => {
+        await tx`select set_config('app.tenant_id', ${tenant.id}, true)`;
+        const users = await tx`select id from users where email = ${email}`;
+        if (users.length === 0) return;
+        await tx`update user_profiles set share_harvest_data_for_community = ${share} where user_id = ${users[0].id}`;
+      });
+    }
+  } finally {
+    await sql.end();
+  }
+}
+
+/**
+ * Inserts a `harvestLog` row directly, bypassing the real /harvests logging
+ * form — used to seed "another opted-in gardener's" harvest history as
+ * background state for a test, not the thing under test itself.
+ */
+export async function addHarvestLogRow(email: string, cropSlug: string, quantity: number, unit: string): Promise<void> {
+  const postgres = (await import("postgres")).default;
+  const sql = postgres(process.env.DATABASE_URL!, { max: 1 });
+  try {
+    const tenants = await sql`select id from tenants`;
+    for (const tenant of tenants) {
+      const inserted = await sql.begin(async (tx) => {
+        await tx`select set_config('app.tenant_id', ${tenant.id}, true)`;
+        const users = await tx`select id from users where email = ${email}`;
+        if (users.length === 0) return false;
+        const [crop] = await tx`select id from crops where slug = ${cropSlug}`;
+        if (!crop) throw new Error(`No crop found with slug ${cropSlug}`);
+        await tx`
+          insert into harvest_log (tenant_id, user_id, crop_id, quantity, unit, harvested_at)
+          values (${tenant.id}, ${users[0].id}, ${crop.id}, ${quantity}, ${unit}, current_date)
+        `;
+        return true;
+      });
+      if (inserted) return;
+    }
+    throw new Error(`No tenant found containing user ${email}`);
+  } finally {
+    await sql.end();
+  }
+}
+
+/**
+ * Marks a crop as a liked favorite directly — no UI path drives this in
+ * these tests today (the /favourites page isn't otherwise exercised by this
+ * pack), and the mock grow planner deterministically recommends favorites
+ * first, which is exactly what a test asserting on a specific crop's
+ * recommendation needs.
+ */
+export async function favoriteCrop(email: string, cropSlug: string): Promise<void> {
+  const postgres = (await import("postgres")).default;
+  const sql = postgres(process.env.DATABASE_URL!, { max: 1 });
+  try {
+    const tenants = await sql`select id from tenants`;
+    for (const tenant of tenants) {
+      const inserted = await sql.begin(async (tx) => {
+        await tx`select set_config('app.tenant_id', ${tenant.id}, true)`;
+        const users = await tx`select id from users where email = ${email}`;
+        if (users.length === 0) return false;
+        const [crop] = await tx`select id from crops where slug = ${cropSlug}`;
+        if (!crop) throw new Error(`No crop found with slug ${cropSlug}`);
+        await tx`
+          insert into user_favorite_crops (tenant_id, user_id, crop_id, liked)
+          values (${tenant.id}, ${users[0].id}, ${crop.id}, true)
+        `;
+        return true;
+      });
+      if (inserted) return;
+    }
+    throw new Error(`No tenant found containing user ${email}`);
   } finally {
     await sql.end();
   }

@@ -1,6 +1,7 @@
 import { test, expect, type Page, type Locator } from "@playwright/test";
 import { signUpAndOnboard } from "./helpers/auth";
 import { addGrowingAreaAt, addCompletedEstimation, getGrowingAreasByType } from "./helpers/db";
+import { FEATURE_FLAGS } from "@/lib/featureFlags";
 
 // Every unplaced, non-dismissed growing area gets an automatic suggested
 // spot right on the plot (title contains "suggested position") — nothing is
@@ -47,6 +48,11 @@ const centerOf = (box: Box) => ({ x: box.x + box.width / 2, y: box.y + box.heigh
 const belowPlot = (box: Box) => ({ x: box.x + 10, y: box.y + box.height + 80 });
 
 test.describe("plot layout planner", () => {
+  // Entirely unreachable while layoutPlanning is off (both /garden/layout
+  // routes 404 — see src/lib/featureFlags.ts) — self-reactivates the moment
+  // the flag flips back on, rather than needing to be remembered.
+  test.skip(!FEATURE_FLAGS.layoutPlanning, "layout planning is feature-flagged off");
+
   test("adding an area suggests a spot for it; dragging confirms and persists; dragging off sets it aside; reset brings back a fresh suggestion", async ({
     page,
   }) => {

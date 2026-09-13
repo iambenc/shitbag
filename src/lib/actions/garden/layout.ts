@@ -1,12 +1,13 @@
 "use server";
 
-import { eq, and } from "drizzle-orm";
+import { eq, and, isNull } from "drizzle-orm";
 import { withTenant } from "@/lib/tenant/withTenant";
 import { userEquipment, equipmentTypes, growingAreas, userProfiles } from "@/db/schema";
 import type { GrowingAreaType, SizeUnit } from "@/db/schema";
 import { requireSessionAndTenant } from "@/lib/actions/shared";
 import { GROWING_AREA_TYPE_TO_SLUG } from "@/lib/garden/equipmentMapping";
 import { buildGrowingAreaRows } from "@/lib/garden/growingAreaSync";
+import { validateStructureParent } from "@/lib/garden/structureAssignment";
 
 export type SaveGrowingAreaPositionResult = { ok: true } | { ok: false; error: string };
 
@@ -20,6 +21,7 @@ export async function saveGrowingAreaPositionAction(
   growingAreaId: string,
   xCm: number,
   yCm: number,
+  parentGrowingAreaId: string | null,
 ): Promise<SaveGrowingAreaPositionResult> {
   const { userId, tenantId } = await requireSessionAndTenant();
 
@@ -28,9 +30,19 @@ export async function saveGrowingAreaPositionAction(
   }
 
   return withTenant(tenantId, async (tx) => {
+    if (parentGrowingAreaId) {
+      const [area] = await tx
+        .select({ type: growingAreas.type })
+        .from(growingAreas)
+        .where(and(eq(growingAreas.id, growingAreaId), eq(growingAreas.userId, userId)));
+      if (!area) return { ok: false, error: "Growing area not found." };
+      const error = await validateStructureParent(tx, userId, parentGrowingAreaId, area.type);
+      if (error) return { ok: false, error };
+    }
+
     const [row] = await tx
       .update(growingAreas)
-      .set({ positionXCm: xCm, positionYCm: yCm })
+      .set({ positionXCm: xCm, positionYCm: yCm, parentGrowingAreaId })
       .where(and(eq(growingAreas.id, growingAreaId), eq(growingAreas.userId, userId)))
       .returning({ id: growingAreas.id });
     if (!row) return { ok: false, error: "Growing area not found." };
@@ -47,9 +59,14 @@ export async function unplaceGrowingAreaAction(growingAreaId: string): Promise<S
   const { userId, tenantId } = await requireSessionAndTenant();
 
   return withTenant(tenantId, async (tx) => {
+    // Dragging fully off any canvas (main plot or a structure's own
+    // sub-plot) returns an area to the global unplaced pool — nulling
+    // parentGrowingAreaId here too, not just position, is what makes that
+    // true regardless of which canvas the drag started on. A no-op for a
+    // top-level area, which already has a null parent.
     const [row] = await tx
       .update(growingAreas)
-      .set({ positionXCm: null, positionYCm: null })
+      .set({ positionXCm: null, positionYCm: null, parentGrowingAreaId: null })
       .where(and(eq(growingAreas.id, growingAreaId), eq(growingAreas.userId, userId)))
       .returning({ id: growingAreas.id });
     if (!row) return { ok: false, error: "Growing area not found." };
@@ -129,10 +146,16 @@ export async function addGrowingAreaFromLayoutAction(params: {
   lengthCm: number | null;
   depthCm: number | null;
   heightCm: number | null;
+  parentGrowingAreaId: string | null;
 }): Promise<AddGrowingAreaFromLayoutResult> {
   const { userId, tenantId } = await requireSessionAndTenant();
 
   return withTenant(tenantId, async (tx) => {
+    if (params.parentGrowingAreaId) {
+      const error = await validateStructureParent(tx, userId, params.parentGrowingAreaId, params.type);
+      if (error) return { ok: false, error };
+    }
+
     const slug = GROWING_AREA_TYPE_TO_SLUG[params.type];
     const [equipmentType] = await tx
       .select({ id: equipmentTypes.id })
@@ -173,7 +196,13 @@ export async function addGrowingAreaFromLayoutAction(params: {
             sourceUserEquipmentId: equipmentRow.id,
           },
           1,
-        ).map((row) => ({ ...row, status: "available" as const, positionXCm: null, positionYCm: null })),
+        ).map((row) => ({
+          ...row,
+          status: "available" as const,
+          positionXCm: null,
+          positionYCm: null,
+          parentGrowingAreaId: params.parentGrowingAreaId,
+        })),
       )
       .returning();
 
@@ -199,19 +228,28 @@ export async function addGrowingAreaFromLayoutAction(params: {
 export type ResetLayoutResult = { ok: true } | { ok: false; error: string };
 
 /**
- * Clears every one of the user's growing areas back to unpositioned — they
- * all land back in the canvas's "not yet placed" tray, same as any
- * newly-added area. Doesn't touch `status`/ownership/anything else, purely
- * the layout.
+ * Clears the user's growing areas back to unpositioned — they all land back
+ * in the relevant canvas's "not yet placed" tray, same as any newly-added
+ * area. Doesn't touch `status`/ownership/parentGrowingAreaId/anything else,
+ * purely the layout. Scoped by `scopeToParentId` so the main plot's reset
+ * button (called with null) only resets top-level areas — it can't silently
+ * evict everything placed inside every structure's own sub-plot, which
+ * reset from a structure's own page (called with that structure's id) is
+ * the only thing that should ever do.
  */
-export async function resetLayoutAction(): Promise<ResetLayoutResult> {
+export async function resetLayoutAction(scopeToParentId: string | null): Promise<ResetLayoutResult> {
   const { userId, tenantId } = await requireSessionAndTenant();
 
   await withTenant(tenantId, async (tx) => {
     await tx
       .update(growingAreas)
       .set({ positionXCm: null, positionYCm: null })
-      .where(eq(growingAreas.userId, userId));
+      .where(
+        and(
+          eq(growingAreas.userId, userId),
+          scopeToParentId ? eq(growingAreas.parentGrowingAreaId, scopeToParentId) : isNull(growingAreas.parentGrowingAreaId),
+        ),
+      );
   });
 
   return { ok: true };

@@ -13,8 +13,8 @@ const NAV_ITEMS = [
   { href: "/dashboard", label: "Dashboard", icon: DashboardIcon },
   { href: "/garden", label: "My Garden", icon: GardenIcon },
   { href: "/my-shed", label: "My Shed", icon: ShedIcon },
-  { href: "/journal", label: "Journal", icon: JournalIcon },
-  { href: "/calendar", label: "Calendar", icon: CalendarIcon },
+  { href: "/journal", label: "Garden Journal", icon: JournalIcon },
+  { href: "/calendar", label: "My Calendar", icon: CalendarIcon },
 ];
 
 function isActive(pathname: string, href: string): boolean {

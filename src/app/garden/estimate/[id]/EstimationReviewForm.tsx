@@ -80,11 +80,11 @@ function emptyRow(key: string): Row {
   };
 }
 
-// Pots use a size+unit (diameter or volume); everything else uses
-// width/length(+depth) — same split EquipmentPicker already uses, minus
-// depth for a ground-level bed, where it isn't physically meaningful.
+// Pots and grow bags use a size+unit (diameter or volume); everything else
+// uses width/length(+depth) — same split EquipmentPicker already uses,
+// minus depth for a ground-level bed, where it isn't physically meaningful.
 function usesSizedFields(type: GrowingAreaType) {
-  return type === "pot";
+  return type === "pot" || type === "grow_bag";
 }
 
 export function EstimationReviewForm({

@@ -4,7 +4,7 @@ import { z } from "zod";
 import { eq, and } from "drizzle-orm";
 import { db } from "@/db/client";
 import { withTenant } from "@/lib/tenant/withTenant";
-import { harvestLog, cropVarieties, crops, photoJournalEntries, photoVisibilityEnum } from "@/db/schema";
+import { harvestLog, cropVarieties, crops, photoJournalEntries, photoVisibilityEnum, userProfiles } from "@/db/schema";
 import type { PhotoVisibility } from "@/db/schema";
 import { requireSessionAndTenant } from "@/lib/actions/shared";
 import { getPhotoStorage, ALLOWED_IMAGE_TYPES, MAX_PHOTO_BYTES } from "@/lib/storage";
@@ -170,5 +170,14 @@ export async function deleteHarvestAction(harvestId: string): Promise<void> {
   const { userId, tenantId } = await requireSessionAndTenant();
   await withTenant(tenantId, async (tx) => {
     await tx.delete(harvestLog).where(and(eq(harvestLog.id, harvestId), eq(harvestLog.userId, userId)));
+  });
+}
+
+// Sole consent toggle for getCommunityCropPopularity (src/lib/growPlan/
+// communityPopularity.ts) — off by default, opt-in only.
+export async function setShareHarvestDataAction(share: boolean): Promise<void> {
+  const { userId, tenantId } = await requireSessionAndTenant();
+  await withTenant(tenantId, async (tx) => {
+    await tx.update(userProfiles).set({ shareHarvestDataForCommunity: share }).where(eq(userProfiles.userId, userId));
   });
 }

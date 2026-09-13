@@ -3,23 +3,27 @@ import type { GrowingAreaType, SizeUnit } from "@/db/schema";
 export const growingAreaTypeLabels: Record<GrowingAreaType, string> = {
   seed_tray: "Seed tray",
   pot: "Pot",
+  grow_bag: "Grow bag",
   planter: "Planter",
   raised_bed: "Raised bed",
   bed: "Garden bed",
   greenhouse: "Greenhouse",
   mini_greenhouse: "Mini greenhouse",
   cold_frame: "Cold frame",
+  polytunnel: "Polytunnel",
 };
 
 export const growingAreaTypeEmoji: Record<GrowingAreaType, string> = {
   seed_tray: "🌱",
   pot: "🪴",
+  grow_bag: "🛍️",
   planter: "🪵",
   raised_bed: "🧱",
   bed: "🌻",
   greenhouse: "🏠",
   mini_greenhouse: "⛺",
   cold_frame: "🖼️",
+  polytunnel: "🎪",
 };
 
 // A "sized" quantity (today, a pot) can be a cm diameter or a litres volume —

@@ -86,7 +86,7 @@ export default async function CalendarPage() {
   return (
     <div className="mx-auto max-w-6xl px-6 py-16">
       <h1 className="flex items-center gap-2 font-display text-3xl font-semibold text-(--brand-primary)">
-        Calendar <span aria-hidden>🌱</span>
+        My Calendar <span aria-hidden>🌱</span>
       </h1>
       <p className="mt-2 text-sm text-(--text-muted)">Keep track of what needs doing, and when.</p>
       <div className="mt-8">

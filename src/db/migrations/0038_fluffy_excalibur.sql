@@ -1,0 +1,1 @@
+ALTER TABLE "user_profiles" ADD COLUMN "share_harvest_data_for_community" boolean DEFAULT false NOT NULL;

@@ -16,6 +16,7 @@ const WALKWAY_TYPES: GrowingAreaType[] = [
   "greenhouse",
   "mini_greenhouse",
   "cold_frame",
+  "polytunnel",
 ];
 export const WALKWAY_CLEARANCE_CM = 45;
 export const DENSE_CLEARANCE_CM = 0;
@@ -35,17 +36,18 @@ export function requiredClearanceCm(type: GrowingAreaType): number {
 // but aren't nailed down the way a bed/raised_bed/greenhouse is. Used to
 // decide which of a photo estimate's proposed positions get taken as real,
 // confirmed placements versus left for the layout canvas to suggest — see
-// confirmGrowingAreaProposalsAction.
-export const FIXED_TYPES: GrowingAreaType[] = ["bed", "raised_bed", "greenhouse"];
+// confirmGrowingAreaProposalsAction. A polytunnel joins this list too —
+// like a greenhouse, it's erected on site and not something you reposition.
+export const FIXED_TYPES: GrowingAreaType[] = ["bed", "raised_bed", "greenhouse", "polytunnel"];
 
 export function isFixedType(type: GrowingAreaType): boolean {
   return FIXED_TYPES.includes(type);
 }
 
-// Only these three have a real, meaningful heightCm today — see the column
+// Only these four have a real, meaningful heightCm today — see the column
 // comment on growingAreas.heightCm. Used by the equipment picker and every
 // review/add form to decide whether to show a height input at all.
-export const HEIGHT_TYPES: GrowingAreaType[] = ["greenhouse", "mini_greenhouse", "cold_frame"];
+export const HEIGHT_TYPES: GrowingAreaType[] = ["greenhouse", "mini_greenhouse", "cold_frame", "polytunnel"];
 
 export function hasHeight(type: GrowingAreaType): boolean {
   return HEIGHT_TYPES.includes(type);

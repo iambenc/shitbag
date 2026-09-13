@@ -1,8 +1,8 @@
 import { redirect } from "next/navigation";
-import { eq, and } from "drizzle-orm";
+import { eq, and, desc, inArray } from "drizzle-orm";
 import { auth } from "@/lib/auth";
 import { withTenant } from "@/lib/tenant/withTenant";
-import { shoppingListItems, plantDiagnoses, seedInventory, userEquipment } from "@/db/schema";
+import { shoppingListItems, plantDiagnoses, seedInventory, userEquipment, growPlans, planRecommendations } from "@/db/schema";
 import { todayIso } from "@/lib/dates";
 import { getCurrentTenant } from "@/lib/tenant/resolve";
 import { getUserProfile } from "@/lib/onboarding/profile";
@@ -44,10 +44,12 @@ export default async function DashboardPage() {
       ])
     : Promise.resolve([null, null] as const);
 
-  const [{ hasEquipment, hasSeeds, seedVarietyCount, shoppingItemCount, hasDiagnosis, myGarden, health, dashboardTasks }, [weeklyForecast, currentWeather]] =
-    await Promise.all([
+  const [
+    { hasEquipment, hasSeeds, seedVarietyCount, shoppingItemCount, hasDiagnosis, myGarden, health, dashboardTasks, growPlanStatus, growPlanRecommendationCount },
+    [weeklyForecast, currentWeather],
+  ] = await Promise.all([
       withTenant(tenant.id, async (tx) => {
-        const [equipmentRow, seedRows, shoppingRows, diagnosisRows, myGardenResult] = await Promise.all([
+        const [equipmentRow, seedRows, shoppingRows, diagnosisRows, myGardenResult, latestPlanRows] = await Promise.all([
           // Existence-only check for SetupBanner — matches how permissive the
           // old onboarding equipment step was.
           tx.select({ id: userEquipment.id }).from(userEquipment).where(eq(userEquipment.userId, session.user.id)).limit(1),
@@ -58,7 +60,27 @@ export default async function DashboardPage() {
             .where(and(eq(shoppingListItems.userId, session.user.id), eq(shoppingListItems.status, "pending"))),
           tx.select({ id: plantDiagnoses.id }).from(plantDiagnoses).where(eq(plantDiagnoses.userId, session.user.id)).limit(1),
           getMyGardenAreas(tx, session.user.id),
+          tx
+            .select({ id: growPlans.id, status: growPlans.status })
+            .from(growPlans)
+            .where(eq(growPlans.userId, session.user.id))
+            .orderBy(desc(growPlans.createdAt))
+            .limit(1),
         ]);
+
+        const latestPlan = latestPlanRows[0] ?? null;
+        const activeRecommendationRows =
+          latestPlan?.status === "complete"
+            ? await tx
+                .select({ id: planRecommendations.id })
+                .from(planRecommendations)
+                .where(
+                  and(
+                    eq(planRecommendations.growPlanId, latestPlan.id),
+                    inArray(planRecommendations.status, ["pending", "accepted", "regenerating"]),
+                  ),
+                )
+            : [];
 
         const areaLabelByAreaId = new Map(myGardenResult.cards.map((c) => [c.id, c.displayLabel]));
         const [healthSummary, taskSplit] = await Promise.all([
@@ -81,6 +103,8 @@ export default async function DashboardPage() {
           myGarden: myGardenResult.cards,
           health: healthSummary,
           dashboardTasks: taskSplit,
+          growPlanStatus: latestPlan?.status ?? null,
+          growPlanRecommendationCount: activeRecommendationRows.length,
         };
       }),
       weatherPromise,
@@ -134,6 +158,9 @@ export default async function DashboardPage() {
             seedVarietyCount={seedVarietyCount}
             shoppingItemCount={shoppingItemCount}
             hasDiagnosis={hasDiagnosis}
+            paid={paid}
+            growPlanStatus={growPlanStatus}
+            growPlanRecommendationCount={growPlanRecommendationCount}
           />
         </div>
       </FadeIn>

@@ -1,5 +1,6 @@
 import { test, expect } from "@playwright/test";
 import { signUpAndOnboard } from "./helpers/auth";
+import { upgradeToPaid } from "./helpers/db";
 
 // Each test gets its own fresh signup (not a shared beforeAll user, unlike
 // most other spec files in this pack) — both tests below assert on
@@ -71,5 +72,46 @@ test.describe("garden equipment", () => {
 
     await page.goto("/garden");
     await expect(page.getByText("2 placed")).toBeVisible();
+  });
+
+  test("trying to remove a pot that's actively growing something shows a clear warning instead of silently reverting", async ({
+    page,
+  }) => {
+    const { email } = await signUpAndOnboard(page);
+    await page.goto("/my-shed");
+    await page.getByRole("button", { name: "Planting equipment", exact: true }).click();
+    await page.getByRole("button", { name: "Edit equipment" }).click();
+    await page.getByRole("button", { name: "+ Add pots" }).click();
+    await page.getByPlaceholder("e.g. 20").fill("20");
+    await page.getByLabel("Quantity").fill("1");
+    await page.getByRole("button", { name: "Save equipment" }).click();
+    await expect(page.getByText("Saved.")).toBeVisible();
+
+    // Generate and accept a mock grow plan — with only one pot owned, the
+    // mock planner claims it (status: in_use), which is exactly what makes
+    // syncGrowingAreasAction unable to free it via the placed-count stepper
+    // (it only ever removes `status: "available"` rows — see that action's
+    // own docblock).
+    await upgradeToPaid(email);
+    await page.goto("/grow-plan");
+    await page.getByRole("button", { name: "Generate my grow plan" }).click();
+    await expect(page.getByRole("button", { name: "Accept" }).first()).toBeVisible({ timeout: 60_000 });
+    await page.getByRole("button", { name: "Accept" }).first().click();
+
+    await page.goto("/garden");
+    await expect(page.getByText("1 placed")).toBeVisible();
+
+    await Promise.all([
+      page.waitForResponse((r) => r.url().includes("/garden") && r.request().method() === "POST"),
+      page.getByRole("button", { name: "Remove one placed Pots" }).click(),
+    ]);
+
+    // The count reverts to what it actually is server-side (still 1, not
+    // silently stuck at some other number) AND a clear reason is shown —
+    // the bug this test guards against was the count just snapping back
+    // with zero explanation, indistinguishable from the click not having
+    // registered at all.
+    await expect(page.getByText("1 placed")).toBeVisible();
+    await expect(page.getByText("can't be removed right now", { exact: false })).toBeVisible();
   });
 });

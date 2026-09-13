@@ -77,6 +77,11 @@ export type StageShape = {
   lengthCm: number | null;
   depthCm: number | null;
   heightCm: number | null;
+  // Set when this stage's area is physically placed inside a structure (a
+  // greenhouse/mini-greenhouse/cold frame/polytunnel) — that structure's own
+  // type, mirroring growPlanner.ts's identical field. Null for a top-level
+  // area, including a structure itself.
+  insideStructureType: string | null;
 };
 
 export type RecommendationReplacementInput = {
@@ -101,6 +106,10 @@ export type RecommendationReplacementInput = {
   favoriteCropSlugs: string[];
   dislikedCropSlugs: string[];
   harvestHistory: { cropSlug: string; quantity: number; unit: string; harvestedAt: string }[];
+  // Anonymized, opt-in-only popularity counts from other users in the same
+  // tenant (see src/lib/growPlan/communityPopularity.ts) — informational
+  // only, same as growPlanner.ts's identical field.
+  communityPopularity?: { cropSlug: string; growerCount: number }[];
   availableCrops: AvailableCrop[];
 };
 
@@ -119,7 +128,8 @@ function stageShapeText(stages: StageShape[]): string {
           ? `${s.widthCm}x${s.lengthCm}${s.depthCm ? `x${s.depthCm}` : ""}cm`
           : "size unknown";
       const withHeight = s.heightCm ? `${size}, ${s.heightCm}cm tall` : size;
-      return `- stage ${i + 1}: ${s.type}, ${withHeight}`;
+      const structureNote = s.insideStructureType ? ` (inside a ${s.insideStructureType})` : "";
+      return `- stage ${i + 1}: ${s.type}, ${withHeight}${structureNote}`;
     })
     .join("\n");
 }
@@ -159,7 +169,12 @@ ${dislikedCropSlugs.length ? dislikedCropSlugs.join(", ") : "none"}
 
 PRIOR HARVEST HISTORY (use to judge whether to recommend the same crop again; the unit after each quantity is <user-text>)
 ${harvestHistory.length ? harvestHistory.map((h) => `- ${h.cropSlug}: ${h.quantity}<user-text>${h.unit}</user-text> on ${h.harvestedAt}`).join("\n") : "- no history yet"}
-
+${
+  input.communityPopularity && input.communityPopularity.length > 0
+    ? `\nCOMMUNITY HARVEST POPULARITY (anonymized counts of other opted-in gardeners in this same community who've harvested each crop — informational only, see instruction 11 below)
+${input.communityPopularity.map((c) => `- ${c.cropSlug}: grown by ${c.growerCount} other gardeners here`).join("\n")}\n`
+    : ""
+}
 AVAILABLE CROP CATALOG (prefer these, referenced by slug; varieties listed beneath a crop, if any, are optional cultivar picks — see the VARIETIES instruction below)
 ${input.availableCrops
   .map((c) => {
@@ -182,7 +197,8 @@ INSTRUCTIONS
 7. On every task that sows or plants seeds (the crop's first sowing and any succession re-sow), set estimatedSeedsUsed to your best-guess seed count for that specific sowing — stage 1's size divided by the crop's spacingCm, plus a 20-30% margin for germination failure. Leave it null on every other task (feeding, transplanting).
 8. If a crop you'd genuinely recommend isn't in the catalog above, you may propose it: set newCropName to its common name and give it a lowercase-hyphenated cropSlug, used identically in this recommendation and its tasks. Only propose well-established, common home-garden crops you're confident about. Leave newCropName null for every crop already in the catalog.
 9. VARIETIES: picking a specific cultivar (varietySlug) is entirely optional — leave it null for a plain species-level recommendation, which is fine and the normal case. Only pick one when you have a genuine reason: the user already owns seeds for that specific variety (see SEEDS ALREADY OWNED), a listed variety's growth habit genuinely fits STAGE SHAPE better, it has notable disease resistance worth calling out, or it's a well-established, clearly superior choice you're confident about. If you pick a variety not in that crop's listed varieties, propose it via newVarietyName the same way newCropName works for a new crop — only for well-established, real cultivars. Never set varietySlug/newVarietyName when newCropName is also set.
-10. If STAGE SHAPE includes a greenhouse, mini-greenhouse, or cold frame, remember these give frost protection and extra warmth — factor that into which crop and timing genuinely fits (e.g. a tender crop, or an earlier/later sowing window than the same crop would get outdoors).`;
+10. If STAGE SHAPE includes a greenhouse, mini-greenhouse, cold frame, or polytunnel, remember these give frost protection and extra warmth — factor that into which crop and timing genuinely fits (e.g. a tender crop, or an earlier/later sowing window than the same crop would get outdoors). A stage marked "(inside a ...)" is inside one of these structures even though the stage itself is a pot/seed tray/grow bag/planter — treat it exactly the same way, not as if it were outdoors.
+11. If COMMUNITY HARVEST POPULARITY data is present above and the crop you're recommending for genuine fit/season/value reasons appears in it, you may mention that popularity as supporting colour in your reasoning (e.g. "also grown successfully by N other gardeners here"). This is informational only — never let it influence which crop you pick, and never mention it for a crop you wouldn't otherwise have recommended.`;
 }
 
 export async function generateRecommendationReplacement(
@@ -293,6 +309,10 @@ function buildMockReplacement(input: RecommendationReplacementInput): Recommenda
   }
 
   const requiresPurchase = !owned.has(crop.slug);
+  const popularity = input.communityPopularity?.find((c) => c.cropSlug === crop.slug);
+  const communityNote = popularity ? ` Also grown by ${popularity.growerCount} other gardeners here.` : "";
+  const finalStageStructure = input.stageShape[input.stageShape.length - 1]?.insideStructureType ?? null;
+  const structureNote = finalStageStructure ? ` Being inside your ${finalStageStructure.replace("_", " ")} gives it extra warmth and frost protection.` : "";
   const stages = input.stageShape;
   const tasks: RecommendationReplacementOutput["tasks"] = [
     {
@@ -362,7 +382,7 @@ function buildMockReplacement(input: RecommendationReplacementInput): Recommenda
       requiresPurchase
         ? "You'll need to add seeds to your shopping list for this one."
         : "You already have seeds for this, so it's ready to go."
-    } [Mock plan — connect a Gemini API key for real AI-generated recommendations.]`,
+    }${communityNote}${structureNote} [Mock plan — connect a Gemini API key for real AI-generated recommendations.]`,
     requiresPurchase,
     estimatedHarvestStart: addDays(crop.daysToHarvestMin),
     estimatedHarvestEnd: addDays(crop.daysToHarvestMax),

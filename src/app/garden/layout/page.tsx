@@ -1,14 +1,17 @@
-import { redirect } from "next/navigation";
+import { redirect, notFound } from "next/navigation";
 import Link from "next/link";
-import { eq, inArray } from "drizzle-orm";
+import { eq, and, isNull, inArray } from "drizzle-orm";
 import { auth } from "@/lib/auth";
 import { getCurrentTenant } from "@/lib/tenant/resolve";
 import { withTenant } from "@/lib/tenant/withTenant";
 import { growingAreas, planRecommendations, planRecommendationStages, crops } from "@/db/schema";
 import { getUserProfile } from "@/lib/onboarding/profile";
+import { FEATURE_FLAGS } from "@/lib/featureFlags";
 import { LayoutCanvas } from "./LayoutCanvas";
 
 export default async function GardenLayoutPage() {
+  if (!FEATURE_FLAGS.layoutPlanning) notFound();
+
   const session = await auth();
   if (!session?.user) redirect("/login");
 
@@ -21,7 +24,14 @@ export default async function GardenLayoutPage() {
   // per-row identity (id, position) to persist against, which that
   // aggregated shape can't provide.
   const { areas, occupancy } = await withTenant(tenant.id, async (tx) => {
-    const areas = await tx.select().from(growingAreas).where(eq(growingAreas.userId, session.user.id));
+    // Top-level only — anything placed inside a structure's own sub-plot
+    // (parentGrowingAreaId set) is managed on that structure's own page
+    // instead (/garden/layout/[areaId]), and carries a position meant for
+    // that structure's local coordinate space, not this one.
+    const areas = await tx
+      .select()
+      .from(growingAreas)
+      .where(and(eq(growingAreas.userId, session.user.id), isNull(growingAreas.parentGrowingAreaId)));
 
     const claimedAreaIds = areas.filter((a) => a.status === "in_use" || a.status === "reserved").map((a) => a.id);
     const occupancy = claimedAreaIds.length

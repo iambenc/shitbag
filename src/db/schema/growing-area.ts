@@ -1,4 +1,4 @@
-import { pgTable, uuid, text, real, integer, timestamp } from "drizzle-orm/pg-core";
+import { pgTable, uuid, text, real, integer, timestamp, type AnyPgColumn } from "drizzle-orm/pg-core";
 import { tenants } from "./tenant";
 import { users } from "./user";
 import { userEquipment, sizeUnitEnum } from "./equipment";
@@ -7,21 +7,25 @@ import { tenantIsolationPolicy } from "./_rls";
 // Excludes "watering_can" (a tool, not growing space). Includes "seed_tray" —
 // the spec's own worked example ("seed tray frees up, pot marked in-use")
 // requires seed trays to be trackable the same way as pots. "greenhouse"/
-// "mini_greenhouse"/"cold_frame" are the only types with a meaningful
-// heightCm (see below) — see HEIGHT_TYPES/hasHeight in src/lib/garden/layout.ts.
-// This is a plain text column with no DB-level enum/CHECK constraint, so
-// adding values here is a pure TypeScript change — no migration needed for
-// this line by itself (confirmed against every migration in this repo's
-// history: none of them ever ALTER TYPE/CREATE TYPE anything).
+// "mini_greenhouse"/"cold_frame"/"polytunnel" are the only types with a
+// meaningful heightCm (see below) — see HEIGHT_TYPES/hasHeight in
+// src/lib/garden/layout.ts. "grow_bag" is sized like "pot" (litres/cm), not
+// dimensioned. This is a plain text column with no DB-level enum/CHECK
+// constraint, so adding values here is a pure TypeScript change — no
+// migration needed for this line by itself (confirmed against every
+// migration in this repo's history: none of them ever ALTER TYPE/CREATE
+// TYPE anything).
 export const growingAreaTypeEnum = [
   "seed_tray",
   "pot",
+  "grow_bag",
   "planter",
   "raised_bed",
   "bed",
   "greenhouse",
   "mini_greenhouse",
   "cold_frame",
+  "polytunnel",
 ] as const;
 export type GrowingAreaType = (typeof growingAreaTypeEnum)[number];
 
@@ -63,6 +67,21 @@ export const growingAreas = pgTable(
     // the model allows a future growing area with no equipment provenance
     // (e.g. an in-ground bed that was never tracked as "owned").
     sourceUserEquipmentId: uuid("source_user_equipment_id").references(() => userEquipment.id, {
+      onDelete: "set null",
+    }),
+    // Set when this area is physically placed inside another growing area —
+    // today only a HEIGHT_TYPES structure (greenhouse/mini_greenhouse/
+    // cold_frame/polytunnel — the ones with real interior space; see
+    // src/lib/garden/layout.ts) can be a parent, and only a
+    // CONTAINER_GROWING_AREA_TYPES type (seed tray/pot/grow bag/planter —
+    // see src/lib/garden/equipmentMapping.ts) can be a child; enforced in
+    // the server actions that set this, not at the schema level. Null means
+    // "not inside anything" — a top-level area on the user's one main plot,
+    // same as every area was before this column existed. ON DELETE SET NULL
+    // (not cascade) matches sourceUserEquipmentId's convention above: if a
+    // parent structure row is ever removed, its contents fall back to
+    // unparented rather than disappearing with it.
+    parentGrowingAreaId: uuid("parent_growing_area_id").references((): AnyPgColumn => growingAreas.id, {
       onDelete: "set null",
     }),
     // Where this area sits on the user's /garden/layout canvas, in cm from

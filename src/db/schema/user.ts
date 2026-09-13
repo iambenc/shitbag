@@ -75,6 +75,13 @@ export const userProfiles = pgTable(
     householdSize: integer("household_size"),
     expertiseLevel: text("expertise_level", { enum: expertiseLevelEnum }),
     hasIndoorSeedlingSpace: boolean("has_indoor_seedling_space"),
+    // Opt-in, off by default — the only source getCommunityCropPopularity
+    // (src/lib/growPlan/communityPopularity.ts) is allowed to read from.
+    // harvestLog itself has no visibility/privacy field at all (unlike
+    // photoJournalEntries), so this is the sole consent mechanism for using
+    // a user's harvest data to inform anyone else's grow-plan
+    // recommendations, even in anonymized aggregate form.
+    shareHarvestDataForCommunity: boolean("share_harvest_data_for_community").notNull().default(false),
     weekdayHoursAvailable: real("weekday_hours_available"),
     weekendHoursAvailable: real("weekend_hours_available"),
     onboardingCompletedAt: timestamp("onboarding_completed_at", { withTimezone: true }),

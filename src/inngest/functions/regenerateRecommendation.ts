@@ -23,6 +23,7 @@ import {
 import { getCropFacts } from "@/lib/ai/agents/cropFacts";
 import { getVarietyFacts, type ParentCropFacts } from "@/lib/ai/agents/varietyFacts";
 import { getSeedStock } from "@/lib/seeds/stock";
+import { getCommunityCropPopularity } from "@/lib/growPlan/communityPopularity";
 
 function slugify(value: string): string {
   return value
@@ -44,6 +45,7 @@ type InstanceStage = {
   lengthCm: number | null;
   depthCm: number | null;
   heightCm: number | null;
+  insideStructureType: string | null;
 };
 type Instance = { recommendationId: string; cropId: string; regenerationCount: number; stages: InstanceStage[] };
 
@@ -69,11 +71,12 @@ export const regenerateRecommendationFn = inngest.createFunction(
       }
 
       return withTenant(tenantId, async (tx) => {
-        const [profile, seeds, favorites, harvests, rejectedRecs, stageRows, otherActiveRecs] = await Promise.all([
+        const [profile, seeds, favorites, harvests, communityPopularity, rejectedRecs, stageRows, otherActiveRecs] = await Promise.all([
           tx.select().from(userProfiles).where(eq(userProfiles.userId, userId)),
           tx.select().from(seedInventory).where(eq(seedInventory.userId, userId)),
           tx.select().from(userFavoriteCrops).where(eq(userFavoriteCrops.userId, userId)),
           tx.select().from(harvestLog).where(eq(harvestLog.userId, userId)),
+          getCommunityCropPopularity(tx, { excludeUserId: userId }),
           tx.select().from(planRecommendations).where(inArray(planRecommendations.id, recommendationIds)),
           tx
             .select({ stage: planRecommendationStages, area: growingAreas })
@@ -99,6 +102,19 @@ export const regenerateRecommendationFn = inngest.createFunction(
           stagesByRec.set(row.stage.planRecommendationId, list);
         }
 
+        // Resolve each stage area's parent structure's type (see
+        // parentGrowingAreaId on growingAreas) — a small follow-up query
+        // keyed by the parent ids actually referenced, mirroring
+        // generateGrowPlan.ts's identical lookup for the full-plan path.
+        const parentIds = [...new Set(stageRows.map((r) => r.area?.parentGrowingAreaId).filter((id): id is string => Boolean(id)))];
+        const parentTypeById = new Map(
+          parentIds.length
+            ? (await tx.select({ id: growingAreas.id, type: growingAreas.type }).from(growingAreas).where(inArray(growingAreas.id, parentIds))).map(
+                (p) => [p.id, p.type] as const,
+              )
+            : [],
+        );
+
         // Every instance shares the same stage shape by construction — they
         // were only groupable in the UI because they're identical.
         const instances: Instance[] = recommendationIds
@@ -116,6 +132,7 @@ export const regenerateRecommendationFn = inngest.createFunction(
                 lengthCm: area?.lengthCm ?? null,
                 depthCm: area?.depthCm ?? null,
                 heightCm: area?.heightCm ?? null,
+                insideStructureType: area?.parentGrowingAreaId ? (parentTypeById.get(area.parentGrowingAreaId) ?? null) : null,
               }));
             return { recommendationId: id, cropId: rec?.cropId ?? "", regenerationCount: rec?.regenerationCount ?? 0, stages };
           })
@@ -129,6 +146,7 @@ export const regenerateRecommendationFn = inngest.createFunction(
           lengthCm: s.lengthCm,
           depthCm: s.depthCm,
           heightCm: s.heightCm,
+          insideStructureType: s.insideStructureType,
         })) ?? [];
 
         const rejectedCropSlugs = instances
@@ -178,6 +196,7 @@ export const regenerateRecommendationFn = inngest.createFunction(
                 : null;
             })
             .filter((h): h is NonNullable<typeof h> => h !== null),
+          communityPopularity,
           availableCrops: allCrops.map((c) => ({
             slug: c.slug,
             name: c.name,

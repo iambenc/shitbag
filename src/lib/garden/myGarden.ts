@@ -3,6 +3,7 @@ import type { Database } from "@/db/client";
 import { growingAreas, planRecommendationStages, planRecommendations, crops, cropVarieties, tasks } from "@/db/schema";
 import type { GrowingAreaType } from "@/db/schema";
 import { growingAreaBaseLabel } from "@/lib/garden/labels";
+import { HEIGHT_TYPES } from "@/lib/garden/layout";
 
 export type MyGardenOccupant = { cropEmoji: string; cropName: string };
 
@@ -12,6 +13,11 @@ export type MyGardenAreaCard = {
   displayLabel: string;
   occupants: MyGardenOccupant[];
   pendingTaskCount: number;
+  // Only set for a structure (HEIGHT_TYPES) card — how many containers are
+  // currently placed inside it (see parentGrowingAreaId on growingAreas), so
+  // the dashboard can read it as its own plot with contents rather than a
+  // single item. Undefined for every other card.
+  containedCount?: number;
 };
 
 export type MyGardenResult = {
@@ -88,34 +94,84 @@ export async function getMyGardenAreas(tx: Database, userId: string): Promise<My
     );
   }
 
-  // Dedupe display labels within this user's own areas only (e.g. two 20cm
-  // pots would otherwise both read "20cm Pot") — a numeric suffix only kicks
-  // in when a collision actually exists.
-  const baseLabels = areas.map((area) => growingAreaBaseLabel(area));
-  const labelTotals = new Map<string, number>();
-  for (const label of baseLabels) labelTotals.set(label, (labelTotals.get(label) ?? 0) + 1);
-  const labelSeen = new Map<string, number>();
-  const areaLabelByRecommendationId = new Map<string, string>();
+  const childrenByParentId = new Map<string, typeof areas>();
+  for (const area of areas) {
+    if (!area.parentGrowingAreaId) continue;
+    const list = childrenByParentId.get(area.parentGrowingAreaId) ?? [];
+    list.push(area);
+    childrenByParentId.set(area.parentGrowingAreaId, list);
+  }
 
-  const cards = areas.map((area, i) => {
-    const baseLabel = baseLabels[i];
-    let displayLabel = baseLabel;
-    if ((labelTotals.get(baseLabel) ?? 0) > 1) {
-      const n = (labelSeen.get(baseLabel) ?? 0) + 1;
-      labelSeen.set(baseLabel, n);
-      displayLabel = `${baseLabel} ${n}`;
-    }
+  // Dedupes display labels within a given group only (e.g. two 20cm pots in
+  // the SAME group would otherwise both read "20cm Pot") — a numeric suffix
+  // only kicks in when a collision actually exists within that group.
+  // Deliberately scoped per group rather than across every area: only
+  // top-level areas ever get their own card below, so a child sharing a
+  // base label with an unrelated top-level area (or a child of a DIFFERENT
+  // structure) must never affect either one's numbering — that's not a
+  // collision either card/label consumer can ever actually see together.
+  function assignLabels(group: typeof areas, out: Map<string, string>) {
+    const baseLabels = group.map((area) => growingAreaBaseLabel(area));
+    const totals = new Map<string, number>();
+    for (const label of baseLabels) totals.set(label, (totals.get(label) ?? 0) + 1);
+    const seen = new Map<string, number>();
+    group.forEach((area, i) => {
+      const baseLabel = baseLabels[i];
+      let displayLabel = baseLabel;
+      if ((totals.get(baseLabel) ?? 0) > 1) {
+        const n = (seen.get(baseLabel) ?? 0) + 1;
+        seen.set(baseLabel, n);
+        displayLabel = `${baseLabel} ${n}`;
+      }
+      out.set(area.id, displayLabel);
+    });
+  }
+
+  // Every area still gets a display label (children included — a task tied
+  // to a pot's own stage should still read "your 20cm Pot", not its
+  // structure's name), but only a TOP-LEVEL area gets its own card below —
+  // a child's occupants/tasks get rolled up into its structure's card
+  // instead of appearing twice.
+  const displayLabelByAreaId = new Map<string, string>();
+  assignLabels(
+    areas.filter((a) => !a.parentGrowingAreaId),
+    displayLabelByAreaId,
+  );
+  for (const children of childrenByParentId.values()) assignLabels(children, displayLabelByAreaId);
+
+  const areaLabelByRecommendationId = new Map<string, string>();
+  for (const area of areas) {
+    const displayLabel = displayLabelByAreaId.get(area.id);
+    if (!displayLabel) continue;
     const recIds = recommendationIdsByAreaId.get(area.id) ?? [];
     for (const recId of recIds) areaLabelByRecommendationId.set(recId, displayLabel);
-    const pendingTaskCount = recIds.reduce((sum, id) => sum + (pendingCountByRecommendationId.get(id) ?? 0), 0);
-    return {
-      id: area.id,
-      type: area.type,
-      displayLabel,
-      occupants: occupantsByAreaId.get(area.id) ?? [],
-      pendingTaskCount,
-    };
-  });
+  }
+
+  function pendingTaskCountFor(areaId: string): number {
+    const recIds = recommendationIdsByAreaId.get(areaId) ?? [];
+    return recIds.reduce((sum, id) => sum + (pendingCountByRecommendationId.get(id) ?? 0), 0);
+  }
+
+  const cards = areas
+    .filter((area) => !area.parentGrowingAreaId)
+    .map((area) => {
+      const children = childrenByParentId.get(area.id) ?? [];
+      const isStructure = HEIGHT_TYPES.includes(area.type);
+      const occupants = [
+        ...(occupantsByAreaId.get(area.id) ?? []),
+        ...children.flatMap((child) => occupantsByAreaId.get(child.id) ?? []),
+      ];
+      const pendingTaskCount =
+        pendingTaskCountFor(area.id) + children.reduce((sum, child) => sum + pendingTaskCountFor(child.id), 0);
+      return {
+        id: area.id,
+        type: area.type,
+        displayLabel: displayLabelByAreaId.get(area.id) ?? growingAreaBaseLabel(area),
+        occupants,
+        pendingTaskCount,
+        containedCount: isStructure ? children.length : undefined,
+      };
+    });
 
   return { cards, areaLabelByRecommendationId };
 }

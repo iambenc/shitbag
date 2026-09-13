@@ -41,12 +41,14 @@ const GARDEN_TOOL_SEEDS: EquipmentTypeSeed[] = [
 const PLANTING_EQUIPMENT_SEEDS: EquipmentTypeSeed[] = [
   { slug: "seed-trays", name: "Seed Trays", category: "count", partnerLinkLabel: "Shop seed trays", partnerLinkUrl: "https://example.com/partner/seed-trays" },
   { slug: "pots", name: "Pots", category: "sized", partnerLinkLabel: "Shop plant pots", partnerLinkUrl: "https://example.com/partner/pots" },
+  { slug: "grow-bags", name: "Grow Bags", category: "sized", partnerLinkLabel: "Shop grow bags", partnerLinkUrl: "https://example.com/partner/grow-bags" },
   { slug: "planters", name: "Planters", category: "dimensions", partnerLinkLabel: "Shop planters", partnerLinkUrl: "https://example.com/partner/planters" },
   { slug: "raised-beds", name: "Raised Beds", category: "dimensions", partnerLinkLabel: "Shop raised beds", partnerLinkUrl: "https://example.com/partner/raised-beds" },
   { slug: "garden-beds", name: "Garden Beds", category: "dimensions", partnerLinkLabel: "Shop bed edging & tools", partnerLinkUrl: "https://example.com/partner/garden-beds" },
   { slug: "greenhouses", name: "Greenhouses", category: "dimensions", partnerLinkLabel: "Shop greenhouses", partnerLinkUrl: "https://example.com/partner/greenhouses" },
   { slug: "mini-greenhouses", name: "Mini Greenhouses", category: "dimensions", partnerLinkLabel: "Shop mini greenhouses", partnerLinkUrl: "https://example.com/partner/mini-greenhouses" },
   { slug: "cold-frames", name: "Cold Frames", category: "dimensions", partnerLinkLabel: "Shop cold frames", partnerLinkUrl: "https://example.com/partner/cold-frames" },
+  { slug: "polytunnels", name: "Polytunnels", category: "dimensions", partnerLinkLabel: "Shop polytunnels", partnerLinkUrl: "https://example.com/partner/polytunnels" },
 ];
 
 export const equipmentTypeSeeds: EquipmentTypeSeed[] = [...GARDEN_TOOL_SEEDS, ...PLANTING_EQUIPMENT_SEEDS];

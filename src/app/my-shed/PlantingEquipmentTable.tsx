@@ -4,6 +4,7 @@ import { useState } from "react";
 import Image from "next/image";
 import { LeafAccent } from "@/components/LeafAccent";
 import { GROWING_AREA_ILLUSTRATION_SRC } from "@/lib/garden/illustrations";
+import { growingAreaTypeEmoji } from "@/lib/garden/labels";
 import { SLUG_TO_GROWING_AREA_TYPE } from "@/lib/garden/equipmentMapping";
 import type { ShedEquipmentRow } from "./types";
 
@@ -67,7 +68,15 @@ export function PlantingEquipmentTable({ rows, onEdit }: { rows: ShedEquipmentRo
                     <td className="px-4 py-3">
                       <div className="flex items-center gap-3">
                         <div className="flex h-10 w-10 shrink-0 items-center justify-center overflow-hidden rounded-md bg-(--surface-tint)">
-                          {src && <Image src={src} alt="" width={40} height={40} className="h-full w-full object-contain p-1" />}
+                          {src ? (
+                            <Image src={src} alt="" width={40} height={40} className="h-full w-full object-contain p-1" />
+                          ) : (
+                            growingAreaType && (
+                              <span aria-hidden="true" className="text-xl">
+                                {growingAreaTypeEmoji[growingAreaType]}
+                              </span>
+                            )
+                          )}
                         </div>
                         <p className="font-medium">{row.typeName}</p>
                       </div>

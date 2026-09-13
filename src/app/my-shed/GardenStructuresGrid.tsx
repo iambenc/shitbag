@@ -4,6 +4,7 @@ import Image from "next/image";
 import Link from "next/link";
 import { LeafAccent } from "@/components/LeafAccent";
 import { GROWING_AREA_ILLUSTRATION_SRC } from "@/lib/garden/illustrations";
+import { growingAreaTypeEmoji } from "@/lib/garden/labels";
 import { SLUG_TO_GROWING_AREA_TYPE } from "@/lib/garden/equipmentMapping";
 import type { ShedEquipmentRow } from "./types";
 
@@ -54,8 +55,16 @@ export function GardenStructuresGrid({ rows }: { rows: ShedEquipmentRow[] }) {
             const src = growingAreaType ? GROWING_AREA_ILLUSTRATION_SRC[growingAreaType] : undefined;
             return (
               <div key={card.equipmentTypeId} className="flex flex-col overflow-hidden rounded-lg border border-black/10 bg-white shadow-card">
-                <div className="relative h-24 w-full shrink-0 bg-(--surface-tint)">
-                  {src && <Image src={src} alt="" fill sizes="200px" className="object-contain p-3" />}
+                <div className="relative flex h-24 w-full shrink-0 items-center justify-center bg-(--surface-tint)">
+                  {src ? (
+                    <Image src={src} alt="" fill sizes="200px" className="object-contain p-3" />
+                  ) : (
+                    growingAreaType && (
+                      <span aria-hidden="true" className="text-4xl">
+                        {growingAreaTypeEmoji[growingAreaType]}
+                      </span>
+                    )
+                  )}
                 </div>
                 <div className="flex flex-1 flex-col gap-1 p-3">
                   <p className="font-medium">{card.typeName}</p>

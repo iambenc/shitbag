@@ -19,9 +19,12 @@ import {
   userEquipment,
 } from "@/db/schema";
 import { generateGrowPlan, type GrowPlannerInput } from "@/lib/ai/agents/growPlanner";
+import { getCommunityCropPopularity } from "@/lib/growPlan/communityPopularity";
 import { getCropFacts } from "@/lib/ai/agents/cropFacts";
 import { getVarietyFacts, type ParentCropFacts } from "@/lib/ai/agents/varietyFacts";
 import { SLUG_TO_GROWING_AREA_TYPE } from "@/lib/garden/equipmentMapping";
+import { HEIGHT_TYPES } from "@/lib/garden/layout";
+import { growingAreaBaseLabel } from "@/lib/garden/labels";
 import { getSeedStock } from "@/lib/seeds/stock";
 
 function slugify(value: string): string {
@@ -101,7 +104,7 @@ export const generateGrowPlanFn = inngest.createFunction(
       }
 
       return withTenant(tenantId, async (tx) => {
-        const [profile, allAreas, ownedEquipment, seeds, favorites, harvests] = await Promise.all([
+        const [profile, allAreas, ownedEquipment, seeds, favorites, harvests, communityPopularity] = await Promise.all([
           tx.select().from(userProfiles).where(eq(userProfiles.userId, userId)),
           tx.select().from(growingAreas).where(eq(growingAreas.userId, userId)),
           tx
@@ -112,12 +115,35 @@ export const generateGrowPlanFn = inngest.createFunction(
           tx.select().from(seedInventory).where(eq(seedInventory.userId, userId)),
           tx.select().from(userFavoriteCrops).where(eq(userFavoriteCrops.userId, userId)),
           tx.select().from(harvestLog).where(eq(harvestLog.userId, userId)),
+          getCommunityCropPopularity(tx, { excludeUserId: userId }),
         ]);
 
         // Post-freeing, "available" is effectively "all of them" on a normal
         // regenerate — but stays correct if something external ever sets
         // in_use again mid-run.
         const availableAreas = allAreas.filter((a) => a.status === "available");
+
+        // allAreas already has every area (including structures themselves)
+        // in one flat fetch — resolving insideStructureType is just a
+        // lookup against it, no extra query needed.
+        const areaById = new Map(allAreas.map((a) => [a.id, a]));
+        function insideStructureType(area: (typeof allAreas)[number]) {
+          if (!area.parentGrowingAreaId) return null;
+          return areaById.get(area.parentGrowingAreaId)?.type ?? null;
+        }
+
+        // Which PLOT an area belongs to — "Your Plot" (the open ground) for
+        // anything top-level and not itself a structure, or that structure's
+        // own label (shared by the structure's own row and everything
+        // placed inside it) otherwise. Threaded into the prompt so the AI
+        // can reason about — and the mock can guarantee — coverage per
+        // physical plot, not just per individual area (see /garden's own
+        // Your Plot / per-structure section split this mirrors).
+        function plotLabelFor(area: (typeof allAreas)[number]): string {
+          const structure = area.parentGrowingAreaId ? areaById.get(area.parentGrowingAreaId) : area;
+          if (structure && HEIGHT_TYPES.includes(structure.type)) return growingAreaBaseLabel(structure);
+          return "Your Plot";
+        }
 
         // "Placed" (any status) vs. owned — the gap is equipment the user
         // could place via /garden but hasn't, surfaced so the AI can nudge
@@ -161,6 +187,8 @@ export const generateGrowPlanFn = inngest.createFunction(
             lengthCm: a.lengthCm,
             depthCm: a.depthCm,
             heightCm: a.heightCm,
+            insideStructureType: insideStructureType(a),
+            plotLabel: plotLabelFor(a),
           })),
           unplacedEquipment,
           ownedSeeds: seeds
@@ -187,6 +215,7 @@ export const generateGrowPlanFn = inngest.createFunction(
                 : null;
             })
             .filter((h): h is NonNullable<typeof h> => h !== null),
+          communityPopularity,
           availableCrops: allCrops.map((c) => ({
             slug: c.slug,
             name: c.name,

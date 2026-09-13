@@ -1,7 +1,7 @@
 "use client";
 
 import { useActionState, useState } from "react";
-import { addHarvestAction, deleteHarvestAction, type AddHarvestState } from "@/lib/actions/harvests";
+import { addHarvestAction, deleteHarvestAction, setShareHarvestDataAction, type AddHarvestState } from "@/lib/actions/harvests";
 import { setPhotoVisibilityAction } from "@/lib/actions/photos";
 import { EyeIcon } from "@/components/icons";
 import type { PhotoVisibility } from "@/db/schema";
@@ -68,7 +68,48 @@ function CropAndVarietyFields({ crops }: { crops: CropOption[] }) {
   );
 }
 
-export function HarvestsView({ harvests, crops }: { harvests: Harvest[]; crops: CropOption[] }) {
+function CommunitySharingToggle({ initialShared }: { initialShared: boolean }) {
+  const [shared, setShared] = useState(initialShared);
+  const [pending, setPending] = useState(false);
+
+  async function handleChange(next: boolean) {
+    setShared(next);
+    setPending(true);
+    await setShareHarvestDataAction(next);
+    setPending(false);
+  }
+
+  return (
+    <label className="flex items-start gap-3 rounded-lg border border-black/10 bg-white p-4 shadow-card text-sm">
+      <input
+        type="checkbox"
+        checked={shared}
+        disabled={pending}
+        onChange={(e) => handleChange(e.target.checked)}
+        className="mt-0.5 accent-(--brand-primary)"
+      />
+      <span>
+        <span className="font-medium">Share my harvest stats with the community</span>
+        <p className="mt-0.5 text-xs text-(--text-muted)">
+          Help other gardeners here by contributing anonymous, aggregate stats about what you&rsquo;ve
+          grown (never your name or specific harvest details) — used only to add colour like
+          &ldquo;also grown by 3 other gardeners here&rdquo; to their grow-plan recommendations. Off by
+          default.
+        </p>
+      </span>
+    </label>
+  );
+}
+
+export function HarvestsView({
+  harvests,
+  crops,
+  shareHarvestDataForCommunity,
+}: {
+  harvests: Harvest[];
+  crops: CropOption[];
+  shareHarvestDataForCommunity: boolean;
+}) {
   const [list, setList] = useState(harvests);
   // CropAndVarietyFields' crop select is controlled (needed to drive the
   // dependent variety options), so — unlike the plain quantity/unit/date
@@ -118,6 +159,8 @@ export function HarvestsView({ harvests, crops }: { harvests: Harvest[]; crops: 
 
   return (
     <div className="flex flex-col gap-8">
+      <CommunitySharingToggle initialShared={shareHarvestDataForCommunity} />
+
       {crops.length === 0 ? (
         <div className="rounded-lg border border-black/10 bg-(--surface-tint) p-4 text-sm text-(--text-muted)">
           Nothing to log a harvest for yet — once a grow plan recommendation has actually been

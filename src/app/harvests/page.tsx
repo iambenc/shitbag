@@ -87,6 +87,7 @@ export default async function HarvestsPage() {
       </p>
       <div className="mt-8">
         <HarvestsView
+          shareHarvestDataForCommunity={profile.shareHarvestDataForCommunity}
           harvests={harvests.map((r) => ({
             id: r.harvest.id,
             cropId: r.crop.id,

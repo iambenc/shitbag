@@ -17,14 +17,18 @@ test("dashboard renders all main sections for a freshly onboarded user", async (
   await expect(page.getByText("7-day weather forecast", { exact: true })).toBeVisible();
   await expect(page.getByRole("link", { name: "Seed inventory 0 varieties" })).toBeVisible();
   await expect(page.getByRole("link", { name: "Shopping list 0 items" })).toBeVisible();
-  await expect(page.getByRole("link", { name: "Manage garden layout" })).toBeVisible();
+  await expect(page.getByRole("link", { name: "Manage your garden" })).toBeVisible();
   await expect(page.getByRole("button", { name: "Quick actions" })).toBeVisible();
   await expect(page.getByText(/Tip of the day/)).toBeVisible();
 
   // Empty states for a brand-new user with no tasks/areas.
   await expect(page.getByText("Nothing due today — nice work.")).toBeVisible();
   await expect(page.getByText("Nothing scheduled yet.")).toBeVisible();
-  await expect(page.getByText("added any growing areas yet", { exact: false })).toBeVisible();
+  // My Garden's "Your Plot" shortcut tile is always present (a fixed
+  // navigational entry, not tied to owning any areas) — for a brand-new
+  // user it's the only card shown, reading "Nothing placed yet".
+  await expect(page.getByText("Your Plot", { exact: true })).toBeVisible();
+  await expect(page.getByText("Nothing placed yet")).toBeVisible();
   await expect(
     page.getByText("complete a weekly photo health check", { exact: false }),
   ).toBeVisible();
@@ -74,11 +78,14 @@ test("SetupBanner disappears once equipment and seeds are both added, and not be
   await expect(page.getByText("Finish setting up your garden")).toHaveCount(0);
 });
 
-test("an added growing area shows up as a card in the My Garden grid", async ({ page }) => {
+test("planting equipment is rolled into Your Plot's item count on the My Garden grid, not its own card", async ({ page }) => {
   await signUpAndOnboard(page, { addPotEquipment: true });
-  await expect(page.getByText("30cm Pot")).toBeVisible();
-  await expect(page.getByText("All good")).toBeVisible();
-  await expect(page.getByText("Nothing growing here yet.")).toBeVisible();
+  // Individual pots/trays/grow bags/planters deliberately don't get their
+  // own card on the dashboard (see MyGardenGrid.tsx) — only Your Plot
+  // (whose count reflects them) and garden structures do.
+  await expect(page.getByText("Your Plot", { exact: true })).toBeVisible();
+  await expect(page.getByText("1 item placed")).toBeVisible();
+  await expect(page.getByText("30cm Pot")).toHaveCount(0);
 });
 
 test("floating action button opens quick actions and adds a task for today", async ({ page }) => {
@@ -106,7 +113,7 @@ test("mobile viewport shows the hamburger menu, not the desktop pill nav", async
   await expect(page.getByRole("button", { name: "Open menu" })).toBeVisible();
 
   await page.getByRole("button", { name: "Open menu" }).click();
-  await expect(page.getByRole("link", { name: "Calendar", exact: true })).toBeVisible();
+  await expect(page.getByRole("link", { name: "My Calendar", exact: true })).toBeVisible();
 });
 
 test("garden health: a health-check task links to a photo upload, and completing it updates the diagnosis history and the donut", async ({ page }) => {

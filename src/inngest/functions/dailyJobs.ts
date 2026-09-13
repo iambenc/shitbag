@@ -1,4 +1,4 @@
-import { eq, and, lte, isNotNull, inArray } from "drizzle-orm";
+import { eq, and, lte, isNotNull, isNull, inArray } from "drizzle-orm";
 import { inngest } from "@/inngest/client";
 import { db } from "@/db/client";
 import { withTenant } from "@/lib/tenant/withTenant";
@@ -14,6 +14,7 @@ import {
 } from "@/db/schema";
 import { getWeeklyForecast, type DailyForecast, type WeatherScenario } from "@/lib/weather";
 import { getQuotaPoolKey } from "@/lib/ai/provider";
+import { HEIGHT_TYPES } from "@/lib/garden/layout";
 import { todayIso, addDaysIso, startOfMonthLocal } from "@/lib/dates";
 import { getSeedStock } from "@/lib/seeds/stock";
 
@@ -180,11 +181,14 @@ export const dailyJobsFn = inngest.createFunction(
     // filter over its result — that list requires latitude/longitude
     // (needed for weather, irrelevant here), and coupling maintenance
     // eligibility to an invariant that has nothing to do with it would be a
-    // fragile, easy-to-break dependency. Eligible = paid tier + at least
-    // one growing area actually in_use (an available/reserved pot has
-    // nothing growing in it yet to weed or mulch) + not already run this
-    // calendar month (lastMaintenanceTasksGeneratedAt null, or before the
-    // start of this month).
+    // fragile, easy-to-break dependency. Eligible = paid tier + not already
+    // run this calendar month (lastMaintenanceTasksGeneratedAt null, or
+    // before the start of this month) + (at least one growing area actually
+    // in_use — an available/reserved pot has nothing growing in it yet to
+    // weed or mulch — OR owns a garden structure, which warrants its own
+    // upkeep consideration (ventilation, pest/mould checks, cleaning
+    // glazing) even with nothing currently planted in or inside it; see
+    // generateMaintenanceTasksFn/maintenanceTasks.ts).
     const maintenanceEligibleUsers = await step.run("find-eligible-maintenance-users", async () => {
       const allTenants = await db.select().from(tenants);
       const users: { userId: string; tenantId: string; quotaPoolKey: string }[] = [];
@@ -205,16 +209,28 @@ export const dailyJobsFn = inngest.createFunction(
           });
           if (paidAndDue.length === 0) return;
 
-          const inUseAreas = await tx
-            .select({ userId: growingAreas.userId })
-            .from(growingAreas)
-            .where(
-              and(
-                inArray(growingAreas.userId, paidAndDue.map((r) => r.profile.userId)),
-                eq(growingAreas.status, "in_use"),
+          const [inUseAreas, structureAreas] = await Promise.all([
+            tx
+              .select({ userId: growingAreas.userId })
+              .from(growingAreas)
+              .where(
+                and(
+                  inArray(growingAreas.userId, paidAndDue.map((r) => r.profile.userId)),
+                  eq(growingAreas.status, "in_use"),
+                ),
               ),
-            );
-          const usersWithGrowingSpace = new Set(inUseAreas.map((r) => r.userId));
+            tx
+              .select({ userId: growingAreas.userId })
+              .from(growingAreas)
+              .where(
+                and(
+                  inArray(growingAreas.userId, paidAndDue.map((r) => r.profile.userId)),
+                  isNull(growingAreas.parentGrowingAreaId),
+                  inArray(growingAreas.type, HEIGHT_TYPES),
+                ),
+              ),
+          ]);
+          const usersWithGrowingSpace = new Set([...inUseAreas, ...structureAreas].map((r) => r.userId));
 
           const eligibleInTenant = paidAndDue.filter((row) => usersWithGrowingSpace.has(row.profile.userId));
           if (eligibleInTenant.length === 0) return;

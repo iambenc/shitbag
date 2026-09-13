@@ -19,7 +19,6 @@ export async function updateEquipmentAction(
   } catch {
     return { error: "Something went wrong reading your equipment list — please try again." };
   }
-
   const { userId, tenantId } = await requireSessionAndTenant();
   await withTenant(tenantId, async (tx) => {
     await applyEquipmentRows(tx, { tenantId, userId, rows });

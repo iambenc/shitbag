@@ -267,6 +267,20 @@
       "when": 1787409474220,
       "tag": "0037_chief_wendell_vaughn",
       "breakpoints": true
+    },
+    {
+      "idx": 38,
+      "version": "7",
+      "when": 1787415379973,
+      "tag": "0038_fluffy_excalibur",
+      "breakpoints": true
+    },
+    {
+      "idx": 39,
+      "version": "7",
+      "when": 1787525794519,
+      "tag": "0039_burly_black_tarantula",
+      "breakpoints": true
     }
   ]
 }
